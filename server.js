@@ -209,12 +209,13 @@ const FLOW_COOKIE = 'seecret_flow';
 const mailer = (process.env.EMAIL_USER && process.env.EMAIL_PASS)
   ? nodemailer.createTransport({
       host: 'smtp.gmail.com',
-      port: 465,
-      secure: true,
-      // Railway (et d'autres PaaS) route parfois en IPv6 vers Gmail, ce qui
-      // provoque un "Connection timeout" côté nodemailer (le chemin IPv6
-      // n'aboutit pas mais le chemin IPv4 fonctionne). On force IPv4 et on
-      // réduit le délai d'attente pour échouer vite plutôt qu'en 2 minutes.
+      // Port 587 (STARTTLS) au lieu de 465 (TLS direct) : certains réseaux
+      // de PaaS (Railway, etc.) filtrent le 465 sortant mais laissent le 587
+      // passer. On force aussi IPv4 et un timeout court pour diagnostiquer
+      // vite un blocage réseau plutôt que d'attendre 2 minutes.
+      port: 587,
+      secure: false,
+      requireTLS: true,
       family: 4,
       connectionTimeout: 15000,
       greetingTimeout: 15000,
