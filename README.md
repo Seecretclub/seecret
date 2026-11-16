@@ -1,9 +1,18 @@
-# SEEcret — CRM immobilier & moteur de prospection
+# SEEcret — plateforme immobilière
 
-**SEEcret** est une agence immobilière (« Seecret — Paris centre ») avec :
-- un **CRM interne** (Leads, Produits, Recherches, Club, Rapprochements, Pipeline) ;
-- une **plateforme vendeurs** (landing page → parcours d'adhésion → espace membre) ;
-- un **moteur de prospection** : **Immo Data Robot** (détection automatique de vendeurs à partir des DPE).
+**SEEcret** est une plateforme immobilière complète :
+
+1. **La plateforme publique** (le produit) — destinée aux propriétaires vendeurs :
+   - Landing page (`index.html`) ;
+   - Parcours d'adhésion (`candidature.html`) ;
+   - Espace membre (`espace.html`, `connexion.html`) ;
+   - Pages légales.
+
+2. **Le CRM back-office** (`crm.html`) — l'outil interne des agents immobiliers :
+   - Leads, Produits (biens), Recherches (critères acquéreurs), Club (candidatures/membres) ;
+   - Rapprochements (matching vendeurs↔acquéreurs), Pipeline, Tâches, Notifications.
+
+3. **Immo Data Robot** — le moteur de prospection intégré au CRM : détection automatique de vendeurs à partir des DPE.
 
 ## Architecture
 

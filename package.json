@@ -1,8 +1,8 @@
 {
-  "name": "seecret-crm",
+  "name": "seecret",
   "version": "1.0.0",
   "private": true,
-  "description": "Backend Node.js/Express pour le CRM Seecret — remplace le localStorage.",
+  "description": "SEEcret — plateforme immobilière (landing, adhésion, espace membre) + CRM back-office + moteur de prospection Immo Data Robot.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
