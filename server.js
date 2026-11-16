@@ -211,6 +211,13 @@ const mailer = (process.env.EMAIL_USER && process.env.EMAIL_PASS)
       host: 'smtp.gmail.com',
       port: 465,
       secure: true,
+      // Railway (et d'autres PaaS) route parfois en IPv6 vers Gmail, ce qui
+      // provoque un "Connection timeout" côté nodemailer (le chemin IPv6
+      // n'aboutit pas mais le chemin IPv4 fonctionne). On force IPv4 et on
+      // réduit le délai d'attente pour échouer vite plutôt qu'en 2 minutes.
+      family: 4,
+      connectionTimeout: 15000,
+      greetingTimeout: 15000,
       auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
     })
   : null;
