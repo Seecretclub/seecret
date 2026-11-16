@@ -739,6 +739,7 @@
       demandes: viewDemandes,
       demande: viewDemandeDetail,
       clients: viewClients,
+      reseau: viewReseau,
       pipeline: viewPipeline,
       notifications: viewNotifications,
       client: viewClient,
@@ -799,6 +800,7 @@
         '<div class="se-nav-label">Prospection</div>' +
         '<nav class="se-nav">' +
           nav('clients', r.name, 'users', 'Leads') +
+          nav('reseau', r.name, 'chat', 'Réseau', (state.clients.filter((c) => (c.pipeline || 'a_contacter') === 'a_contacter' && (c.type === 'vendeur' || c.type === 'mixte' || c.pipeline)).length) || '') +
           nav('biens', r.name, 'building', 'Produits') +
           nav('recherches', r.name, 'search', 'Recherches') +
           nav('robot', r.name, 'robot', 'Immo Data Robot', (matchings().filter((m) => m.statut === 'nouveau').length) || '') +
@@ -811,7 +813,7 @@
           nav('biens-club', r.name, 'building', 'Biens') +
         '</nav>' +
         '<div class="se-nav-label">Intelligence</div>' +
-        '<nav class="se-nav">' +
+        '<nav class="se-nav se-nav-more">' +
           nav('rapprochements', r.name, 'tag', 'Rapprochements') +
           nav('tracking', r.name, 'search', 'Tracking') +
         '</nav>' +
@@ -823,6 +825,9 @@
           nav('verifications', r.name, 'check', 'Vérifications', verifEnAttente() || '') +
           nav('messages', r.name, 'chat', 'Messages') +
           nav('reglages', r.name, 'tools', 'Réglages') +
+        '</nav>' +
+        '<nav class="se-nav">' +
+          '<a href="#" class="se-more" data-act="more">' + ICONS.grid + '<span>Plus</span></a>' +
         '</nav>' +
         '</div>' +
         '<div class="se-side-foot">' +
@@ -845,7 +850,7 @@
   }
 
   function titre(r) {
-    const map = { tableau: 'Tableau de bord', demandes: 'Candidatures', demande: 'Fiche demande', clients: 'Leads', pipeline: 'Pipeline de relance', notifications: 'Notifications', client: 'Fiche lead', biens: 'Produits', bien: 'Fiche produit', recherches: 'Recherches', recherche: 'Recherche', robot: 'Immo Data Robot', 'robot-radar': 'Radar — Biens détectés', 'robot-opportunites': 'Opportunités Clients', 'robot-bien': 'Fiche bien Radar', 'robot-dpe': 'Recherche DPE', 'robot-proprietaires': 'Propriétaires', 'robot-proprietaire': 'Fiche propriétaire', 'portefeuille-foncier': 'Portefeuille foncier', 'societe-fonciere': 'Fiche société', membres: 'Membres', 'biens-club': 'Biens du club', rapprochements: 'Rapprochements', tracking: 'Tracking', visites: 'Visites', offres: 'Offres', verifications: 'Vérifications', taches: 'Tâches', messages: 'Messages', reglages: 'Réglages' };
+    const map = { tableau: 'Tableau de bord', demandes: 'Candidatures', demande: 'Fiche demande', clients: 'Leads', reseau: 'Réseau', pipeline: 'Pipeline de relance', notifications: 'Notifications', client: 'Fiche lead', biens: 'Produits', bien: 'Fiche produit', recherches: 'Recherches', recherche: 'Recherche', robot: 'Immo Data Robot', 'robot-radar': 'Radar — Biens détectés', 'robot-opportunites': 'Opportunités Clients', 'robot-bien': 'Fiche bien Radar', 'robot-dpe': 'Recherche DPE', 'robot-proprietaires': 'Propriétaires', 'robot-proprietaire': 'Fiche propriétaire', 'portefeuille-foncier': 'Portefeuille foncier', 'societe-fonciere': 'Fiche société', membres: 'Membres', 'biens-club': 'Biens du club', rapprochements: 'Rapprochements', tracking: 'Tracking', visites: 'Visites', offres: 'Offres', verifications: 'Vérifications', taches: 'Tâches', messages: 'Messages', reglages: 'Réglages' };
     return map[r.name] || 'CRM';
   }
 
@@ -2464,11 +2469,114 @@
   }
 
   const PIPELINE_COLS = [
-    ['a_contacter', 'À contacter'], ['contacte', 'Contacté'], ['a_relancer', 'À relancer'], ['converti', 'Converti'], ['ecarte', 'Écarté']
+    ['a_contacter', 'À contacter'], ['contacte', 'Contacté'], ['a_relancer', 'À relancer'], ['converti', 'Converti'],
+    ['ecarte', 'Écarté'], ['hors_cible', 'Hors cible'], ['a_completer', 'À compléter']
   ];
 
   function whatsappMessage(c) {
     return 'Bonjour ' + (c.prenom || '') + ',\n\nJe me permets de vous contacter au sujet de votre bien situé ' + (c.adresseBien || c.ville || 'dans votre secteur') + '.\n\nJe souhaiterais échanger avec vous afin de savoir si vous envisagez une évolution de votre situation immobilière.\n\nSeriez-vous disponible pour un court échange ?\n\nBien cordialement,\nGabriel Taieb\nSeecret';
+  }
+
+  /* ----------------------- Réseau (relance de masse) ---------------------- */
+  // Message WhatsApp pré-rempli, adapté à la provenance du lead (fichier agence
+  // déjà en mandat, estimation sans vente, ou lead générique) — jamais envoyé
+  // automatiquement : seul un clic humain sur « Envoyer par WhatsApp » ouvre wa.me.
+  function reseauMessage(c) {
+    const prenomCivil = (c.civilite === 'Mme' ? 'Madame' : c.civilite === 'M.' ? 'Monsieur' : '') ;
+    const nom = (prenomCivil ? prenomCivil + ' ' : '') + (c.nom || c.prenom || '');
+    if (c.pipeline === 'contacte' || c.pipeline === 'a_relancer') {
+      return 'Bonjour ' + (c.prenom || '') + ', je reviens vers vous au sujet de votre projet' +
+        (c.adresseBien ? ' concernant ' + c.adresseBien : '') +
+        '. Avez-vous eu l’occasion d’y réfléchir ?\n\nBien cordialement,\nGabriel Taieb\nSeecret';
+    }
+    if (/mandat/i.test(c.source || '') || (c.type === 'vendeur' && c.adresseBien)) {
+      return 'Bonjour ' + nom + ', je suis Gabriel Taieb, nous avons déjà été en contact pour votre projet de vente' +
+        (c.adresseBien ? ' (' + c.adresseBien + ')' : '') +
+        '. Nous lançons Seecret, notre nouveau club immobilier privé, et j’aimerais vous en parler.\n\nBien cordialement,\nGabriel Taieb\nSeecret';
+    }
+    if (/estimation/i.test(c.source || '')) {
+      return 'Bonjour ' + nom + ', vous aviez fait estimer votre bien avec nous sans donner suite à l’époque. Nous lançons Seecret, un club privé off-market, qui pourrait vous intéresser pour relancer votre projet au bon moment.\n\nBien cordialement,\nGabriel Taieb\nSeecret';
+    }
+    return whatsappMessage(c);
+  }
+
+  function marquerPipeline(c, val, skipCommit) {
+    c.pipeline = val;
+    if (!skipCommit) commit(); else save();
+    if (c.serverId) {
+      fetch('/api/leads/' + c.serverId, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ pipeline: val }) }).catch(() => {});
+    }
+  }
+
+  function reseauHref(c) {
+    const tel = String(c.tel || '').replace(/[^0-9]/g, '');
+    return tel ? 'https://wa.me/' + tel + '?text=' + encodeURIComponent(reseauMessage(c)) : '';
+  }
+
+  function viewReseau() {
+    const tab = state.filtres.reseauTab || 'a_contacter';
+    const q = (state.filtres.reseauQ || '').toLowerCase();
+    const typeF = state.filtres.reseauType || '';
+    const ordre = state.filtres.reseauOrdre || 'ancien';
+    const tous = state.clients.filter((c) => c.type === 'vendeur' || c.type === 'mixte' || c.projet === 'prospect' ||
+      c.source === 'Immo Data Robot' || c.type === 'societe' || c.type === 'sci' || c.type === 'personne' || c.pipeline);
+    const parStatut = (k) => tous.filter((c) => (c.pipeline || 'a_contacter') === k);
+    let list = parStatut(tab);
+    if (typeF) list = list.filter((c) => c.type === typeF);
+    if (q) list = list.filter((c) => (nomClient(c) + ' ' + (c.adresseBien || '') + ' ' + (c.ville || '')).toLowerCase().indexOf(q) > -1);
+    list = list.slice().sort((a, b) => ordre === 'alpha'
+      ? nomClient(a).localeCompare(nomClient(b))
+      : new Date(a.cree || 0) - new Date(b.cree || 0));
+
+    const ligne = (c) => {
+      const tel = String(c.tel || '').replace(/[^0-9]/g, '');
+      const msg = reseauMessage(c);
+      return '<div class="se-reseau-row">' +
+        '<label class="se-reseau-check"><input type="checkbox" class="sel-reseau" data-id="' + c.id + '"/></label>' +
+        '<div class="se-reseau-info">' +
+          '<a href="#/client/' + c.id + '"><b>' + esc(nomClient(c)) + '</b></a>' +
+          '<div class="se-hint">' + esc(c.source || 'Lead') + (c.adresseBien ? ' · ' + esc(c.adresseBien) : (c.ville ? ' · ' + esc(c.ville) : '')) + '</div>' +
+          '<p class="se-reseau-msg">' + esc(msg.replace(/\n+/g, ' ')) + '</p>' +
+        '</div>' +
+        '<div class="se-reseau-actions">' +
+          (tel
+            ? '<button class="se-btn sm" data-act="reseau-envoyer" data-id="' + c.id + '">' + ICONS.chat + ' Envoyer par WhatsApp</button>'
+            : '<span class="se-hint">Numéro indisponible</span>') +
+        '</div>' +
+      '</div>';
+    };
+
+    return head('Prospection', 'Réseau',
+        tous.length + ' lead(s) dans le fichier agence · ' + parStatut(tab).length + ' dans cet onglet.',
+        '<a class="se-btn ghost sm" href="#/pipeline">Vue pipeline</a>') +
+      '<div class="se-tabs se-reseau-tabs">' +
+        PIPELINE_COLS.map(([k, l]) => '<a href="#" data-act="filtre" data-id="reseauTab:' + k + '" class="' + (tab === k ? 'active' : '') + '">' + l + '<span>' + parStatut(k).length + '</span></a>').join('') +
+      '</div>' +
+      '<div class="se-card pad-sm se-reseau-toolbar">' +
+        '<div class="se-filters">' +
+          '<input class="se-input se-search" data-filter="reseauQ" placeholder="Nom, adresse…" value="' + esc(state.filtres.reseauQ || '') + '"/>' +
+          '<select class="se-select" data-filter="reseauType"><option value="">Tous les projets</option>' +
+            '<option value="acquereur"' + (typeF === 'acquereur' ? ' selected' : '') + '>Acquéreur</option>' +
+            '<option value="vendeur"' + (typeF === 'vendeur' ? ' selected' : '') + '>Vendeur</option>' +
+            '<option value="mixte"' + (typeF === 'mixte' ? ' selected' : '') + '>Acheteur-vendeur</option>' +
+          '</select>' +
+          '<select class="se-select" data-filter="reseauOrdre">' +
+            '<option value="ancien"' + (ordre === 'ancien' ? ' selected' : '') + '>Ordre d’appel : le plus ancien d’abord</option>' +
+            '<option value="alpha"' + (ordre === 'alpha' ? ' selected' : '') + '>Ordre d’appel : alphabétique</option>' +
+          '</select>' +
+        '</div>' +
+        '<label class="se-check-all"><input type="checkbox" class="sel-tous-reseau"/> Tout cocher sur la page</label>' +
+      '</div>' +
+      '<div class="se-reseau-list">' +
+        (list.length ? list.map(ligne).join('') : '<p class="se-muted" style="padding:20px 4px">Aucun lead dans cet onglet pour ces filtres.</p>') +
+      '</div>' +
+      '<div class="se-reseau-bulkbar" id="reseau-bulkbar" hidden>' +
+        '<span id="reseau-bulk-count">0 sélectionné(s)</span>' +
+        '<span class="se-spacer"></span>' +
+        '<button class="se-btn ghost sm" data-act="reseau-marquer-masse" data-vers="contacte">Marquer « Contacté »</button>' +
+        '<button class="se-btn ghost sm" data-act="reseau-marquer-masse" data-vers="hors_cible">Marquer « Hors cible »</button>' +
+        '<button class="se-btn ghost sm" data-act="reseau-marquer-masse" data-vers="a_completer">Marquer « À compléter »</button>' +
+      '</div>';
   }
 
   function whatsappModal(c) {
@@ -3194,12 +3302,17 @@
   }
 
   function moreSheet() {
+    const item = (route, icon, label, badge, href) => '<a class="se-list-item" href="' + (href || ('#/' + route)) + '" style="text-decoration:none;color:inherit;padding:14px 4px">' + icon + '<span style="flex:1;margin-left:10px">' + label + '</span>' + (badge ? '<span class="se-badge offer">' + badge + '</span>' : '') + '</a>';
     return '<h3>Menu</h3><p class="se-muted">Tout le CRM.</p><div class="se-list">' +
-      '<a class="se-list-item" href="#/offres" style="text-decoration:none;color:inherit;padding:14px 4px">' + ICONS.tag + '<span style="flex:1;margin-left:10px">Offres</span>' + (offresNouvelles() ? '<span class="se-badge offer">' + offresNouvelles() + '</span>' : '') + '</a>' +
-      '<a class="se-list-item" href="#/taches" style="text-decoration:none;color:inherit;padding:14px 4px">' + ICONS.check + '<span style="flex:1;margin-left:10px">Tâches</span></a>' +
-      '<a class="se-list-item" href="#/messages" style="text-decoration:none;color:inherit;padding:14px 4px">' + ICONS.chat + '<span style="flex:1;margin-left:10px">Messages</span></a>' +
-      '<a class="se-list-item" href="#/reglages" style="text-decoration:none;color:inherit;padding:14px 4px">' + ICONS.tools + '<span style="flex:1;margin-left:10px">Réglages</span></a>' +
-      '<a class="se-list-item" href="espace.html" style="text-decoration:none;color:inherit;padding:14px 4px">' + ICONS.out + '<span style="flex:1;margin-left:10px">Espace membre</span></a>' +
+      item('rapprochements', ICONS.tag, 'Rapprochements') +
+      item('tracking', ICONS.search, 'Tracking') +
+      item('visites', ICONS.calendar, 'Visites') +
+      item('offres', ICONS.tag, 'Offres', offresNouvelles()) +
+      item('taches', ICONS.check, 'Tâches') +
+      item('verifications', ICONS.check, 'Vérifications', verifEnAttente()) +
+      item('messages', ICONS.chat, 'Messages') +
+      item('reglages', ICONS.tools, 'Réglages') +
+      item('espace', ICONS.out, 'Espace membre', 0, 'espace.html') +
       '</div>';
   }
 
@@ -3580,6 +3693,25 @@
       window.open('https://wa.me/' + tel + '?text=' + encodeURIComponent(texte), '_blank');
       toast('WhatsApp ouvert. Pensez à consigner le contact après échange.', 'info');
     },
+    'reseau-envoyer': (el, id) => {
+      const c = client(id);
+      if (!c) return;
+      const href = reseauHref(c);
+      if (!href) { toast('Numéro indisponible.', 'warn'); return; }
+      window.open(href, '_blank');
+      // Jamais d'envoi automatique : on ouvre WhatsApp, l'humain clique "Envoyer" lui-même.
+      // On avance juste le statut du lead de "à contacter" vers "contacté" pour suivre la relance.
+      if ((c.pipeline || 'a_contacter') === 'a_contacter') marquerPipeline(c, 'contacte');
+      toast('WhatsApp ouvert pour ' + nomClient(c) + '.', 'info');
+    },
+    'reseau-marquer-masse': (el) => {
+      const vers = el.getAttribute('data-vers');
+      const ids = $$('.sel-reseau:checked').map((b) => b.getAttribute('data-id'));
+      if (!ids.length) return;
+      ids.forEach((id) => { const c = client(id); if (c) marquerPipeline(c, vers, true); });
+      commit();
+      toast(ids.length + ' lead(s) marqué(s) « ' + (PIPELINE_COLS.find(([k]) => k === vers) || [, vers])[1] + ' ».', 'ok');
+    },
     'copier-contact': async (el) => {
       const value = el.getAttribute('data-value') || '';
       try {
@@ -3925,6 +4057,16 @@
       const n = document.querySelectorAll('.sel-acq:checked').length;
       const btn = document.getElementById('btn-envoi-sel');
       if (btn) btn.textContent = n ? ('Envoyer à la sélection (' + n + ')') : 'Envoyer à tous les matchs';
+    }
+    if (e.target.classList.contains('sel-tous-reseau')) {
+      $$('.sel-reseau').forEach((b) => { b.checked = e.target.checked; });
+    }
+    if (e.target.classList.contains('sel-tous-reseau') || e.target.classList.contains('sel-reseau')) {
+      const n = $$('.sel-reseau:checked').length;
+      const bar = document.getElementById('reseau-bulkbar');
+      const count = document.getElementById('reseau-bulk-count');
+      if (bar) bar.hidden = n === 0;
+      if (count) count.textContent = n + ' sélectionné(s)';
     }
     if (e.target.matches('[data-rf]')) {
       const key = e.target.getAttribute('data-rf');
