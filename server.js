@@ -204,23 +204,47 @@ const FLOW_TTL = 5 * 60 * 1000;                // challenge WebAuthn : 5 minutes
 const SESSION_COOKIE = 'seecret_session';
 const FLOW_COOKIE = 'seecret_flow';
 
-// Envoi d'email via Gmail (mot de passe d'application). Sans identifiants,
-// l'envoi est simplement désactivé (le parcours reste fonctionnel).
-const mailer = (process.env.EMAIL_USER && process.env.EMAIL_PASS)
+// Envoi d'email : l'API Resend (HTTPS, port 443) en priorité — les PaaS
+// comme Railway bloquent les connexions SMTP sortantes (465 et 587 testés,
+// les deux timeout systématiquement), donc le SMTP Gmail classique ne
+// fonctionne pas en production ici. En local (ou si RESEND_API_KEY n'est
+// pas défini), on retombe sur Gmail SMTP pour ne rien casser en dev.
+const RESEND_API_KEY = process.env.RESEND_API_KEY;
+const RESEND_FROM_EMAIL = process.env.RESEND_FROM_EMAIL || 'contact@seecret.fr';
+
+const smtpFallback = (process.env.EMAIL_USER && process.env.EMAIL_PASS)
   ? nodemailer.createTransport({
       host: 'smtp.gmail.com',
-      // Port 587 (STARTTLS) au lieu de 465 (TLS direct) : certains réseaux
-      // de PaaS (Railway, etc.) filtrent le 465 sortant mais laissent le 587
-      // passer. On force aussi IPv4 et un timeout court pour diagnostiquer
-      // vite un blocage réseau plutôt que d'attendre 2 minutes.
-      port: 587,
-      secure: false,
-      requireTLS: true,
-      family: 4,
-      connectionTimeout: 15000,
-      greetingTimeout: 15000,
+      port: 465,
+      secure: true,
       auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
     })
+  : null;
+
+// Resend exige un expéditeur sur un domaine vérifié (pas une adresse Gmail) :
+// on réécrit l'affichage ("Nom <adresse>") en gardant le nom mais en forçant
+// l'adresse vers RESEND_FROM_EMAIL quand on passe par Resend.
+function withResendFrom(from) {
+  const m = /^"?([^"<]*)"?\s*<[^>]+>$/.exec(from || '');
+  const nom = m ? m[1].trim() : 'Seecret';
+  return '"' + nom + '" <' + RESEND_FROM_EMAIL + '>';
+}
+
+async function sendViaResend({ from, to, subject, html }) {
+  const resp = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + RESEND_API_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from: withResendFrom(from), to: [to], subject, html })
+  });
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => '');
+    throw new Error('Resend ' + resp.status + ' : ' + body.slice(0, 300));
+  }
+  return resp.json();
+}
+
+const mailer = (RESEND_API_KEY || smtpFallback)
+  ? { sendMail: (opts) => (RESEND_API_KEY ? sendViaResend(opts) : smtpFallback.sendMail(opts)) }
   : null;
 
 const FROM_EMAIL = process.env.EMAIL_USER || 'contact.immogroupe@gmail.com';
@@ -2199,11 +2223,15 @@ app.listen(PORT, () => {
   console.log('Seecret backend démarré sur http://localhost:' + PORT);
   console.log('  CRM : http://localhost:' + PORT + '/crm.html');
   console.log('  Adhésion : http://localhost:' + PORT + '/candidature.html');
-  console.log('  Email : ' + (mailer ? 'SMTP configuré (' + process.env.EMAIL_USER + ')' : 'SMTP NON configuré — aucun email ne sera envoyé'));
-  if (mailer) {
-    mailer.verify((err) => {
+  if (RESEND_API_KEY) {
+    console.log('  Email : Resend configuré (expéditeur ' + RESEND_FROM_EMAIL + ')');
+  } else if (smtpFallback) {
+    console.log('  Email : SMTP configuré (' + process.env.EMAIL_USER + ')');
+    smtpFallback.verify((err) => {
       if (err) console.error('  [SMTP] ÉCHEC de connexion Gmail : ' + err.message);
       else console.log('  [SMTP] Connexion Gmail OK — envoi des emails opérationnel');
     });
+  } else {
+    console.warn('  Email : NON configuré (ni RESEND_API_KEY ni EMAIL_USER/EMAIL_PASS) — aucun email ne sera envoyé');
   }
 });
