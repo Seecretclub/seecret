@@ -1,0 +1,17 @@
+# Secrets — ne jamais committer
+.env
+
+# Base locale (contient données CRM + sessions)
+data.json
+
+# Dépendances
+node_modules/
+
+# Système
+.DS_Store
+*.log
+/tmp/
+
+# Données de test temporaires
+/tmp/
+*.local

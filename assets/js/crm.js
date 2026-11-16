@@ -1,0 +1,4252 @@
+/* ------------------------------------------------------------------
+   Seecret — CRM agence
+   Fiches clients · fiches biens · recherches · demandes · visites ·
+   offres · tâches · messagerie. 100 % statique (localStorage).
+   ------------------------------------------------------------------ */
+(function () {
+  'use strict';
+
+  /* ============================== utilitaires ============================== */
+
+  const $ = (s, r) => (r || document).querySelector(s);
+  const $$ = (s, r) => Array.prototype.slice.call((r || document).querySelectorAll(s));
+  const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const euro = (n) => new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(Number(n) || 0);
+  const num = (n) => new Intl.NumberFormat('fr-FR').format(Number(n) || 0);
+  const uid = (p) => (p || 'id') + Math.random().toString(36).slice(2, 8);
+  const nowISO = () => new Date().toISOString();
+  const dFR = (iso) => new Date(iso).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  const dCourt = (iso) => new Date(iso).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+  const tFR = (iso) => new Date(iso).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+  const ilYa = (iso) => {
+    const j = Math.floor((Date.now() - new Date(iso)) / 86400000);
+    if (j <= 0) return 'aujourd’hui';
+    if (j === 1) return 'hier';
+    return 'il y a ' + j + ' j';
+  };
+  const dansX = (iso) => {
+    const j = Math.round((new Date(iso) - Date.now()) / 86400000);
+    if (j < 0) return 'en retard de ' + Math.abs(j) + ' j';
+    if (j === 0) return 'aujourd’hui';
+    if (j === 1) return 'demain';
+    return 'dans ' + j + ' j';
+  };
+
+  const ICONS = {
+    home: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9.5 10 3l7 6.5V17a1 1 0 0 1-1 1h-4v-5H8v5H4a1 1 0 0 1-1-1z"/></svg>',
+    inbox: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11h3l1.5 2.5h5L14 11h3"/><path d="M3 11 5.5 4h9L17 11v5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/></svg>',
+    users: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="7" r="3"/><path d="M2.5 17a5.5 5.5 0 0 1 11 0M13.5 4.2a3 3 0 0 1 0 5.6M15 12.4a5 5 0 0 1 2.5 4.6"/></svg>',
+    user: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="6.5" r="3.2"/><path d="M3.5 17a6.5 6.5 0 0 1 13 0"/></svg>',
+    building: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17V4h8v13M12 8h4v9M2 17h16"/><path d="M7 7h2M7 10h2M7 13h2"/></svg>',
+    grid: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="6" height="6" rx="1"/><rect x="11" y="3" width="6" height="6" rx="1"/><rect x="3" y="11" width="6" height="6" rx="1"/><rect x="11" y="11" width="6" height="6" rx="1"/></svg>',
+    search: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="9" cy="9" r="5.5"/><path d="m13.5 13.5 3 3"/></svg>',
+    robot: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="8" width="10" height="8" rx="2"/><path d="M10 8V5M10 5a1.5 1.5 0 1 0-1.5-1.5M13 5v3M7 5v3M7.5 12h.01M12.5 12h.01"/></svg>',
+    calendar: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="14" height="12.5" rx="2"/><path d="M3 8.5h14M7 3v3M13 3v3"/></svg>',
+    tag: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.5 3H17v6.5L9.8 16.7a1.6 1.6 0 0 1-2.3 0L3.3 12.5a1.6 1.6 0 0 1 0-2.3z"/><circle cx="13.6" cy="6.4" r="1.1"/></svg>',
+    check: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10.5 8 14.5 16 5"/></svg>',
+    chat: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 9.5a6.5 6.5 0 0 1-9.4 5.8L3 16.5l1.2-4.4A6.5 6.5 0 1 1 17 9.5z"/></svg>',
+    plus: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M10 4v12M4 10h12"/></svg>',
+    arrow: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10h11M11 6l4 4-4 4"/></svg>',
+    phone: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3h3l1.5 4-2 1.5a10 10 0 0 0 4 4L13 10.5 17 12v3a1 1 0 0 1-1 1A13 13 0 0 1 3 4a1 1 0 0 1 1-1z"/></svg>',
+    mail: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4.5" width="15" height="11" rx="2"/><path d="m3 6 7 5 7-5"/></svg>',
+    tools: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m12.5 7.5 5 5-3 3-5-5M7.5 12.5l-5-5 3-3 5 5"/><path d="m3 17 2.5-2.5M14.5 5.5 17 3"/></svg>',
+    out: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h4M13 6l4 4-4 4M17 10H7"/></svg>'
+  };
+
+  /* ================================= données ============================== */
+
+  const KEY = 'seecret.crm.v1';
+  const SHARED = 'seecret.demandes.v1';
+  const BIENS_MEMBRES = 'seecret.biens.v1';
+
+  const QUARTIERS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+    .map((n) => ({ id: 'p' + n, label: 'Paris ' + n + (n === 1 ? 'ᵉʳ' : 'ᵉ') }))
+    .concat([
+      { id: 'boulogne', label: 'Boulogne-Billancourt' },
+      { id: 'neuilly', label: 'Neuilly-sur-Seine' },
+      { id: 'vincennes', label: 'Vincennes' }
+    ]);
+  const qLabel = (id) => (QUARTIERS.find((q) => q.id === id) || { label: id }).label;
+
+  const TYPES = ['Appartement', 'Maison', 'Duplex', 'Loft', 'Hôtel particulier', 'Terrain'];
+  const ATOUTS = ['Terrasse', 'Jardin', 'Vue', 'Parquet d’origine', 'Cheminée', 'Verrière', 'Ascenseur', 'Cave', 'Parking', 'Dernier étage', 'Calme', 'Lumineux'];
+
+  const ST_BIEN = {
+    brouillon: { label: 'Brouillon', cls: 'muted' },
+    mandat: { label: 'Mandat signé', cls: '' },
+    'avant-premiere': { label: 'Avant-première', cls: '' },
+    ouvert: { label: 'Ouvert aux visites', cls: 'open' },
+    'sous-offre': { label: 'Sous offre', cls: 'offer' },
+    vendu: { label: 'Vendu', cls: 'muted' }
+  };
+
+  const ST_CLIENT = {
+    prospect: { label: 'Prospect', cls: 'warn' },
+    actif: { label: 'Actif', cls: '' },
+    client: { label: 'Client', cls: 'open' },
+    suspendu: { label: 'Suspendu', cls: 'warn' },
+    archive: { label: 'Archivé', cls: 'muted' }
+  };
+
+  const DEMANDE = {
+    visite: { label: 'Demande de visite', icon: 'calendar' },
+    offre: { label: 'Offre', icon: 'tag' },
+    candidature: { label: 'Candidature', icon: 'user' },
+    statut: { label: 'Changement de statut', icon: 'building' },
+    modification: { label: 'Modification de bien', icon: 'building' },
+    info: { label: 'Message', icon: 'chat' }
+  };
+
+  function seed() {
+    const biens = [
+      { id: 'b1', adresse: 'Île Saint-Louis, Paris 4e', ref: 'SC-1042', titre: 'Quatre pièces sur la Seine', type: 'Appartement', quartier: 'p4', surface: 112, pieces: 4, chambres: 2, sdb: 2, etage: '3ᵉ', dpe: 'D', prix: 2079000, statut: 'avant-premiere', proprietaireId: 'c2', photos: ['ilesaintlouis-1.jpg', 'ilesaintlouis-3.jpg'], description: 'La Seine par trois fenêtres, un parquet de Versailles d’origine, et la lumière des quatre expositions.', atouts: ['Vue', 'Parquet d’origine', 'Calme'], mandat: { type: 'exclusif', fin: '2027-03-31' }, cree: '2026-10-02T10:00:00.000Z' },
+      { id: 'b2', adresse: 'Rue des Abbesses, Paris 18e', ref: 'SC-1043', titre: 'La maison au figuier', type: 'Maison', quartier: 'p18', surface: 96, pieces: 4, chambres: 2, sdb: 2, etage: 'RDC', dpe: 'E', prix: 1270500, statut: 'avant-premiere', proprietaireId: null, photos: ['montmartre-1.jpg', 'montmartre-3.jpg'], description: 'Une verrière d’atelier qui prend la lumière du nord toute la journée, et un figuier dans la cour.', atouts: ['Jardin', 'Verrière', 'Calme'], mandat: { type: 'simple', fin: '2027-01-31' }, cree: '2026-10-06T10:00:00.000Z' },
+      { id: 'b3', adresse: 'Rue de Verneuil, Paris 6e', ref: 'SC-1044', titre: 'Les deux derniers étages', type: 'Duplex', quartier: 'p6', surface: 128, pieces: 4, chambres: 3, sdb: 2, etage: '5ᵉ', dpe: 'C', prix: 2604000, statut: 'ouvert', proprietaireId: 'c4', photos: ['saintgermain-1.jpg', 'saintgermain-3.jpg'], description: 'Deux niveaux qui se répondent, une terrasse plein sud, et l’adresse la plus sûre de la rive gauche.', atouts: ['Terrasse', 'Dernier étage', 'Lumineux'], mandat: { type: 'exclusif', fin: '2027-06-30' }, cree: '2026-09-18T10:00:00.000Z' },
+      { id: 'b4', adresse: 'Avenue du Président Kennedy, Paris 16e', ref: 'SC-1045', titre: 'Six pièces face aux toits', type: 'Appartement', quartier: 'p16', surface: 185, pieces: 6, chambres: 4, sdb: 3, etage: '6ᵉ', dpe: 'D', prix: 3412500, statut: 'avant-premiere', proprietaireId: null, photos: ['trocadero-1.jpg', 'home-5.jpg'], description: 'La rotonde du dernier étage, une vue que rien ne viendra fermer, et l’ascenseur d’époque.', atouts: ['Vue', 'Ascenseur', 'Dernier étage'], mandat: { type: 'simple', fin: '2027-04-30' }, cree: '2026-10-10T10:00:00.000Z' },
+      { id: 'b5', adresse: 'Rue des Archives, Paris 3e', ref: 'SC-1046', titre: 'L’atelier et sa verrière', type: 'Loft', quartier: 'p3', surface: 142, pieces: 3, chambres: 2, sdb: 2, etage: '4ᵉ', dpe: 'C', prix: 1774500, statut: 'mandat', proprietaireId: 'c6', photos: ['marais-1.jpg', 'home-loft-bright.jpg'], description: 'Des moulures d’origine, le calme d’un dernier étage, et Paris qui se déplie par les fenêtres.', atouts: ['Verrière', 'Dernier étage', 'Calme'], mandat: { type: 'exclusif', fin: '2027-02-28' }, cree: '2026-10-12T10:00:00.000Z' },
+      { id: 'b6', adresse: 'Rue de Grenelle, Paris 7e', ref: 'SC-1047', titre: 'Un rez-de-jardin rue de Grenelle', type: 'Appartement', quartier: 'p7', surface: 138, pieces: 5, chambres: 3, sdb: 2, etage: 'RDC', dpe: 'D', prix: 2350000, statut: 'ouvert', proprietaireId: null, photos: ['home-jardin.jpg', 'home-1.jpg'], description: 'Un jardin de 90 m² à l’abri des regards, deux expositions, et le silence d’une cour pavée.', atouts: ['Jardin', 'Calme', 'Cheminée'], mandat: { type: 'simple', fin: '2027-05-31' }, cree: '2026-09-28T10:00:00.000Z' },
+      { id: 'b7', adresse: 'Quai de Montebello, Paris 5e', ref: 'SC-1048', titre: 'Sous les toits de Notre-Dame', type: 'Appartement', quartier: 'p9', surface: 88, pieces: 3, chambres: 2, sdb: 1, etage: '5ᵉ', dpe: 'E', prix: 1415000, statut: 'avant-premiere', proprietaireId: null, photos: ['home-5.jpg', 'home-3.jpg'], description: 'Une charpente apparente, une verrière plein ciel et le marché Saint-Georges à trois minutes.', atouts: ['Dernier étage', 'Lumineux'], mandat: { type: 'simple', fin: '2027-01-15' }, cree: '2026-10-14T10:00:00.000Z' },
+      { id: 'b8', adresse: 'Boulogne-Billancourt', ref: 'SC-1049', titre: 'La maison des deux cèdres', type: 'Maison', quartier: 'boulogne', surface: 210, pieces: 7, chambres: 4, sdb: 3, etage: 'R+2', dpe: 'C', prix: 2890000, statut: 'sous-offre', proprietaireId: null, photos: ['home-6.jpg', 'home-3.jpg'], description: 'Un jardin planté de deux cèdres centenaires, une véranda d’hiver et un garage double.', atouts: ['Jardin', 'Parking', 'Calme'], mandat: { type: 'exclusif', fin: '2027-07-31' }, cree: '2026-09-05T10:00:00.000Z' }
+    ];
+
+    const clients = [
+      { id: 'c1', type: 'acquereur', prenom: 'Camille', nom: 'Renaud', email: 'camille.renaud@example.com', tel: '06 12 34 56 78', statut: 'actif', source: 'Candidature', budgetMin: 1200000, budgetMax: 2200000, quartiers: ['p4', 'p5', 'p6', 'p7'], piecesMin: 3, surfaceMin: 90, typeBien: 'Appartement', notes: 'Cherche la lumière et un dernier étage. Prête à se positionner vite.', tags: ['VIP', 'Financement validé'], agent: 'Léa Marchand', cree: '2026-10-18T09:00:00.000Z' },
+      { id: 'c2', type: 'vendeur', prenom: 'Antoine', nom: 'Mercier', email: 'a.mercier@example.com', tel: '06 22 11 44 90', statut: 'client', source: 'Recommandation', budgetMin: 0, budgetMax: 0, quartiers: [], piecesMin: 0, surfaceMin: 0, typeBien: '', notes: 'Vend pour acheter ailleurs. Très attaché à la discrétion.', tags: ['Exclusif'], agent: 'Léa Marchand', cree: '2026-09-12T09:00:00.000Z' },
+      { id: 'c3', type: 'acquereur', prenom: 'Sofia', nom: 'Belkacem', email: 'sofia.b@example.com', tel: '07 88 21 33 05', statut: 'actif', source: 'Site web', budgetMin: 2500000, budgetMax: 3500000, quartiers: ['p7', 'p8', 'p16'], piecesMin: 5, surfaceMin: 150, typeBien: 'Appartement', notes: 'Famille de 4, écoles du 7e. Visite uniquement le samedi.', tags: ['Sérieux'], agent: 'Karim B.', cree: '2026-10-04T09:00:00.000Z' },
+      { id: 'c4', type: 'vendeur', prenom: 'Hugo', nom: 'Lefèvre', email: 'hugo.lefevre@example.com', tel: '06 45 09 77 12', statut: 'client', source: 'Candidature', budgetMin: 0, budgetMax: 0, quartiers: [], piecesMin: 0, surfaceMin: 0, typeBien: '', notes: 'Duplex du 6e. Veut vendre avant l’été.', tags: ['Exclusif'], agent: 'Léa Marchand', cree: '2026-09-18T09:00:00.000Z' },
+      { id: 'c5', type: 'acquereur', prenom: 'Inès', nom: 'Fontaine', email: 'ines.fontaine@example.com', tel: '06 30 55 21 84', statut: 'prospect', source: 'Instagram', budgetMin: 1000000, budgetMax: 1500000, quartiers: ['p9', 'p10', 'p11', 'p18'], piecesMin: 3, surfaceMin: 70, typeBien: 'Appartement', notes: 'Primo-accédante, prêt obtenu.', tags: [], agent: 'Karim B.', cree: '2026-10-21T09:00:00.000Z' },
+      { id: 'c6', type: 'mixte', prenom: 'Paul', nom: 'Girard', email: 'paul.girard@example.com', tel: '07 12 65 43 21', statut: 'actif', source: 'Bouche à oreille', budgetMin: 1700000, budgetMax: 2600000, quartiers: ['p3', 'p4', 'p11'], piecesMin: 4, surfaceMin: 100, typeBien: 'Loft', notes: 'Vend son loft du Marais, cherche plus grand dans le centre.', tags: ['VIP'], agent: 'Léa Marchand', cree: '2026-10-08T09:00:00.000Z' }
+    ];
+
+    const recherches = [
+      { id: 'r1', clientId: 'c1', titre: 'Trois pièces et plus, rive gauche', type: 'Appartement', quartiers: ['p4', 'p5', 'p6', 'p7'], prixMax: 2200000, piecesMin: 3, surfaceMin: 90, statut: 'active', alertes: true, cree: '2026-10-18T09:10:00.000Z' },
+      { id: 'r2', clientId: 'c3', titre: 'Grand appartement familial', type: 'Appartement', quartiers: ['p7', 'p8', 'p16'], prixMax: 3500000, piecesMin: 5, surfaceMin: 150, statut: 'active', alertes: true, cree: '2026-10-04T09:10:00.000Z' },
+      { id: 'r3', clientId: 'c5', titre: 'Premier achat, rive droite', type: 'Appartement', quartiers: ['p9', 'p10', 'p11', 'p18'], prixMax: 1500000, piecesMin: 3, surfaceMin: 70, statut: 'active', alertes: false, cree: '2026-10-21T09:10:00.000Z' },
+      { id: 'r4', clientId: 'c6', titre: 'Loft ou dernier étage, Marais', type: 'Loft', quartiers: ['p3', 'p4', 'p11'], prixMax: 2600000, piecesMin: 4, surfaceMin: 100, statut: 'active', alertes: true, cree: '2026-10-08T09:10:00.000Z' }
+    ];
+
+    const demandes = [];
+
+    const visites = [
+      { id: 'v1', bienId: 'b3', clientId: 'c1', date: '2026-11-06', heure: '18:00', statut: 'confirmee', note: '' },
+      { id: 'v2', bienId: 'b6', clientId: 'c3', date: '2026-11-08', heure: '10:30', statut: 'demandee', note: 'Samedi uniquement.' },
+      { id: 'v3', bienId: 'b5', clientId: 'c6', date: '2026-10-28', heure: '11:00', statut: 'realisee', note: '' }
+    ];
+
+    const offres = [
+      { id: 'o1', bienId: 'b8', clientId: 'c2', montant: 2750000, statut: 'recue', cree: '2026-11-03T11:05:00.000Z' },
+      { id: 'o2', bienId: 'b3', clientId: 'c3', montant: 2520000, statut: 'contre', cree: '2026-10-29T14:00:00.000Z' }
+    ];
+
+    const taches = [
+      { id: 't1', titre: 'Rappeler Camille pour confirmer la visite de jeudi', clientId: 'c1', bienId: 'b3', echeance: '2026-11-04', fait: false },
+      { id: 't2', titre: 'Préparer le mandat exclusif du loft Marais', clientId: 'c6', bienId: 'b5', echeance: '2026-11-05', fait: false },
+      { id: 't3', titre: 'Relancer le notaire sur le dossier des deux cèdres', bienId: 'b8', echeance: '2026-11-02', fait: false },
+      { id: 't4', titre: 'Envoyer les photos du 9e à Inès', clientId: 'c5', bienId: 'b7', echeance: '2026-10-31', fait: true }
+    ];
+
+    return {
+      v: 1,
+      agent: { prenom: 'Léa', nom: 'Marchand', email: 'lea@seecret.club', tel: '06 71 22 90 14', agence: 'Seecret — Paris centre' },
+      clients, biens, recherches, demandes, visites, offres, taches,
+      threads: {
+        c1: [
+          { de: 'client', texte: 'Bonjour, je confirme pour jeudi soir si possible.', at: '2026-11-03T18:22:00.000Z' },
+          { de: 'agent', texte: 'C’est noté, je bloque 18 h avec le propriétaire.', at: '2026-11-03T18:30:00.000Z' }
+        ],
+        c3: [
+          { de: 'client', texte: 'Uniquement le samedi pour les visites, merci.', at: '2026-10-29T09:10:00.000Z' }
+        ]
+      },
+      filtres: {},
+      membresBiens: []
+    };
+  }
+
+  let state = load();
+  state.demandes = (state.demandes || []).filter((d) => d.serverDemandeId);
+  let modal = null;
+  let modalLarge = false;
+  let lastRoute = '';
+  state.docsParLead = state.docsParLead || {};
+  state.tachesVerif = state.tachesVerif || [];
+  state.biensServeur = state.biensServeur || [];
+  state.recherchesServeur = state.recherchesServeur || [];
+
+  function load() {
+    try {
+      const raw = localStorage.getItem(KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && parsed.v === 1) {
+          const s = Object.assign(seed(), parsed);
+          s.filtres = s.filtres || {};
+          s.threads = s.threads || {};
+          s.membresBiens = s.membresBiens || [];
+          mergeShared(s);
+          mergeBiensMembres(s);
+          return s;
+        }
+      }
+    } catch (e) { /* ignore */ }
+    const s = seed();
+    mergeShared(s);
+    mergeBiensMembres(s);
+    return s;
+  }
+
+  function mergeShared(s) {
+    try {
+      const raw = localStorage.getItem(SHARED);
+      if (!raw) return;
+      const list = JSON.parse(raw);
+      if (!Array.isArray(list)) return;
+      list.forEach((d) => {
+        if (!s.demandes.some((x) => x.id === d.id)) s.demandes.unshift(Object.assign({ statut: 'nouvelle' }, d));
+      });
+    } catch (e) { /* ignore */ }
+  }
+
+  function mergeBiensMembres(s) {
+    try {
+      const raw = localStorage.getItem(BIENS_MEMBRES);
+      if (!raw) return;
+      const list = JSON.parse(raw);
+      if (!Array.isArray(list)) return;
+      s.membresBiens = list.map((b) => Object.assign({}, b, { label: qLabel(b.quartier) }));
+    } catch (e) { /* ignore */ }
+  }
+  function readBiensMembres() {
+    try { return JSON.parse(localStorage.getItem(BIENS_MEMBRES) || '[]'); } catch (e) { return []; }
+  }
+  function writeBiensMembres(list) {
+    try { localStorage.setItem(BIENS_MEMBRES, JSON.stringify((list || []).slice(0, 60))); } catch (e) { /* ignore */ }
+  }
+
+  function save() {
+    try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* ignore */ }
+  }
+  const commit = () => { save(); render(); };
+
+  /* ============================== sélecteurs ============================== */
+
+  const client = (id) => state.clients.find((c) => c.id === id) || null;
+  const bien = (id) => state.biens.find((b) => b.id === id) || (state.biensServeur || []).find((b) => b.id === id) || null;
+  const recherche = (id) => state.recherches.find((r) => r.id === id) || (state.recherchesServeur || []).find((r) => r.id === id) || null;
+  const nomClient = (c) => (c ? (c.prenom + ' ' + c.nom).trim() : '—');
+  const prixM2 = (b) => (b.surface ? Math.round(b.prix / b.surface) : 0);
+  const mandatsActifs = () => state.biens.filter((b) => b.statut !== 'brouillon' && b.statut !== 'vendu');
+  const valeurPortefeuille = () => mandatsActifs().reduce((n, b) => n + b.prix, 0);
+  const demandesNouvelles = () => state.demandes.filter((d) => d.statut === 'nouvelle').length;
+  const visitesAVenir = () => state.visites.filter((v) => v.statut !== 'annulee' && v.statut !== 'realisee');
+  const tachesOuvertes = () => state.taches.filter((t) => !t.fait);
+
+  /* ------------------------------- scoring -------------------------------- */
+
+  function scoreBien(b, c) {
+    let s = 0;
+    // Secteur 30%
+    if (c.quartiers && c.quartiers.length) { if (c.quartiers.indexOf(b.quartier) > -1) s += 30; }
+    // Budget 30%
+    const max = c.prixMax || c.budgetMax;
+    if (max) { if (b.prix <= max * 1.05) s += 30; else if (b.prix <= max * 1.2) s += 15; }
+    // Surface 20%
+    if (c.surfaceMin) { if (b.surface >= c.surfaceMin) s += 20; else if (b.surface >= c.surfaceMin * 0.9) s += 10; }
+    // Pièces 20%
+    if (c.piecesMin) { if (b.pieces >= c.piecesMin) s += 20; }
+    return Math.round(s);
+  }
+
+  function correspond(b, c) {
+    const max = c.prixMax || c.budgetMax;
+    if (max && b.prix > max * 1.2) return false;
+    if (c.surfaceMin && b.surface < c.surfaceMin * 0.9) return false;
+    if (b.quartier && c.quartiers && c.quartiers.length && c.quartiers.indexOf(b.quartier) === -1) return false;
+    return true;
+  }
+
+  function biensCompatibles(critere, seuil) {
+    return ((state.biensServeur || []).concat(state.biens))
+      .filter((b) => b.statut !== 'vendu' && b.statut !== 'brouillon')
+      .filter((b) => correspond(b, critere))
+      .map((b) => ({ bien: b, score: scoreBien(b, critere) }))
+      .filter((x) => x.score >= (seuil || 40))
+      .sort((a, b) => b.score - a.score);
+  }
+
+  function clientsCompatibles(b) {
+    const recherches = (state.recherchesServeur || []).concat(state.recherches);
+    return state.clients
+      .filter((c) => c.type !== 'vendeur' && c.statut !== 'archive')
+      .map((c) => {
+        const rec = recherches.find((r) => r.clientId === c.id || r.clientId === c.serverId);
+        const budgetMax = c.budgetMax || (rec ? rec.prixMax : 0) || 0;
+        const critere = Object.assign({}, c, { budgetMax: budgetMax, prixMax: budgetMax });
+        return { client: c, budgetMax: budgetMax, critere: critere, score: scoreBien(b, critere) };
+      })
+      .filter((x) => correspond(b, x.critere))
+      .filter((x) => x.score >= 20)
+      .sort((a, b) => b.score - a.score);
+  }
+
+  /* ============================ IMMO DATA ROBOT ============================ */
+
+  const ST_MATCHING = {
+    nouveau: 'Nouveau', a_examiner: 'À examiner', validee: 'Validée', a_qualifier: 'À qualifier',
+    proprietaire_contacte: 'Propriétaire contacté', dispo_a_confirmer: 'Disponibilité à confirmer',
+    presentee: 'Présentée au client', visite_envisagee: 'Visite envisagée', visite_realisee: 'Visite réalisée',
+    interet_confirme: 'Intérêt confirmé', refus_client: 'Refus client', refus_proprietaire: 'Refus propriétaire',
+    sans_suite: 'Sans suite', en_negociation: 'En négociation', transaction: 'Transaction réalisée'
+  };
+
+  function normalizeRobotBien(b) {
+    if (!b) return b;
+    // Migration des anciens champs → nouveaux (sans rien inventer)
+    if (b.surface_habitable_m2 == null && b.surface != null && b.terrain != null) b.surface_habitable_m2 = b.surface > 0 ? b.surface : null;
+    if (b.contenance_cadastrale_m2 == null && b.terrain != null) b.contenance_cadastrale_m2 = b.terrain;
+    if (b.contenance_cadastrale_m2 == null && b.surface != null && b.terrain == null) b.contenance_cadastrale_m2 = b.surface; // ancien format : surface = contenance
+    if (b.confidence_geocoding == null && b.confianceGeo != null) b.confidence_geocoding = b.confianceGeo;
+    if (b.confidence_owner == null && b.scoreFiabilite != null) b.confidence_owner = b.scoreFiabilite;
+    return b;
+  }
+
+  function robotBiens() {
+    (state.robotBiens || []).forEach(normalizeRobotBien);
+    return state.robotBiens || [];
+  }
+
+  function mapVerifRobot(s) {
+    const st = String(s || '').toUpperCase();
+    if (st.includes('UNVERIFIED') || st.includes('GENERATED') || st.includes('FOUND')) return 'GENERATED';
+    if (st.includes('VERIFIED')) return 'VERIFIED';
+    if (st.includes('INVALID')) return 'INVALID';
+    if (st.includes('NOT_FOUND') || st.includes('NOT_SEARCHED')) return 'NOT_FOUND';
+    return 'NOT_FOUND';
+  }
+
+  function mapContactsSignal(s) {
+    const out = [];
+    if (s.phone) out.push({ valeur: s.phone, type: 'tel', verification: mapVerifRobot(s.phone_status), source: s.phone_source || '' });
+    if (s.email) out.push({ valeur: s.email, type: 'email', verification: mapVerifRobot(s.email_status), source: s.email_source || '' });
+    (s.contact_candidates || []).forEach((c) => {
+      const v = c.value;
+      if (v && !out.some((x) => x.valeur === v)) {
+        out.push({ valeur: v, type: String(c.channel || '').toUpperCase() === 'EMAIL' ? 'email' : 'tel', verification: mapVerifRobot(c.verification_status || c.status), source: c.source || '' });
+      }
+    });
+    return out;
+  }
+
+  function mapSignalRobotBien(s) {
+    return {
+      id: s.signal_id ? 'sig-' + s.signal_id : (s.parcelle || s.dpe_id || uid('rb')),
+      signalId: s.signal_id || null,
+      adresse: s.adresse_ban || s.adresse_brut || '',
+      ville: s.nom_commune_ban || '',
+      codePostal: s.code_postal_ban || '',
+      type: s.type_batiment || '',
+      surface_habitable_m2: (s.surface_habitable_logement != null) ? Number(s.surface_habitable_logement) : null,
+      surface_reference_dpe_m2: (s.surface_habitable_immeuble != null) ? Number(s.surface_habitable_immeuble) : null,
+      surface_terrain_m2: null,
+      contenance_cadastrale_m2: null,
+      parcelle: s.parcelle || '',
+      quartiers: [],
+      dpe: s.etiquette_dpe || '',
+      dpeId: s.numero_dpe || s.dpe_id || '',
+      dpeDate: s.date_reception_dpe || s.dpe_observed_at || null,
+      anneeConstruction: s.annee_construction || null,
+      proprietaire: {
+        nom: s.owner_name || '',
+        type: String(s.owner_type || '').toLowerCase().indexOf('sci') > -1 ? 'sci' : (s.owner_type === 'societe' || s.siren ? 'societe' : 'personne'),
+        siren: s.siren || '',
+        dirigeants: []
+      },
+      contacts: mapContactsSignal(s),
+      confidence_geocoding: (s.ban_score != null) ? Math.round(Number(s.ban_score) * 100) : null,
+      confidence_geocoding_source: s.ban_source_status || 'BAN',
+      confidence_owner: (s.owner_confidence != null) ? Math.round(Number(s.owner_confidence) * 100) : null,
+      confidence_owner_source: s.owner_status || null,
+      dateDetection: new Date().toISOString(),
+      statutProspection: 'nouveau',
+      coords: (s.coordonnee_cartographique_y_ban != null && s.coordonnee_cartographique_x_ban != null && Math.abs(Number(s.coordonnee_cartographique_y_ban)) <= 90 && Math.abs(Number(s.coordonnee_cartographique_x_ban)) <= 180) ? [Number(s.coordonnee_cartographique_y_ban), Number(s.coordonnee_cartographique_x_ban)] : null
+    };
+  }
+
+  let ENRICH_POLL = null;
+  function pollEnrichissement() {
+    if (ENRICH_POLL) clearInterval(ENRICH_POLL);
+    ENRICH_POLL = setInterval(async () => {
+      try {
+        const r = await fetch('/api/robot/enrichir-statut', { credentials: 'same-origin' }).then((x) => x.json());
+        if (r.ok && r.biens) {
+          state.robotBiens = r.biens.map(normalizeRobotBien);
+          state.robotEnrichStats = r.stats;
+          render();
+          if (r.stats && r.stats.enCours === 0 && r.stats.enAttente === 0) { clearInterval(ENRICH_POLL); ENRICH_POLL = null; }
+        }
+      } catch (e) { /* ignore */ }
+    }, 2000);
+  }
+
+  async function enrichirDpeAuto() {
+    const biens = (state.robotBiens || []).filter((b) => b.adresse && (!b.proprietaire || !b.proprietaire.nom));
+    for (let i = 0; i < biens.length; i += 5) {
+      const lot = biens.slice(i, i + 5);
+      await Promise.all(lot.map(async (b) => {
+        try {
+          const r = await fetch('/api/robot/enrichir', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ adresse: b.adresse }) }).then((x) => x.json());
+          if (r.ok && r.dossiers && r.dossiers.length) {
+            const d0 = r.dossiers[0];
+            if (d0.parcel_ref) b.parcelle = d0.parcel_ref;
+            if (d0.code_insee) { b.codeInsee = d0.code_insee; b.section = d0.section; b.numero = d0.numero; }
+            const o = d0.owner || {};
+            const cand = (o.candidates || [])[0] || {};
+            if (cand.name || cand.nom) {
+              b.proprietaire = {
+                nom: cand.name || cand.nom || '',
+                type: String(cand.owner_type || '').toLowerCase().indexOf('sci') > -1 ? 'sci' : (cand.siren ? 'societe' : 'personne'),
+                siren: cand.siren || '', dirigeants: []
+              };
+              if (r.dossiers[0].scores && r.dossiers[0].scores.data_reliability) b.confidence_owner = r.dossiers[0].scores.data_reliability;
+              b.enrichStatut = 'enrichi';
+              if (cand.siren) {
+                try {
+                  const dr = await fetch('/api/robot/dirigeants?siren=' + encodeURIComponent(cand.siren), { credentials: 'same-origin' }).then((x) => x.json());
+                  if (dr.ok && dr.dirigeants && dr.dirigeants.length) b.proprietaire.dirigeants = dr.dirigeants;
+                } catch (e) { /* dirigeants indisponibles */ }
+              }
+            } else { b.enrichStatut = 'non-identifie'; }
+          } else { b.enrichStatut = 'non-identifie'; }
+        } catch (e) { b.enrichStatut = 'attente'; }
+        // Aucadastre : personnes morales de la voie (complément FPMU, sans clé)
+        if (b.adresse && (!b.proprietaire || !b.proprietaire.nom)) {
+          try {
+            const ar = await fetch('/api/robot/aucadastre-owners?adresse=' + encodeURIComponent(b.adresse), { credentials: 'same-origin' }).then((x) => x.json());
+            if (ar.ok && ar.owners && ar.owners.length) {
+              const first = ar.owners[0];
+              b.proprietaire = { nom: first.nom, type: 'societe', siren: first.siren || '', dirigeants: [] };
+              b.confidence_owner = 90;
+              b.confidence_owner_source = 'Aucadastre /street (DGFiP personnes morales)';
+              b.enrichStatut = 'enrichi';
+              if (first.siren) {
+                try {
+                  const dr = await fetch('/api/robot/dirigeants?siren=' + encodeURIComponent(first.siren), { credentials: 'same-origin' }).then((x) => x.json());
+                  if (dr.ok && dr.dirigeants && dr.dirigeants.length) { b.proprietaire.dirigeants = dr.dirigeants; b.enrichStatut = 'enrichi'; }
+                } catch (e2) { /* dirigeants indisponibles */ }
+              }
+            }
+          } catch (e2) { /* Aucadastre indisponible */ }
+        }
+      }));
+      saveRobotBiens();
+      render();
+    }
+    enrichirEstimation();
+  }
+
+  function postalToInsee(cp) {
+    const m = /^75(\d{3})$/.exec(String(cp || '').trim());
+    return m ? '751' + m[1] : null; // Paris : 75016 → 75116
+  }
+
+  async function enrichirEstimation() {
+    const biens = state.robotBiens || [];
+    const insees = new Set(biens.map((b) => postalToInsee(b.codePostal)).filter(Boolean));
+    const prix = {};
+    for (const insee of insees) {
+      try {
+        const r = await fetch('/api/robot/aucadastre/commune/' + insee, { credentials: 'same-origin' }).then((x) => x.json());
+        const med = r.data && r.data.market && r.data.market.median_price_per_m2_flat && r.data.market.median_price_per_m2_flat.value;
+        if (med) prix[insee] = med;
+      } catch (e) { /* Aucadastre indisponible */ }
+    }
+    let nb = 0;
+    biens.forEach((b) => {
+      const med = postalToInsee(b.codePostal) ? prix[postalToInsee(b.codePostal)] : null;
+      if (med && b.surface_habitable_m2) {
+        const base = med * b.surface_habitable_m2;
+        b.estimationMin = Math.round(base * 0.9);
+        b.estimationMax = Math.round(base * 1.1);
+        b.estimationSource = 'Aucadastre (prix médian/m²)';
+        nb++;
+      }
+    });
+    if (nb) { saveRobotBiens(); render(); toast(nb + ' estimation(s) calculée(s) via Aucadastre.', 'ok'); }
+  }
+
+  function saveRobotBiens() {
+    fetch('/api/robot-biens', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ biens: state.robotBiens || [] }) }).catch(() => {});
+  }
+
+  function mapRobotBien(f) {
+    const p = (f && f.properties) || {};
+    return {
+      id: p.parcel_ref || (f && f.id) || uid('rb'),
+      adresse: p.address || p.adresse || '',
+      ville: p.city || '',
+      codePostal: p.postal_code || p.code_postal || '',
+      type: p.type_batiment || p.type || '',
+      // Surfaces : uniquement la source correspondante, null si absente (aucune substitution)
+      surface_habitable_m2: (p.surface_habitable_logement != null) ? Number(p.surface_habitable_logement) : null,
+      surface_reference_dpe_m2: (p.surface_habitable_immeuble != null) ? Number(p.surface_habitable_immeuble) : null,
+      surface_terrain_m2: (p.surface_terrain != null) ? Number(p.surface_terrain) : null,
+      contenance_cadastrale_m2: (p.area_m2 != null) ? Number(p.area_m2) : null,
+      parcelle: p.parcel_ref || '',
+      quartiers: [],
+      dpe: Array.isArray(p.dpe_classes) ? p.dpe_classes.join(',') : (p.dpe_class || ''),
+      proprietaire: { nom: '', type: '', siren: '', dirigeants: [] },
+      contacts: [],
+      // Confiances indépendantes (jamais de substitution géocodage→propriété)
+      confidence_geocoding: (p.match_score != null ? Math.round(Number(p.match_score) * 100) : (p.confidence != null ? Math.round(Number(p.confidence) * 100) : null)),
+      confidence_geocoding_source: (p.match_status ? p.match_status + ' · ' : '') + (p.source || 'API Carto IGN'),
+      confidence_owner: null,
+      confidence_owner_source: null,
+      dateDetection: new Date().toISOString(),
+      statutProspection: 'nouveau',
+      coords: (p.centroid && p.centroid.length >= 2) ? [Number(p.centroid[1]), Number(p.centroid[0])] : null,
+      feature: f || null
+    };
+  }
+
+  function clientDeRecherche(rec) {
+    return state.clients.find((c) => c.id === rec.clientId || c.id === rec.leadId || c.serverId === rec.clientId || c.serverId === rec.leadId) ||
+      (state.clientsServeur || []).find((c) => c.id === rec.clientId || c.id === rec.leadId) || null;
+  }
+
+  function scoreRobotBien(rb, rec) {
+    let s = 0, tot = 0;
+    const inconnus = [];
+    const types = (rec.types && rec.types.length) ? rec.types : (rec.type ? [rec.type] : []);
+    // Localisation 30
+    if (rec.quartiers && rec.quartiers.length) {
+      tot += 30;
+      if ((rb.quartiers || []).some((q) => rec.quartiers.indexOf(q) > -1)) s += 30;
+      else inconnus.push('Localisation');
+    } else if (rec.villes && rec.villes.length) {
+      tot += 30;
+      if (rec.villes.some((v) => (rb.ville || '').toLowerCase().includes(v.toLowerCase()))) s += 30;
+      else inconnus.push('Localisation');
+    } else if (rec.codePostaux && rec.codePostaux.length) {
+      tot += 30;
+      if (rec.codePostaux.indexOf(rb.codePostal) > -1) s += 30;
+      else inconnus.push('Localisation');
+    } else { inconnus.push('Localisation'); }
+    // Type 20
+    if (types.length) {
+      tot += 20;
+      if (types.indexOf(rb.type) > -1) s += 20;
+      else inconnus.push('Type de bien');
+    } else { inconnus.push('Type de bien'); }
+    // Surface 20
+    if (rec.surfaceMin) {
+      tot += 20;
+      if (rb.surface_habitable_m2 != null && rb.surface_habitable_m2 >= rec.surfaceMin) s += 20;
+      else if (rb.surface_habitable_m2 != null && rb.surface_habitable_m2 >= rec.surfaceMin * 0.9) s += 10;
+      else inconnus.push('Surface');
+    } else { inconnus.push('Surface'); }
+    // Budget 15 — prix du bien détecté toujours inconnu → jamais comparé
+    inconnus.push('Budget');
+    // Pièces 10
+    if (rec.piecesMin) {
+      tot += 10;
+      if (rb.pieces && rb.pieces >= rec.piecesMin) s += 10;
+      else inconnus.push('Pièces');
+    } else { inconnus.push('Pièces'); }
+    // DPE 5
+    if (rec.dpe) {
+      tot += 5;
+      if (rb.dpe === rec.dpe) s += 5;
+      else inconnus.push('DPE');
+    } else { inconnus.push('DPE'); }
+    const score = tot ? Math.round(s / tot * 100) : 0;
+    const couverture = Math.round((1 - inconnus.length / 6) * 100);
+    return { score, couverture, inconnus };
+  }
+
+  function niveauPriorite(score) {
+    if (score >= 90) return { label: 'Exceptionnelle', cls: 'open' };
+    if (score >= 75) return { label: 'Forte', cls: 'open' };
+    if (score >= 60) return { label: 'Intéressante', cls: '' };
+    if (score >= 40) return { label: 'À étudier', cls: 'warn' };
+    return { label: 'Faible', cls: 'muted' };
+  }
+
+  function matchings() {
+    const biens = robotBiens();
+    const recherches = (state.recherchesServeur || []).concat(state.recherches);
+    const out = [];
+    biens.forEach((rb) => {
+      recherches.forEach((rec) => {
+        const client = clientDeRecherche(rec);
+        if (!client) return;
+        const s = scoreRobotBien(rb, rec);
+        if (s.score < 40) return;
+        const key = rb.id + ':' + rec.id;
+        const existing = (state.matchings || []).find((m) => m.key === key);
+        if (existing) {
+          existing.score = s.score;
+          existing.couverture = s.couverture;
+          existing.historique = existing.historique || [];
+          const last = existing.historique[existing.historique.length - 1];
+          if (!last || last.score !== s.score) {
+            existing.historique.push({ at: new Date().toISOString(), score: s.score, couverture: s.couverture });
+          }
+          out.push(existing);
+        } else {
+          out.push({ key: key, bienId: rb.id, rechercheId: rec.id, clientId: client.id, score: s.score, couverture: s.couverture, statut: 'nouveau', dateDetection: rb.dateDetection, historique: [{ at: new Date().toISOString(), score: s.score, couverture: s.couverture }] });
+        }
+      });
+    });
+    state.matchings = out;
+    return out;
+  }
+
+  function robotBien(id) { return robotBiens().find((b) => b.id === id) || null; }
+
+  /* ================================ rendu ================================ */
+
+  const app = () => $('#app');
+
+  function showPremiumNotification(titre, message, type) {
+    const old = document.querySelector('.se-premium-notification');
+    if (old) old.remove();
+    const t = type || 'info';
+    const dotColor = t === 'success' ? '#1b3a32' : t === 'error' ? '#b08d3e' : '#3b2b4a';
+    const el = document.createElement('div');
+    el.className = 'se-premium-notification';
+    const dot = document.createElement('span');
+    dot.className = 'se-premium-dot';
+    dot.style.background = dotColor;
+    const body = document.createElement('div');
+    body.className = 'se-premium-body';
+    const tt = document.createElement('div');
+    tt.className = 'se-premium-titre';
+    tt.textContent = titre;
+    const mm = document.createElement('div');
+    mm.className = 'se-premium-msg';
+    mm.textContent = message;
+    body.appendChild(tt); body.appendChild(mm);
+    el.appendChild(dot); el.appendChild(body);
+    document.body.appendChild(el);
+    requestAnimationFrame(() => el.classList.add('on'));
+    setTimeout(() => { el.classList.remove('on'); setTimeout(() => el.remove(), 400); }, 3000);
+  }
+
+  function toast(message, kind) {
+    const type = kind === 'ok' ? 'success' : kind === 'warn' ? 'error' : 'info';
+    const titre = type === 'success' ? 'Confirmé' : type === 'error' ? 'Attention' : 'Information';
+    showPremiumNotification(titre, message, type);
+  }
+
+  function parseRoute() {
+    const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
+    return { name: parts[0] || 'tableau', param: parts[1] || null };
+  }
+
+  /* ====================== synchronisation serveur ====================== */
+
+  const libelleDoc = (t) => ({ identite: 'Pièce d’identité', financement: 'Justification de financement', bien: 'Titre de propriété' }[t] || t);
+
+  async function syncServeur() {
+    try {
+      const [rl, rd, rt, rb, rr] = await Promise.all([
+        fetch('/api/leads', { headers: { accept: 'application/json' } }),
+        fetch('/api/demandes', { headers: { accept: 'application/json' } }),
+        fetch('/api/tasks', { headers: { accept: 'application/json' } }),
+        fetch('/api/biens', { headers: { accept: 'application/json' } }),
+        fetch('/api/recherches', { headers: { accept: 'application/json' } })
+      ]);
+      const leads = rl.ok ? (await rl.json()).leads || [] : [];
+      const demandes = rd.ok ? (await rd.json()).demandes || [] : [];
+      state.tachesVerif = rt.ok ? ((await rt.json()).tasks || []) : [];
+
+      leads.forEach((l) => {
+        let c = state.clients.find((x) => x.serverId === l.id) ||
+                state.clients.find((x) => x.email && l.email && x.email.toLowerCase() === l.email.toLowerCase());
+        if (c) {
+          Object.assign(c, {
+            serverId: l.id, serveurStatut: l.statut,
+            documents: l.documents || 0, documentsValides: l.documentsValides || 0,
+            bienInfo: l.bienInfo || null
+          });
+          if (l.statut === 'accepte' && c.statut === 'prospect') c.statut = 'actif';
+        } else {
+          state.clients.push({
+            id: 'srv-' + l.id, serverId: l.id, serveurStatut: l.statut,
+            type: l.projet === 'vendeur' ? 'vendeur' : l.projet === 'mixte' ? 'mixte' : 'acquereur',
+            prenom: l.prenom || '', nom: l.nom || '', email: l.email || '', tel: l.tel || '',
+            statut: l.statut === 'accepte' ? 'actif' : l.statut === 'suspendu' ? 'suspendu' : 'prospect', source: 'Candidature',
+            budgetMin: 0, budgetMax: l.budgetMax || 0, quartiers: l.quartiers || [],
+            piecesMin: l.piecesMin || 0, surfaceMin: l.surfaceMin || 0, surfaceMax: l.surfaceMax || 0, delai: l.delai || '', typeBien: l.typeBien || '',
+            apport: l.apport || 0, financement: l.financement || '', courtier: !!l.courtier, bienAVendre: !!l.bienAVendre,
+            notes: '', tags: [], agent: 'Léa Marchand', cree: l.cree || nowISO(),
+            documents: l.documents || 0, documentsValides: l.documentsValides || 0,
+            pipeline: l.pipeline || '', adresseBien: l.adresseBien || '', siren: l.siren || '', parcelle: l.parcelle || '', dirigeants: l.dirigeants || []
+          });
+        }
+      });
+
+      state.biensServeur = rb.ok ? ((await rb.json()).biens || []).map(mapBienServeur) : [];
+      state.recherchesServeur = rr.ok ? ((await rr.json()).recherches || []).map(mapRechercheServeur) : [];
+
+      try {
+        const rbt = await fetch('/api/robot-biens', { headers: { accept: 'application/json' } });
+        const rbtj = await rbt.json().catch(() => ({}));
+        if (rbtj.ok && Array.isArray(rbtj.biens) && rbtj.biens.length) {
+          state.robotBiens = rbtj.biens.map(normalizeRobotBien);
+          fetch('/api/portefeuille-foncier', { credentials: 'same-origin' }).then((x) => x.json()).then((pf) => { if (pf.ok && pf.societes) { state.portefeuilleFoncier = pf.societes; } }).catch(() => {});
+        }
+      } catch (e) { /* pas de biens radar persistés */ }
+      try {
+        const rn = await fetch('/api/notifications', { headers: { accept: 'application/json' } });
+        const rnj = await rn.json().catch(() => ({}));
+        if (rnj.ok && Array.isArray(rnj.traitees)) state.notificationsTraitees = rnj.traitees;
+      } catch (e) { /* pas de notifications persistées */ }
+
+      demandes.forEach((d) => {
+        const id = 'srv-' + d.id;
+        const fresh = {
+          id: id, serverDemandeId: d.id, type: d.type || 'statut',
+          nom: d.nom || '', email: d.email || '', message: d.message || '',
+          statut: d.statut || 'nouvelle',
+          source: d.source || 'Espace membre', cree: d.cree || nowISO(),
+          role: d.role, serveur: true,
+          montant: d.montant || 0, offreId: d.offreId || null, bienId: d.bienId || null, leadId: d.leadId || d.clientId || null, bienAdresse: d.bienAdresse || ''
+        };
+        const existing = state.demandes.find((x) => x.id === id);
+        if (existing) Object.assign(existing, fresh);
+        else state.demandes.unshift(fresh);
+      });
+
+      await Promise.all(leads.filter((l) => l.documents > 0).map(async (l) => {
+        try {
+          const r = await fetch('/api/leads/' + l.id + '/documents');
+          if (r.ok) state.docsParLead[l.id] = (await r.json()).documents || [];
+        } catch (e) { /* ignore */ }
+      }));
+
+      save();
+      render();
+    } catch (e) { /* serveur indisponible : le CRM reste utilisable */ }
+  }
+
+  function render() {
+    const r = parseRoute();
+    $$('.se-modal-back').forEach((m) => m.remove());
+
+    const views = {
+      tableau: viewTableau,
+      demandes: viewDemandes,
+      demande: viewDemandeDetail,
+      clients: viewClients,
+      pipeline: viewPipeline,
+      notifications: viewNotifications,
+      client: viewClient,
+      biens: viewBiens,
+      bien: viewBien,
+      recherches: viewRecherches,
+      recherche: viewRecherche,
+      robot: viewRobot,
+      'robot-radar': viewRobot,
+      'robot-proprietaires': viewProprietaires,
+      'robot-proprietaire': viewProprietaire,
+      'portefeuille-foncier': viewPortefeuilleFoncier,
+      'societe-fonciere': viewSocieteFonciere,
+      'robot-opportunites': viewOpportunites,
+      'robot-bien': viewRobotBien,
+      'robot-dpe': viewRobotDpe,
+      rapprochements: viewRapprochements,
+      tracking: viewTracking,
+      membres: viewMembres,
+      'biens-club': viewBiensClub,
+      visites: viewVisites,
+      offres: viewOffres,
+      verifications: viewVerifications,
+      taches: viewTaches,
+      messages: viewMessages,
+      reglages: viewReglages
+    };
+
+    const view = (r.name === 'messages' && r.param) ? viewThread : (views[r.name] || viewTableau);
+    app().innerHTML = shell(r, view(r));
+    if (r.name === 'robot-radar' && state.robotShowMap) setTimeout(initRobot, 60);
+
+    if (modal) {
+      const back = document.createElement('div');
+      back.className = 'se-modal-back';
+      back.setAttribute('data-act', 'modal-close');
+      back.innerHTML = '<div class="' + (modalLarge ? 'se-modal se-modal-xl' : 'se-modal') + '" data-stop="1">' + modal + '</div>';
+      document.body.appendChild(back);
+    }
+
+    if (r.name !== lastRoute) { window.scrollTo({ top: 0 }); lastRoute = r.name; }
+  }
+
+  function nav(route, active, icon, label, badge) {
+    return '<a href="#/' + route + '" class="' + (active === route ? 'active' : '') + '">' + ICONS[icon] +
+      '<span>' + label + '</span>' + (badge ? '<span class="se-count">' + badge + '</span>' : '') + '</a>';
+  }
+
+  function shell(r, content) {
+    const a = state.agent;
+    return '<div class="se-app">' +
+      '<aside class="se-side">' +
+        '<a class="se-brand" href="#/tableau"><span class="se-logo">S</span><span><b>Seecret</b><small>CRM agence</small></span></a>' +
+        '<div class="se-nav-scroll">' +
+        '<nav class="se-nav">' +
+          nav('tableau', r.name, 'home', 'Tableau de bord') +
+        '</nav>' +
+        '<div class="se-nav-label">Prospection</div>' +
+        '<nav class="se-nav">' +
+          nav('clients', r.name, 'users', 'Leads') +
+          nav('biens', r.name, 'building', 'Produits') +
+          nav('recherches', r.name, 'search', 'Recherches') +
+          nav('robot', r.name, 'robot', 'Immo Data Robot', (matchings().filter((m) => m.statut === 'nouveau').length) || '') +
+          nav('notifications', r.name, 'inbox', 'Notifications', (notifications().length) || '') +
+        '</nav>' +
+        '<div class="se-nav-label">Le Club</div>' +
+        '<nav class="se-nav">' +
+          nav('demandes', r.name, 'inbox', 'Candidatures', demandesNouvelles() || '') +
+          nav('membres', r.name, 'users', 'Membres') +
+          nav('biens-club', r.name, 'building', 'Biens') +
+        '</nav>' +
+        '<div class="se-nav-label">Intelligence</div>' +
+        '<nav class="se-nav">' +
+          nav('rapprochements', r.name, 'tag', 'Rapprochements') +
+          nav('tracking', r.name, 'search', 'Tracking') +
+        '</nav>' +
+        '<div class="se-nav-label">Suivi</div>' +
+        '<nav class="se-nav se-nav-more">' +
+          nav('visites', r.name, 'calendar', 'Visites') +
+          nav('offres', r.name, 'tag', 'Offres', offresNouvelles() || '') +
+          nav('taches', r.name, 'check', 'Tâches', tachesOuvertes().length || '') +
+          nav('verifications', r.name, 'check', 'Vérifications', verifEnAttente() || '') +
+          nav('messages', r.name, 'chat', 'Messages') +
+          nav('reglages', r.name, 'tools', 'Réglages') +
+        '</nav>' +
+        '</div>' +
+        '<div class="se-side-foot">' +
+          '<a class="se-userchip" href="#/reglages">' +
+            '<span class="se-avatar">' + esc((a.prenom.charAt(0) + a.nom.charAt(0)).toUpperCase()) + '</span>' +
+            '<span><b>' + esc(a.prenom + ' ' + a.nom) + '</b><span>' + esc(a.agence) + '</span></span>' +
+          '</a>' +
+        '</div>' +
+      '</aside>' +
+      '<div class="se-main">' +
+        '<div class="se-topbar">' +
+          '<span class="se-crumb">CRM</span><h2>' + esc(titre(r)) + '</h2>' +
+          '<span class="se-spacer"></span>' +
+          '<label class="se-search-top">' + ICONS.search + '<input data-search placeholder="Rechercher un client, un bien…" value="' + esc(state.filtres.q || '') + '"/></label>' +
+          '<a class="se-btn ghost sm" href="espace.html">Espace membre</a>' +
+        '</div>' +
+        '<div class="se-view">' + content + '</div>' +
+      '</div>' +
+    '</div>';
+  }
+
+  function titre(r) {
+    const map = { tableau: 'Tableau de bord', demandes: 'Candidatures', demande: 'Fiche demande', clients: 'Leads', pipeline: 'Pipeline de relance', notifications: 'Notifications', client: 'Fiche lead', biens: 'Produits', bien: 'Fiche produit', recherches: 'Recherches', recherche: 'Recherche', robot: 'Immo Data Robot', 'robot-radar': 'Radar — Biens détectés', 'robot-opportunites': 'Opportunités Clients', 'robot-bien': 'Fiche bien Radar', 'robot-dpe': 'Recherche DPE', 'robot-proprietaires': 'Propriétaires', 'robot-proprietaire': 'Fiche propriétaire', 'portefeuille-foncier': 'Portefeuille foncier', 'societe-fonciere': 'Fiche société', membres: 'Membres', 'biens-club': 'Biens du club', rapprochements: 'Rapprochements', tracking: 'Tracking', visites: 'Visites', offres: 'Offres', verifications: 'Vérifications', taches: 'Tâches', messages: 'Messages', reglages: 'Réglages' };
+    return map[r.name] || 'CRM';
+  }
+
+  function offresNouvelles() {
+    return state.offres.filter((o) => o.statut === 'recue').length;
+  }
+
+  function verifEnAttente() {
+    return (state.tachesVerif || []).filter((t) => t.statut === 'en_attente').length;
+  }
+
+  function head(kicker, title, text, actions) {
+    return '<div class="se-view-head"><div><p class="kicker" style="margin:0;color:var(--color-taupe)">' + esc(kicker) + '</p>' +
+      '<h1>' + title + '</h1>' + (text ? '<p>' + text + '</p>' : '') + '</div>' +
+      (actions ? '<div class="se-actions">' + actions + '</div>' : '') + '</div>';
+  }
+
+  function badgeBien(s) {
+    const st = ST_BIEN[s] || ST_BIEN.brouillon;
+    return '<span class="se-badge ' + st.cls + '">' + st.label + '</span>';
+  }
+  function badgeClient(s) {
+    const st = ST_CLIENT[s] || ST_CLIENT.prospect;
+    return '<span class="se-badge ' + st.cls + '">' + st.label + '</span>';
+  }
+  function scoreTag(v) {
+    const cls = v >= 70 ? '' : v >= 45 ? 'mid' : 'low';
+    return '<span class="se-score ' + cls + '"><span class="se-score-bar"><i style="width:' + v + '%"></i></span>' + v + ' %</span>';
+  }
+  function photo(b) {
+    const p = b.photos && b.photos.length ? b.photos[0] : null;
+    return p ? (/^(data:|https?:|\/)/.test(p) ? p : 'assets/img/' + p) : '';
+  }
+
+  function mapBienServeur(b) {
+    const lead = state.clients.find((c) => c.serverId === b.leadId);
+    return {
+      id: 'srv-b-' + b.id, serverId: b.id, leadId: b.leadId || null, lat: b.lat || null, lon: b.lon || null,
+      ref: (b.id || '').slice(0, 6).toUpperCase(),
+      titre: b.titre || 'Bien sans titre', adresse: b.adresse || '', ville: b.ville || '', codePostal: b.codePostal || '',
+      type: b.type || 'Appartement', quartier: b.quartier || '',
+      surface: b.surface || 0, pieces: b.pieces || 0, chambres: b.chambres || 0, sdb: b.sdb || 0,
+      etage: b.etage || '', dpe: b.dpe || '', ges: b.ges || '', etat: b.etat || '', prix: b.prix || 0, charges: b.charges || 0,
+      ascenseur: !!b.ascenseur, exterieur: b.exterieur || '', surfaceExterieur: b.surfaceExterieur || 0,
+      delai: b.delai || '', dejaEnVente: b.dejaEnVente || '', motif: b.motif || '',
+      statut: b.statut || 'brouillon', proprietaireId: lead ? lead.id : null,
+      photos: b.photos || [], description: b.description || '',
+      atouts: b.atouts || b.annexes || [], annexes: b.annexes || [], mandat: { type: 'simple', fin: '' }, cree: b.cree || nowISO(),
+      exclusivite: b.exclusivite || { statut: 'scan_en_cours', liens: [] },
+      validation: b.validation || 'en_attente',
+      serveur: true, email: b.email || ''
+    };
+  }
+
+  function mapRechercheServeur(r) {
+    const c = state.clients.find((x) => x.serverId === r.clientId);
+    return {
+      id: 'srv-r-' + r.id, clientId: c ? c.id : r.clientId,
+      titre: r.titre || 'Recherche', type: r.type || '', types: r.types || [],
+      prixMax: r.prixMax || 0, piecesMin: r.piecesMin || 0, surfaceMin: r.surfaceMin || 0, surfaceMax: r.surfaceMax || 0, delai: r.delai || '',
+      apport: r.apport || 0, financement: r.financement || '', courtier: !!r.courtier, bienAVendre: !!r.bienAVendre,
+      etageMin: r.etageMin || 0, etageMax: r.etageMax || 0, etat: r.etat || '', dpe: r.dpe || '', annexes: r.annexes || [], prixVenteEstime: r.prixVenteEstime || 0,
+      quartiers: r.quartiers || [], statut: r.statut || 'active', alertes: true,
+      cree: r.cree || nowISO(), serveur: true
+    };
+  }
+
+  function badgeExclusivite(b) {
+    const ex = (b && b.exclusivite) || { statut: 'scan_en_cours' };
+    if (ex.statut === 'verifie_exclusif') return '<span class="se-badge open">Vérifié exclusif</span>';
+    if (ex.statut === 'alerte_doublon') return '<span class="se-badge" style="background:var(--color-alert-soft);color:var(--color-alert)">Alerte doublon</span>';
+    return '<span class="se-badge warn">Scan en cours…</span>';
+  }
+
+  function badgeValidation(b) {
+    if (b && b.validation === 'valide') return '<span class="se-badge open">Bien validé</span>';
+    return '<span class="se-badge warn">Bien en attente</span>';
+  }
+
+  /* ================================ écrans ================================ */
+
+  /* ------------------------------ tableau de bord ------------------------- */
+
+  function viewTableau() {
+    const nouvelles = state.demandes.filter((d) => d.statut === 'nouvelle');
+    const taches = tachesOuvertes().slice(0, 4);
+    const visites = visitesAVenir().slice(0, 3);
+    const offres = state.offres.filter((o) => o.statut === 'recue' || o.statut === 'contre');
+    const ilYA7J = Date.now() - 7 * 24 * 3600 * 1000;
+    const nouveauxClients = state.clients.filter((c) => c.cree && new Date(c.cree).getTime() > ilYA7J).length;
+    const alertesDoublon = (state.biensServeur || []).concat(state.biens).filter((b) => b.exclusivite && b.exclusivite.statut === 'alerte_doublon').length;
+    const tousBiensDb = (state.biensServeur || []).concat(state.biens);
+    const recherchesDb = (state.recherchesServeur || []).concat(state.recherches);
+    let matchsForts = 0;
+    recherchesDb.forEach((r) => {
+      const c = client(r.clientId);
+      if (!c || c.type === 'vendeur') return;
+      tousBiensDb.filter((b) => b.statut !== 'vendu' && b.statut !== 'brouillon').forEach((b) => {
+        if (correspond(b, c) && scoreBien(b, c) >= 70) matchsForts++;
+      });
+    });
+
+    return head('Bonjour ' + state.agent.prenom, 'Votre journée',
+      'Ce qui demande une décision, et ce qui arrive ensuite.', '') +
+      '<div class="se-grid cols-4" style="margin-bottom:18px">' +
+        '<a class="se-card se-stat se-stat-link" href="#/clients"><span class="se-kicker">Nouveaux clients</span><span class="se-num">' + nouveauxClients + '</span><span class="se-sub">7 derniers jours</span></a>' +
+        '<a class="se-card se-stat se-stat-link" href="#/demandes"><span class="se-kicker">Demandes</span><span class="se-num">' + nouvelles.length + '</span><span class="se-sub">en attente</span></a>' +
+        '<a class="se-card se-stat se-stat-link" href="#/rapprochements"><span class="se-kicker">Matchs suggérés</span><span class="se-num">' + matchsForts + '</span><span class="se-sub">≥ 70 %</span></a>' +
+        '<a class="se-card se-stat se-stat-link" href="#/biens"><span class="se-kicker">Alertes doublon</span><span class="se-num">' + alertesDoublon + '</span><span class="se-sub">à résoudre</span></a>' +
+      '</div>' +
+
+      '<div class="se-split">' +
+        '<div class="se-grid" style="gap:18px">' +
+          '<div class="se-card">' +
+            '<div class="se-row" style="justify-content:space-between;margin-bottom:8px"><h3>À traiter</h3><a class="se-btn ghost sm" href="#/demandes">Tout voir</a></div>' +
+            (nouvelles.length ? nouvelles.map(mailItem).join('') : '<p class="se-muted" style="margin:8px 0 0">Rien en attente. Bonne journée.</p>') +
+          '</div>' +
+          '<div class="se-card">' +
+            '<div class="se-row" style="justify-content:space-between;margin-bottom:8px"><h3>Tâches</h3><a class="se-btn ghost sm" href="#/taches">Gérer</a></div>' +
+            (taches.length ? taches.map(taskRow).join('') : '<p class="se-muted" style="margin:8px 0 0">Aucune tâche en cours.</p>') +
+          '</div>' +
+        '</div>' +
+        '<div class="se-grid" style="gap:18px">' +
+          '<div class="se-card">' +
+            '<h3>Agenda</h3>' +
+            (visites.length ? '<div class="se-list" style="margin-top:8px">' + visites.map((v) => {
+              const b = bien(v.bienId);
+              const c = client(v.clientId);
+              return '<div class="se-list-item"><div style="flex:1"><div style="font-size:13.5px">' + esc(b ? b.titre : 'Bien') + '</div>' +
+                '<div class="se-hint">' + dCourt(v.date) + ' · ' + v.heure + ' · ' + esc(nomClient(c)) + '</div></div>' +
+                '<span class="se-badge ' + (v.statut === 'confirmee' ? 'open' : 'warn') + '">' + (v.statut === 'confirmee' ? 'Confirmée' : 'À confirmer') + '</span></div>';
+            }).join('') + '</div>' : '<p class="se-muted" style="margin-top:8px">Pas de visite programmée.</p>') +
+          '</div>' +
+          '<div class="se-card">' +
+            '<h3>Derniers biens</h3>' +
+            '<div class="se-list" style="margin-top:8px">' +
+              state.biens.slice(0, 4).map((b) => '<a class="se-rowlink" href="#/bien/' + b.id + '"><img class="se-thumb" src="' + photo(b) + '" alt="" style="width:40px;height:40px;flex:0 0 40px"/>' +
+                '<div style="flex:1;min-width:0"><div style="font-size:13.5px">' + esc(b.titre) + '</div><div class="se-sub">' + esc(b.ref) + ' · ' + euro(b.prix) + '</div></div>' + badgeBien(b.statut) + '</a>').join('') +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+  }
+
+  /* -------------------------------- demandes ------------------------------ */
+
+  function mailItem(d) {
+    const meta = DEMANDE[d.type] || DEMANDE.info;
+    const b = d.bienId ? bien(d.bienId) : null;
+    const n = d.statut === 'nouvelle';
+    const badgeStatut = d.statut === 'refusee' ? '<span class="se-badge muted">Refusée</span>' : d.statut === 'suspendue' ? '<span class="se-badge warn">Suspendue</span>' : n ? '<span class="se-badge warn">Nouvelle</span>' : '<span class="se-badge open">Validée</span>';
+    return '<div class="se-mail' + (n ? ' neuf' : '') + '">' +
+      '<span class="se-mail-ico">' + ICONS[meta.icon] + '</span>' +
+      '<div class="se-mail-body">' +
+        '<b>' + esc(meta.label) + ' — ' + esc(d.nom || 'Visiteur') + '</b>' +
+        '<p>' + esc(d.message || '') + (b ? ' <span class="se-hint">· ' + esc(b.titre) + '</span>' : '') + '</p>' +
+        '<div class="se-mail-actions" style="margin-top:8px">' +
+          '<button class="se-btn ghost sm" data-act="demande-ouvrir" data-id="' + d.id + '">Voir la fiche</button>' +
+          badgeStatut +
+        '</div>' +
+      '</div>' +
+      '<span class="se-mail-meta">' + esc(d.source || '') + '<br/>' + ilYa(d.cree) + '</span>' +
+    '</div>';
+  }
+
+  function viewDemandes() {
+    const filtre = state.filtres.demandes || 'toutes';
+    const cat = (d) => {
+      if (d.statut === 'refusee') return 'refusees';
+      if (d.type === 'candidature') return 'candidatures';
+      if (d.type === 'statut') return 'statuts';
+      if (d.type === 'modification' && d.role === 'prix') return 'prix';
+      if (d.type === 'modification') return 'statuts';
+      return 'autres';
+    };
+    const list = state.demandes.filter((d) => filtre === 'toutes' ? true : cat(d) === filtre);
+    const count = (f) => state.demandes.filter((d) => f === 'toutes' ? true : cat(d) === f).length;
+    return head('Boîte de réception', 'Demandes',
+      'Candidatures, changements de statut et de prix : tout ce qui entre dans l’agence.', '') +
+      '<div class="se-tabs">' +
+        tabDem('toutes', 'Toutes', state.demandes.length, filtre) +
+        tabDem('candidatures', 'Candidatures', count('candidatures'), filtre) +
+        tabDem('statuts', 'Statut', count('statuts'), filtre) +
+        tabDem('prix', 'Prix', count('prix'), filtre) +
+        tabDem('refusees', 'Refusées', count('refusees'), filtre) +
+      '</div>' +
+      '<div class="se-inbox">' + (list.length ? list.map(mailItem).join('') : '<div class="se-card se-empty"><div class="se-empty-title">Aucune demande</div><p>Cette catégorie est vide.</p></div>') + '</div>';
+  }
+
+  function whatsappHref(tel, prenom, lien) {
+    const msg = 'Bonjour ' + prenom + ', bonne nouvelle ! Votre demande a été validée par l\'agence Seecret. Connectez-vous pour découvrir le marché : ' + lien;
+    return 'https://wa.me/' + String(tel || '').replace(/[^0-9]/g, '') + '?text=' + encodeURIComponent(msg);
+  }
+
+  function demandeModal(d) {
+    const lead = d.leadId ? state.clients.find((c) => c.serverId === d.leadId) : null;
+    const b = d.bienId ? bien(d.bienId) : null;
+    const refusee = d.statut === 'refusee';
+    const n = d.statut === 'nouvelle';
+    return '<h3>' + esc((DEMANDE[d.type] || DEMANDE.info).label) + '</h3>' +
+      '<div class="se-kv" style="margin-top:12px">' +
+        kv('Demandeur', esc(d.nom || '—')) +
+        kv('Email', esc(d.email || '—')) +
+        (lead ? kv('Profil', lead.type === 'vendeur' ? 'Vendeur' : lead.type === 'acquereur' ? 'Acquéreur' : 'Acquéreur & vendeur') : '') +
+        (lead && lead.tel ? kv('Téléphone', esc(lead.tel)) : '') +
+        (b ? kv('Bien', esc(b.titre || b.ref || '') + (b.adresse ? ' · ' + esc(b.adresse) : '')) : '') +
+        (d.prix ? kv('Prix', (d.ancienPrix ? euro(d.ancienPrix) + ' → ' : '') + euro(d.prix)) : '') +
+        (d.titre ? kv('Titre proposé', esc(d.titre)) : '') +
+        (d.description ? kv('Description proposée', esc(d.description)) : '') +
+        (d.message ? kv('Détail', esc(d.message)) : '') +
+        kv('Reçue le', dFR(d.cree)) +
+      '</div>' +
+      '<div class="se-modal-foot" style="flex-wrap:wrap;gap:8px">' +
+        '<button class="se-btn ghost" data-act="modal-close">Fermer</button>' +
+        (n && !d.clientId ? '<button class="se-btn ghost" data-act="demande-client" data-id="' + d.id + '">Créer la fiche client</button>' : '') +
+        (n ? '<button class="se-btn danger" data-act="demande-refuser" data-id="' + d.id + '">Refuser la demande</button>' : '') +
+        (n ? '<button class="se-btn" data-act="demande-valider" data-id="' + d.id + '">Valider la demande</button>' : '') +
+        (refusee ? '<button class="se-btn" data-act="demande-relancer" data-id="' + d.id + '">Relancer la demande</button>' : '') +
+      '</div>' +
+      (d.__whatsapp ? '<a class="se-btn soft block" style="margin-top:12px" href="' + d.__whatsapp + '" target="_blank" rel="noopener">Envoyer WhatsApp</a>' : '');
+  }
+
+  function tabDem(id, label, n, cur) {
+    return '<a href="#" data-act="filtre" data-id="demandes:' + id + '" class="' + (cur === id ? 'active' : '') + '">' + label + '<span>' + n + '</span></a>';
+  }
+
+  const COORDS_CRM = {
+    p1: [48.859, 2.341], p2: [48.867, 2.341], p3: [48.863, 2.361], p4: [48.855, 2.355], p5: [48.846, 2.347],
+    p6: [48.851, 2.332], p7: [48.857, 2.320], p8: [48.873, 2.309], p9: [48.877, 2.335], p10: [48.874, 2.357],
+    p11: [48.858, 2.379], p12: [48.840, 2.388], p13: [48.829, 2.356], p14: [48.833, 2.327], p15: [48.842, 2.293],
+    p16: [48.862, 2.276], p17: [48.885, 2.321], p18: [48.892, 2.344], p19: [48.883, 2.382], p20: [48.866, 2.398],
+    boulogne: [48.835, 2.241], neuilly: [48.884, 2.268], vincennes: [48.848, 2.438]
+  };
+
+  function coordBien(b) {
+    if (b && b.lat && b.lon) return [Number(b.lat), Number(b.lon)];
+    if (b && b.quartier && COORDS_CRM[b.quartier]) return COORDS_CRM[b.quartier];
+    return null;
+  }
+
+  function coordRecherche(r) {
+    const out = [];
+    (r.quartiers || []).forEach((q) => {
+      const c = COORDS_CRM[q];
+      if (c && out.indexOf(c) === -1) out.push(c);
+    });
+    return out;
+  }
+
+  function joursEnLigne(b) {
+    if (!b || !b.cree) return 0;
+    return Math.floor((Date.now() - new Date(b.cree).getTime()) / 86400000);
+  }
+
+  function prixMoyenM2() {
+    const biens = ((state.biensServeur || []).concat(state.biens)).filter((b) => b.surface > 0 && b.prix > 0);
+    if (!biens.length) return 0;
+    return Math.round(biens.reduce((s, b) => s + b.prix / b.surface, 0) / biens.length);
+  }
+
+  function tensionQuartiers() {
+    const map = {};
+    ((state.biensServeur || []).concat(state.biens)).forEach((b) => {
+      const q = b.quartier;
+      if (!q || !COORDS_CRM[q]) return;
+      map[q] = map[q] || { offres: 0, demandes: 0 };
+      map[q].offres++;
+    });
+    ((state.recherchesServeur || []).concat(state.recherches)).forEach((r) => {
+      (r.quartiers || []).forEach((q) => {
+        if (!COORDS_CRM[q]) return;
+        map[q] = map[q] || { offres: 0, demandes: 0 };
+        map[q].demandes++;
+      });
+    });
+    return map;
+  }
+
+  function opportunites() {
+    const out = [];
+    const tousBiens = (state.biensServeur || []).concat(state.biens);
+    const pm2 = prixMoyenM2();
+    tousBiens.forEach((b) => {
+      if (b.statut === 'vendu' || b.statut === 'brouillon') return;
+      const jours = joursEnLigne(b);
+      if (jours > 60) out.push({ type: 'souffrance', bien: b, label: 'En souffrance — ' + jours + ' jours en ligne' });
+      if (b.surface > 0 && b.prix > 0 && pm2 > 0 && (b.prix / b.surface) < pm2 * 0.9) {
+        out.push({ type: 'decote', bien: b, label: 'Décote — ' + Math.round((1 - (b.prix / b.surface) / pm2) * 100) + '% sous le marché' });
+      }
+    });
+    const tension = tensionQuartiers();
+    Object.keys(tension).forEach((q) => {
+      const t = tension[q];
+      if (t.demandes > 0 && t.offres > 0 && (t.demandes / t.offres) > 3) {
+        out.push({ type: 'tension', quartier: q, label: 'Tension — ' + qLabel(q) + ' : ' + t.demandes + ' acheteurs pour ' + t.offres + ' bien' });
+      }
+    });
+    return out;
+  }
+
+  function viewRadar() {
+    const filtre = state.filtres.radar || 'tout';
+    const opps = opportunites();
+    const pm2 = prixMoyenM2();
+    const biens = (state.biensServeur || []).concat(state.biens);
+    const ilYA7J = Date.now() - 7 * 86400000;
+    const nouvelles = biens.filter((b) => b.cree && new Date(b.cree).getTime() > ilYA7J).length;
+    const matchs = state.demandes.filter((d) => d.statut === 'nouvelle').length;
+    const nbZones = Object.keys(tensionQuartiers()).length;
+    const oppHtml = opps.length
+      ? opps.slice(0, 12).map((o) => '<div class="se-list-item" style="align-items:flex-start">' +
+          '<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:500">' + (o.bien ? esc(o.bien.titre || 'Bien') : 'Quartier ' + qLabel(o.quartier)) + '</div>' +
+          '<div class="se-hint" style="margin-top:2px">' + esc(o.label) + '</div>' +
+          (o.bien ? '<div class="se-sub" style="margin-top:2px">' + euro(o.bien.prix) + (o.bien.surface ? ' · ' + o.bien.surface + ' m²' : '') + '</div>' : '') + '</div>' +
+          (o.bien && o.bien.proprietaireId ? '<button class="se-btn ghost sm" data-act="bien-envoyer" data-bien="' + o.bien.id + '" data-client="' + o.bien.proprietaireId + '">Contacter</button>' : '') +
+        '</div>').join('')
+      : '<p class="se-muted" style="margin-top:8px">Aucune opportunité détectée pour l’instant.</p>';
+    return head('Prospection', 'Radar', 'Intelligence de marché · tension, opportunités, veille immobilière.', '') +
+      '<div class="se-tabs" style="margin-bottom:14px">' +
+        '<a href="#" data-act="filtre" data-id="radar:biens" class="' + (filtre === 'biens' ? 'active' : '') + '">Afficher les Biens</a>' +
+        '<a href="#" data-act="filtre" data-id="radar:recherches" class="' + (filtre === 'recherches' ? 'active' : '') + '">Afficher les Recherches</a>' +
+        '<a href="#" data-act="filtre" data-id="radar:tout" class="' + (filtre === 'tout' ? 'active' : '') + '">Afficher tout</a>' +
+      '</div>' +
+      '<div class="se-split" style="grid-template-columns:1fr 340px;align-items:start;gap:16px">' +
+        '<div id="radar-map" style="height:540px;border-radius:16px;overflow:hidden;border:1px solid var(--color-stroke-faint)"></div>' +
+        '<div class="se-card" style="max-height:540px;overflow:auto"><h3>Opportunités détectées</h3>' + oppHtml + '</div>' +
+      '</div>' +
+      '<div class="se-grid cols-4" style="margin-top:16px">' +
+        '<div class="se-card se-stat"><span class="se-kicker">Prix moyen / m²</span><span class="se-num">' + euro(pm2) + '</span><span class="se-sub">portefeuille actif</span></div>' +
+        '<div class="se-card se-stat"><span class="se-kicker">Nouvelles annonces</span><span class="se-num">' + nouvelles + '</span><span class="se-sub">cette semaine</span></div>' +
+        '<div class="se-card se-stat"><span class="se-kicker">Matchs en attente</span><span class="se-num">' + matchs + '</span><span class="se-sub">à traiter</span></div>' +
+        '<div class="se-card se-stat"><span class="se-kicker">Secteurs analysés</span><span class="se-num">' + nbZones + '</span><span class="se-sub">tension calculée</span></div>' +
+      '</div>' +
+      '<div class="se-card" style="margin-top:14px"><h3>Secteur à analyser</h3><div class="se-chips" style="margin-top:8px">' +
+        Object.keys(COORDS_CRM).map((q) => '<button class="se-chip" data-act="radar-zone" data-id="' + q + '">' + qLabel(q) + '</button>').join('') +
+      '</div></div>';
+  }
+
+  function initRadar() {
+    const el = document.getElementById('radar-map');
+    if (!el || typeof L === 'undefined') return;
+    const filtre = state.filtres.radar || 'tout';
+    const map = L.map(el, { scrollWheelZoom: false }).setView([48.8566, 2.3522], 11);
+    window.__radarMap = map;
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(map);
+
+    const tension = tensionQuartiers();
+    const vals = Object.keys(tension).map((q) => tension[q].demandes - tension[q].offres);
+    const min = Math.min.apply(null, vals.concat([0]));
+    const max = Math.max.apply(null, vals.concat([0]));
+    const heat = [];
+    Object.keys(tension).forEach((q) => {
+      const c = COORDS_CRM[q];
+      if (!c) return;
+      const t = tension[q].demandes - tension[q].offres;
+      const norm = (max > min) ? (t - min) / (max - min) : 0.5;
+      heat.push([c[0], c[1], 0.25 + norm * 0.75]);
+    });
+    if (typeof L.heatLayer === 'function' && heat.length) {
+      L.heatLayer(heat, { radius: 38, blur: 22, maxZoom: 12, gradient: { 0.2: '#2563eb', 0.45: '#38bdf8', 0.6: '#f2c46e', 0.8: '#ef4444', 1: '#b91c1c' } }).addTo(map);
+    }
+
+    const markers = [];
+    if (filtre !== 'recherches') {
+      (state.biensServeur || []).concat(state.biens).forEach((b) => {
+        const c = coordBien(b);
+        if (c) markers.push({ c: c, type: 'bien', b: b });
+      });
+    }
+    if (filtre !== 'biens') {
+      (state.recherchesServeur || []).concat(state.recherches).forEach((r) => {
+        coordRecherche(r).forEach((c) => markers.push({ c: c, type: 'recherche', r: r }));
+      });
+    }
+
+    markers.forEach((m) => {
+      const col = m.type === 'bien' ? '#2563eb' : '#16a34a';
+      const marker = L.circleMarker(m.c, { radius: m.type === 'bien' ? 9 : 7, color: '#fff', weight: 2, fillColor: col, fillOpacity: 0.9 });
+      const jours = m.type === 'bien' ? joursEnLigne(m.b) : 0;
+      const popup = m.type === 'bien'
+        ? '<div class="radar-pop"><b>' + esc(m.b.titre || 'Bien') + '</b><div>' + euro(m.b.prix) + (m.b.surface ? ' · ' + m.b.surface + ' m²' : '') + '</div><div style="color:var(--color-taupe)">' + jours + ' j en ligne · ' + esc(m.b.statut || '') + '</div></div>'
+        : '<div class="radar-pop"><b>' + esc(m.r.titre || 'Recherche') + '</b><div>Budget ' + euro(m.r.prixMax || 0) + '</div></div>';
+      marker.bindPopup(popup);
+      marker.addTo(map);
+    });
+
+    if (markers.length) map.fitBounds(L.latLngBounds(markers.map((m) => m.c)).pad(0.15));
+  }
+
+  function robotStats(res) {
+    if (!res || !res.features) return { parcelles: 0, proprietaires: 0, sci: 0, contacts: 0 };
+    let proprietaires = 0, sci = 0, contacts = 0;
+    res.features.forEach((f) => {
+      const p = f.properties || {};
+      const owner = p.owner || p.proprietaire || p.owners || null;
+      if (owner) {
+        proprietaires++;
+        const t = String(owner.type || '').toLowerCase();
+        if (t === 'sci' || t.indexOf('sci') > -1) sci++;
+        contacts += ((owner.contacts || []).length || 0);
+      }
+    });
+    return { parcelles: res.features.length, proprietaires, sci, contacts };
+  }
+
+  function robotFiches(features) {
+    if (!features || !features.length) return '<p class="se-muted" style="margin-top:8px">Lancez une prospection pour afficher les parcelles identifiées.</p>';
+    return features.slice(0, 20).map((f) => {
+      const p = f.properties || {};
+      const adresse = p.address || p.adresse || p.voie || 'Parcelle';
+      const ref = p.parcel_ref || p.reference || p.id || '';
+      const dpe = Array.isArray(p.dpe_classes) && p.dpe_classes.length ? p.dpe_classes.join(', ') : (p.dpe_class || '');
+      const owner = p.owner || p.proprietaire || p.owners || null;
+      const nomOwner = owner ? (owner.nom || owner.name || owner.raison_sociale || '') : '';
+      const typeOwner = owner ? (owner.type || owner.nature || '') : '';
+      return '<div class="se-list-item" style="align-items:flex-start">' +
+        '<div style="flex:1;min-width:0">' +
+          '<div style="font-size:13px;font-weight:500">' + esc(adresse) + '</div>' +
+          '<div class="se-hint">' + (ref ? 'Parcelle ' + esc(ref) : '') + (dpe ? ' · DPE ' + esc(dpe) : '') + '</div>' +
+          (nomOwner ? '<div class="se-hint" style="margin-top:2px">' + esc(nomOwner) + (typeOwner ? ' · ' + esc(typeOwner) : '') + '</div>' : '') +
+        '</div>' +
+        '<button class="se-btn ghost sm" data-act="robot-ajouter" data-json="' + esc(JSON.stringify({ adresse: adresse, ref: ref, dpe: dpe, nom: nomOwner, type: typeOwner })) + '">Ajouter</button>' +
+      '</div>';
+    }).join('');
+  }
+
+  function robotStatsDetectes() {
+    const biens = robotBiens();
+    return {
+      parcelles: biens.length,
+      proprietaires: biens.filter((b) => b.proprietaire && b.proprietaire.nom).length,
+      sci: biens.filter((b) => b.proprietaire && b.proprietaire.type === 'sci').length,
+      contacts: biens.reduce((n, b) => n + (b.contacts || []).length, 0)
+    };
+  }
+
+  function robotBiensFiltres() {
+    const f = state.robotFiltres || {};
+    const ms = matchings();
+    const nb = (id) => ms.filter((m) => m.bienId === id).length;
+    let biens = robotBiens().slice();
+    if (state.robotPriorite) biens = biens.filter((b) => prioriteRobot(b).level === state.robotPriorite);
+    if (f.type) biens = biens.filter((b) => b.type === f.type);
+    if (f.surfaceMin) biens = biens.filter((b) => (b.surface_habitable_m2 || 0) >= Number(f.surfaceMin));
+    if (f.piecesMin) biens = biens.filter((b) => (b.pieces || 0) >= Number(f.piecesMin));
+    if (f.proprio === 'oui') biens = biens.filter((b) => b.proprietaire && b.proprietaire.nom);
+    if (f.proprio === 'non') biens = biens.filter((b) => !(b.proprietaire && b.proprietaire.nom));
+    if (f.sci) biens = biens.filter((b) => b.proprietaire && b.proprietaire.type === 'sci');
+    if (f.societe) biens = biens.filter((b) => b.proprietaire && b.proprietaire.type === 'societe');
+    if (f.contacts) biens = biens.filter((b) => (b.contacts || []).length);
+    if (f.avecMatch) biens = biens.filter((b) => nb(b.id) > 0);
+    if (f.client) {
+      const ids = new Set(ms.filter((m) => m.clientId === f.client).map((m) => m.bienId));
+      biens = biens.filter((b) => ids.has(b.id));
+    }
+    if (f.secteur) biens = biens.filter((b) => (b.ville || 'Secteur inconnu') === f.secteur);
+    const tri = f.tri || 'priorite';
+    biens.sort((a, b) => {
+      if (tri === 'fiabilite') return (b.confidence_geocoding || 0) - (a.confidence_geocoding || 0);
+      if (tri === 'surface') return (b.surface_habitable_m2 || 0) - (a.surface_habitable_m2 || 0);
+      if (tri === 'clients') return nb(b.id) - nb(a.id);
+      if (tri === 'date') return new Date(b.dateDetection || 0) - new Date(a.dateDetection || 0);
+      const pa = prioriteRobot(a).level, pb = prioriteRobot(b).level;
+      if (pa !== pb) return pa - pb;
+      return (scorePriorite(b).score || 0) - (scorePriorite(a).score || 0);
+    });
+    return biens;
+  }
+
+  function barreFiltresRobot() {
+    const f = state.robotFiltres || {};
+    const types = ['Appartement', 'Maison', 'Duplex', 'Immeuble', 'Terrain'];
+    const sel = (name, opts, cur) => '<select class="se-select" data-rf="' + name + '">' + opts.map((o) => '<option value="' + o[0] + '"' + (String(cur) === String(o[0]) ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select>';
+    const chk = (name, label) => '<label class="se-check" style="cursor:pointer"><input type="checkbox" data-rf="' + name + '"' + (f[name] ? ' checked' : '') + ' style="margin-right:6px"/>' + label + '</label>';
+    return '<div class="se-card" style="margin-bottom:16px">' +
+      '<h3>Filtres & tri</h3>' +
+      '<div class="se-form-grid" style="grid-template-columns:repeat(4,1fr);margin-top:10px">' +
+        '<div class="se-field"><label>Type de bien</label>' + sel('type', [['', 'Tous']].concat(types.map((t) => [t, t])), f.type || '') + '</div>' +
+        '<div class="se-field"><label>Surface min (m²)</label><input class="se-input" type="number" data-rf="surfaceMin" value="' + esc(f.surfaceMin || '') + '" placeholder="0"/></div>' +
+        '<div class="se-field"><label>Pièces min</label><input class="se-input" type="number" data-rf="piecesMin" value="' + esc(f.piecesMin || '') + '" placeholder="0"/></div>' +
+        '<div class="se-field"><label>Propriétaire</label>' + sel('proprio', [['tous', 'Tous'], ['oui', 'Identifié'], ['non', 'Non identifié']], f.proprio || 'tous') + '</div>' +
+      '</div>' +
+      '<div class="se-row" style="gap:16px;margin-top:10px;flex-wrap:wrap">' +
+        chk('sci', 'SCI') + chk('societe', 'Société') + chk('contacts', 'Coordonnées disponibles') + chk('avecMatch', 'Avec correspondance client') +
+      '</div>' +
+      '<div class="se-row" style="gap:10px;margin-top:10px;align-items:center;flex-wrap:wrap">' +
+        '<span class="se-hint">Client :</span>' +
+        sel('client', [['', 'Tous']].concat([...new Set(matchings().map((m) => m.clientId))].map((cid) => { const cl = state.clients.find((c) => c.id === cid); return cl ? [cid, nomClient(cl)] : null; }).filter(Boolean)), f.client || '') +
+        '<span class="se-hint">Tri :</span>' +
+        sel('tri', [['date', 'Date de détection'], ['fiabilite', 'Fiabilité'], ['surface', 'Surface'], ['clients', 'Clients correspondants']], f.tri || 'date') +
+        '<button class="se-btn ghost sm" data-act="robot-reset-filtres">Réinitialiser</button>' +
+      '</div>' +
+    '</div>';
+  }
+
+  function pctScore(cs) {
+    const total = cs.reduce((s, c) => s + c.max, 0);
+    const pts = cs.reduce((s, c) => s + c.points, 0);
+    return total ? Math.round(pts / total * 100) : 0;
+  }
+
+  // Trois scores indépendants + priorité pondérée
+  function scoresRobot(b) {
+    const prop = b.proprietaire || {};
+    const contacts = b.contacts || [];
+    const verif = contacts.some((c) => c.verification === 'VERIFIED');
+    const tel = contacts.some((c) => c.type === 'tel');
+    const email = contacts.some((c) => c.type === 'email');
+    const dirigeant = (prop.dirigeants && prop.dirigeants.length) ? 1 : 0;
+    const dvf = (b.dvfMutations && b.dvfMutations.length) ? 1 : 0;
+    const nb = matchings().filter((m) => m.bienId === b.id).length;
+    const energivore = (b.dpe === 'F' || b.dpe === 'G') ? 1 : 0;
+
+    const idContribs = [
+      { label: 'Propriétaire identifié', points: prop.nom ? 40 : 0, max: 40 },
+      { label: 'Confiance du rapprochement', points: b.confidence_owner != null ? Math.round(b.confidence_owner * 30 / 100) : 0, max: 30 },
+      { label: 'SIREN', points: prop.siren ? 15 : 0, max: 15 },
+      { label: 'Dirigeant identifié', points: dirigeant ? 15 : 0, max: 15 }
+    ];
+    const coContribs = [
+      { label: 'Téléphone trouvé', points: tel ? 40 : 0, max: 40 },
+      { label: 'Email trouvé', points: email ? 30 : 0, max: 30 },
+      { label: 'Contact vérifié (VERIFIED)', points: verif ? 30 : 0, max: 30 }
+    ];
+    const potContribs = [
+      { label: 'Passoire thermique (F/G)', points: energivore ? 30 : 0, max: 30 },
+      { label: 'Historique DVF (mutations)', points: dvf ? 25 : 0, max: 25 },
+      { label: 'Acquéreurs compatibles', points: nb > 0 ? Math.min(25, nb * 5) : 0, max: 25 },
+      { label: 'Détention ancienne', points: 0, max: 20 }
+    ];
+
+    const identification = pctScore(idContribs);
+    const coordonnees = pctScore(coContribs);
+    const potentiel = pctScore(potContribs);
+    const priorite = Math.round(identification * 0.40 + coordonnees * 0.25 + potentiel * 0.35);
+    return { identification, coordonnees, potentiel, priorite, idContribs, coContribs, potContribs };
+  }
+
+  function scorePriorite(b) {
+    const s = scoresRobot(b);
+    const contribs = s.idContribs.concat(s.coContribs).concat(s.potContribs);
+    const points = contribs.reduce((x, c) => x + c.points, 0);
+    if (points === 0) return { score: null, contribs, scores: s };
+    return { score: s.priorite, contribs, scores: s };
+  }
+
+  function ancienneteDpe(b) {
+    if (!b.dpeDate) return { texte: 'Aucun DPE disponible', alerte: false };
+    const jours = Math.floor((Date.now() - new Date(b.dpeDate).getTime()) / 86400000);
+    if (jours < 0 || isNaN(jours)) return { texte: 'DPE récent', alerte: false };
+    return { texte: 'DPE il y a ' + jours + ' jour' + (jours > 1 ? 's' : ''), alerte: jours > 15 };
+  }
+
+  function tagsRobot(b) {
+    const prop = b.proprietaire || {};
+    const tags = [];
+    if (b.type) tags.push(b.type.toUpperCase());
+    if (prop.type === 'sci') tags.push('SCI');
+    else if (prop.type === 'societe') tags.push('SOCIÉTÉ');
+    else if (prop.type === 'personne') tags.push('PARTICULIER');
+    if (prop.nom) tags.push('PROPRIÉTAIRE IDENTIFIÉ');
+    if ((b.contacts || []).some((c) => c.verification === 'VERIFIED')) tags.push('CONTACT VÉRIFIÉ');
+    if (b.dpe === 'F' || b.dpe === 'G') tags.push('DPE ' + b.dpe);
+    return tags;
+  }
+
+  const STATUTS_PROSPECTION = [
+    ['non-analyse', 'Non analysée', 'muted'],
+    ['analyse', 'Analyse en cours', ''],
+    ['proprietaire', 'Propriétaire identifié', 'open'],
+    ['contacts', 'Contacts disponibles', 'open'],
+    ['opportunite', 'Opportunité détectée', 'warn'],
+    ['a-prospecter', 'À prospecter', ''],
+    ['prospection', 'En cours de prospection', ''],
+    ['converti', 'Convertie en prospect', 'open'],
+    ['ignore', 'Ignorée', 'muted']
+  ];
+
+  function etatRobot(b) {
+    if (b.statutProspection && b.statutProspection !== 'non-analyse') {
+      const s = STATUTS_PROSPECTION.find((x) => x[0] === b.statutProspection);
+      if (s) return { label: s[1], cls: s[2] };
+    }
+    const prop = b.proprietaire || {};
+    if (!prop.nom) return { label: 'Non analysée', cls: 'muted' };
+    if ((b.contacts || []).length) return { label: 'Contacts disponibles', cls: 'open' };
+    return { label: 'Propriétaire identifié', cls: 'open' };
+  }
+
+  function robotBiensList() {
+    const all = robotBiensFiltres().filter((b) => !b.ignore);
+    const ms = matchings();
+    const perPage = 20;
+    const totalPages = Math.max(1, Math.ceil(all.length / perPage));
+    const cur = Math.min(Math.max(1, Number(state.robotPage) || 1), totalPages);
+    state.robotPage = cur;
+    const biens = all.slice((cur - 1) * perPage, cur * perPage);
+    if (!all.length) return '<div class="se-card" style="padding:28px;text-align:center"><p class="se-muted" style="margin:0">Aucun bien détecté.</p><p class="se-muted" style="margin:6px 0 0;font-size:12px">Lancez une prospection pour alimenter le Radar.</p></div>';
+    const pagination = '<div class="se-pagination">' +
+      '<button class="se-btn ghost sm" data-act="robot-page" data-page="' + (cur - 1) + '"' + (cur <= 1 ? ' disabled' : '') + '>Précédent</button>' +
+      '<span class="se-hint">Page ' + cur + ' / ' + totalPages + ' · ' + all.length + ' résultat(s)</span>' +
+      '<button class="se-btn ghost sm" data-act="robot-page" data-page="' + (cur + 1) + '"' + (cur >= totalPages ? ' disabled' : '') + '>Suivant</button>' +
+    '</div>';
+    return pagination + biens.map((b) => {
+      const prop = b.proprietaire || {};
+      const sc = scorePriorite(b);
+      const dpeAge = ancienneteDpe(b);
+      const tags = tagsRobot(b);
+      const etat = etatRobot(b);
+      const msBien = ms.filter((m) => m.bienId === b.id);
+      const club = msBien.filter((m) => { const c = client(m.clientId); return c && (c.statut === 'actif' || c.statut === 'client'); }).length;
+      const leads = msBien.length - club;
+      const aReconfirmer = msBien.filter((m) => { const c = client(m.clientId); return c && (c.pipeline === 'À relancer' || c.pipeline === 'À contacter'); }).length;
+      const typeProp = prop.type === 'sci' ? 'SCI' : prop.type === 'societe' ? 'Société' : prop.type === 'personne' ? 'Particulier' : '';
+      const surf = b.surface_habitable_m2 != null ? b.surface_habitable_m2 + ' m² hab.' : (b.contenance_cadastrale_m2 != null ? 'parcelle ' + b.contenance_cadastrale_m2 + ' m²' : 'Surf. à vérifier');
+      const secteur = b.ville || (b.quartiers && b.quartiers.length ? qLabel(b.quartiers[0]) : 'secteur inconnu');
+      const scoreHtml = sc.score != null
+        ? '<div class="se-score-badge" title="Identification ' + sc.scores.identification + '/100 · Coordonnées ' + sc.scores.coordonnees + '/100 · Potentiel ' + sc.scores.potentiel + '/100\n' + esc(sc.contribs.map((c) => c.label + ' : ' + c.points + '/' + c.max).join('\n')) + '">' + sc.score + '</div>'
+        : '<div class="se-score-badge se-score-attente" title="Score en attente — aucun critère exploitable disponible">—</div>';
+      const telVerifie = (b.contacts || []).find((c) => c.type === 'tel' && c.verification === 'VERIFIED');
+      const actions =
+        '<a class="se-btn ghost sm" href="#/robot-bien/' + b.id + '">Dossier</a>' +
+        (prop.nom ? '<button class="se-btn ghost sm" data-act="robot-ajouter" data-json="' + esc(JSON.stringify({ nom: prop.nom, type: prop.type || 'personne', siren: prop.siren || '', email: ((b.contacts || []).find((c) => c.type === 'email') || {}).valeur || '', tel: ((b.contacts || []).find((c) => c.type === 'tel') || {}).valeur || '', adresseBien: b.adresse, ville: b.ville || '', parcelle: b.parcelle || '', dpe: b.dpe || '' })) + '">+ Prospect</button>' : '') +
+        (telVerifie ? '<a class="se-btn ghost sm" href="https://wa.me/' + String(telVerifie.valeur).replace(/[^0-9]/g, '') + '" target="_blank" rel="noopener">Contacter</a>' : '') +
+        ((club + leads) > 0 ? '<a class="se-btn ghost sm" href="#/robot-opportunites">' + (club + leads) + ' acquéreurs</a>' : '');
+      const tel = (b.contacts || []).find((c) => c.type === 'tel');
+      const eml = (b.contacts || []).find((c) => c.type === 'email');
+      const contactsHtml = '<div class="se-robot-contacts">' +
+        'Téléphone : ' + (tel ? '<b>' + esc(tel.valeur) + '</b> ' + verifTag(tel.verification) : '<span class="se-hint">À rechercher</span>') +
+        ' · Email : ' + (eml ? '<b>' + esc(eml.valeur) + '</b> ' + verifTag(eml.verification) : '<span class="se-hint">À rechercher</span>') +
+      '</div>';
+      const d0 = (prop.dirigeants && prop.dirigeants[0]) ? prop.dirigeants[0] : null;
+      const dirigeant = d0 ? (typeof d0 === 'string' ? d0 : (d0.nom || d0.name || '')) : '';
+      const addJson = esc(JSON.stringify({ nom: prop.nom, type: prop.type || 'personne', siren: prop.siren || '', email: ((b.contacts || []).find((c) => c.type === 'email') || {}).valeur || '', tel: ((b.contacts || []).find((c) => c.type === 'tel') || {}).valeur || '', adresseBien: b.adresse, ville: b.ville || '', parcelle: b.parcelle || '', dpe: b.dpe || '', dirigeants: prop.dirigeants || [] }));
+      return '<div class="se-robot-card">' +
+        scoreHtml +
+        '<div class="se-robot-body">' +
+          '<div class="se-robot-head"><b>' + esc(typeRobot(b)) + '</b><span> · ' + esc(surf) + ' · ' + esc(secteur) + '</span></div>' +
+          '<div class="se-robot-prix">' + (b.estimationMin && b.estimationMax ? euro(b.estimationMin) + ' – ' + euro(b.estimationMax) : 'Estimation indisponible') + '</div>' +
+          '<div class="se-robot-adr">' + esc(b.adresse || 'Adresse inconnue') + (b.etage ? ' · ' + esc(b.etage) + 'ᵉ étage' : '') + (b.parcelle ? ' · ' + esc(b.parcelle) : '') + '</div>' +
+          '<div class="se-robot-dpe' + (dpeAge.alerte ? ' se-robot-dpe-alerte' : '') + '">' + esc(dpeAge.texte) + (b.dpe ? ' · Classe ' + esc(b.dpe) : '') + '</div>' +
+          '<div class="se-robot-owner">' + (prop.nom ? '<span class="se-badge open">IDENTIFIÉ</span> <b>' + esc(prop.nom) + '</b>' + (typeProp ? '<span class="se-hint"> · ' + typeProp + '</span>' : '') + (prop.siren ? '<span class="se-hint"> · SIREN ' + esc(prop.siren) + '</span>' : '') + (dirigeant ? '<span class="se-hint"> · ' + esc(dirigeant) + '</span>' : '') : (b.enrichStatut === 'attente' ? '<span class="se-badge" style="background:#F8E9D5;color:#A56A2D;font-size:11px;padding:4px 8px;text-transform:uppercase">En attente du moteur</span>' : '<span class="se-badge muted">NON IDENTIFIÉ</span>')) + '</div>' +
+          contactsHtml +
+          (tags.length ? '<div class="se-robot-tags">' + tags.map((t) => '<span class="se-pill">' + esc(t) + '</span>').join('') + '</div>' : '') +
+        '</div>' +
+        '<div class="se-robot-match">' +
+          '<div class="se-match-label">ACQUÉREURS<br>POTENTIELS</div>' +
+          '<div class="se-match-num"><b>' + club + '</b> <span class="se-hint">club</span></div>' +
+          '<div class="se-match-num"><b>' + leads + '</b> <span class="se-hint">leads</span></div>' +
+          (aReconfirmer > 0 ? '<div class="se-hint">dont ' + aReconfirmer + ' à reconfirmer</div>' : '') +
+          '<div class="se-match-actions">' +
+            '<a class="se-btn ghost sm" href="#/robot-bien/' + b.id + '">Ouvrir la fiche</a>' +
+            (prop.nom ? '<button class="se-btn ghost sm" data-act="robot-ajouter" data-json="' + addJson + '">Ajouter aux prospects</button>' : '') +
+            (tel ? '<button class="se-btn ghost sm" data-act="copier-contact" data-value="' + esc(tel.valeur) + '">Copier tél</button>' : '') +
+            (eml ? '<button class="se-btn ghost sm" data-act="copier-contact" data-value="' + esc(eml.valeur) + '">Copier email</button>' : '') +
+            '<button class="se-btn ghost sm" data-act="robot-ignorer" data-id="' + b.id + '">Ignorer</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    }).join('') + pagination;
+  }
+
+  function viewRobot() {
+    const res = state.robot || null;
+    const stats = robotStatsDetectes();
+    return head('Prospection', 'Radar — Biens détectés', 'Prospection immobilière · parcelles, propriétaires, SCI, DPE.', '') +
+      tabsRobot('robot') +
+      '<div class="se-card" style="margin-bottom:14px">' +
+        '<h3>Recherche de biens</h3>' +
+        '<form data-form="dpe-search" style="margin-top:12px">' +
+          '<div class="se-row" style="gap:10px;align-items:flex-end;flex-wrap:wrap">' +
+            '<div class="se-field" style="flex:1;min-width:200px"><label>Adresse ou ville</label><input class="se-input" name="ville" placeholder="75011 Paris"/></div>' +
+            '<div class="se-field" style="width:150px"><label>Code postal</label><input class="se-input" name="code_postal" placeholder="75011"/></div>' +
+            '<div class="se-field" style="width:130px"><label>Section</label><input class="se-input" name="section" placeholder="EC"/></div>' +
+            '<div class="se-field" style="width:140px"><label>N° parcelle</label><input class="se-input" name="numero" placeholder="32"/></div>' +
+            '<button class="se-btn" type="button" data-act="dpe-search">Rechercher</button>' +
+            '<span class="se-hint" id="dpe-status"></span>' +
+          '</div>' +
+          '<details style="margin-top:10px"><summary style="cursor:pointer;font-size:13px;color:var(--color-taupe)">Critères avancés</summary>' +
+            '<div class="se-form-grid" style="margin-top:10px;grid-template-columns:repeat(4,1fr)">' +
+              '<div class="se-field"><label>Surface min (m²)</label><input class="se-input" name="surface_min" type="number" placeholder="40"/></div>' +
+              '<div class="se-field"><label>Surface max (m²)</label><input class="se-input" name="surface_max" type="number" placeholder="100"/></div>' +
+              '<div class="se-field"><label>Type de bien</label><select class="se-select" name="type"><option value="tout">Tous</option><option value="appartement">Appartement</option><option value="maison">Maison</option><option value="immeuble">Immeuble</option></select></div>' +
+              '<div class="se-field"><label>Tri</label><select class="se-select" name="tri"><option value="recent">DPE le plus récent</option><option value="ancien">DPE le plus ancien</option><option value="surface_desc">Surface décroissante</option></select></div>' +
+            '</div>' +
+          '</details>' +
+        '</form>' +
+      '</div>' +
+      barreFiltresRobot() +
+      '<div class="se-chips" style="margin-bottom:10px">' + [1,2,3,4,5,6].map((lvl) => {
+        const label = ['Propriétaire + tél', 'Propriétaire + email', 'Propriétaire + LinkedIn', 'Société à enrichir', 'Propriétaire sans coord', 'Non identifié'][lvl - 1];
+        const count = robotBiens().filter((b) => prioriteRobot(b).level === lvl).length;
+        return '<button class="se-chip" style="cursor:pointer' + (state.robotPriorite === lvl ? ' is-on' : '') + '" data-act="robot-priorite-filtre" data-niveau="' + lvl + '">' + label + ' (' + count + ')</button>';
+      }).join('') + '<button class="se-chip" style="cursor:pointer' + (!state.robotPriorite ? ' is-on' : '') + '" data-act="robot-priorite-filtre" data-niveau="">Tous</button>' +
+      '</div>' +
+      '<div class="se-row" style="gap:8px;margin-bottom:12px;justify-content:flex-end">' +
+        '<button class="se-btn ghost sm" data-act="robot-enrichir-masse">Enrichir toutes les fiches incomplètes</button>' +
+        '<button class="se-btn ghost sm" data-act="robot-map-toggle">' + (state.robotShowMap ? 'Masquer la carte' : 'Afficher la carte') + '</button>' +
+      '</div>' +
+      (state.robotShowMap
+        ? '<div class="se-split" style="grid-template-columns:1fr 400px;align-items:start;gap:16px">' +
+            '<div id="robot-map" style="height:440px;border-radius:16px;overflow:hidden;border:1px solid var(--color-stroke-faint)"></div>' +
+            '<div class="se-card" style="max-height:440px;overflow:auto"><h3>Biens détectés' + (state.robotEnrichStats ? ' <span class="se-hint" style="font-weight:400">· ' + state.robotEnrichStats.enrichis + ' enrichi(s) · ' + state.robotEnrichStats.enCours + ' en cours · ' + state.robotEnrichStats.enAttente + ' en attente</span>' : '') + '</h3>' + robotBiensList() + '</div>' +
+          '</div>'
+        : '<div class="se-card"><h3>Biens détectés' + (state.robotEnrichStats ? ' <span class="se-hint" style="font-weight:400">· ' + state.robotEnrichStats.enrichis + ' enrichi(s) · ' + state.robotEnrichStats.enCours + ' en cours · ' + state.robotEnrichStats.enAttente + ' en attente</span>' : '') + '</h3>' + robotBiensList() + '</div>');
+  }
+
+  function initRobot() {
+    const el = document.getElementById('robot-map');
+    if (!el || typeof L === 'undefined') return;
+    const map = L.map(el, { scrollWheelZoom: false }).setView([48.8566, 2.3522], 13);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(map);
+    const pts = [];
+    robotBiensFiltres().forEach((b) => {
+      // couleur selon le statut de prospection
+      let fill = '#1A3C34';               // à traiter (non analysée)
+      if (b.ignore) fill = '#b0aca6';     // ignorée
+      else if (b.proprietaire && b.proprietaire.nom) fill = '#1E4038'; // propriétaire identifié
+      else if (b.contacts && b.contacts.length) fill = '#3D2A49';      // contacts disponibles
+      const nb = (matchings() || []).filter((m) => m.bienId === b.id).length;
+      const popup = '<div class="radar-pop"><b>' + esc(b.adresse || 'Parcelle') + '</b><div>' + esc(typeRobot(b)) + (b.surface_habitable_m2 != null ? ' · ' + b.surface_habitable_m2 + ' m²' : (b.contenance_cadastrale_m2 != null ? ' · parcelle ' + b.contenance_cadastrale_m2 + ' m²' : '')) + '</div><div>' + (b.proprietaire && b.proprietaire.nom ? 'Propriétaire : ' + esc(b.proprietaire.nom) : 'Propriétaire non identifié') + ' · ' + nb + ' client(s)</div><div style="margin-top:4px"><a href="#/robot-bien/' + b.id + '">Ouvrir la fiche</a></div></div>';
+      // contour de parcelle (polygone) si la géométrie est disponible
+      let drewPolygon = false;
+      if (b.feature && b.feature.geometry && b.feature.geometry.coordinates) {
+        try {
+          const geo = b.feature.geometry;
+          const polys = geo.type === 'Polygon' ? [geo.coordinates] : (geo.type === 'MultiPolygon' ? geo.coordinates : []);
+          polys.forEach((poly) => poly.forEach((ring) => {
+            if (Array.isArray(ring) && ring.length >= 3) {
+              const latlngs = ring.map((pt) => [Number(pt[1]), Number(pt[0])]).filter((ll) => ll[0] > -90 && ll[0] < 90 && ll[1] > -180 && ll[1] < 180);
+              if (latlngs.length >= 3) { L.polygon(latlngs, { color: '#fff', weight: 1, fillColor: fill, fillOpacity: 0.45 }).addTo(map).bindPopup(popup); drewPolygon = true; }
+            }
+          }));
+        } catch (e) { /* géométrie invalide */ }
+      }
+      if (drewPolygon && b.coords && b.coords.length >= 2) pts.push([Number(b.coords[0]), Number(b.coords[1])]);
+      else if (b.coords && b.coords.length >= 2) {
+        const latlng = [Number(b.coords[0]), Number(b.coords[1])];
+        pts.push(latlng);
+        L.circleMarker(latlng, { radius: 8, color: '#fff', weight: 2, fillColor: fill, fillOpacity: 0.9 }).addTo(map).bindPopup(popup);
+      }
+    });
+    if (pts.length) map.fitBounds(L.latLngBounds(pts).pad(0.1));
+  }
+
+  function tabsRobot(active) {
+    const t = (route, label) => '<a href="#/' + route + '" class="' + (active === route ? 'active' : '') + '">' + label + '</a>';
+    return '<div class="se-tabs" style="margin-bottom:14px">' +
+      t('robot', 'Radar') + t('robot-proprietaires', 'Propriétaires') + t('robot-opportunites', 'Signaux vendeurs') +
+    '</div>';
+  }
+
+  function secteursPrioritaires() {
+    const biens = robotBiens();
+    const ms = matchings();
+    const map = {};
+    biens.forEach((b) => {
+      const sec = b.ville || 'Secteur inconnu';
+      map[sec] = map[sec] || { secteur: sec, biens: 0, proprietaires: 0, verifies: 0, matchs: 0 };
+      map[sec].biens++;
+      if (b.proprietaire && b.proprietaire.nom) map[sec].proprietaires++;
+      if ((b.contacts || []).some((c) => c.verification === 'VERIFIED')) map[sec].verifies++;
+    });
+    ms.forEach((m) => {
+      const b = robotBien(m.bienId);
+      const sec = b ? (b.ville || 'Secteur inconnu') : 'Secteur inconnu';
+      if (map[sec]) map[sec].matchs++;
+    });
+    return Object.values(map).sort((a, b) => b.biens - a.biens);
+  }
+
+  function dernieresDetections() {
+    const biens = robotBiens().slice().sort((a, b) => new Date(b.dateDetection || 0) - new Date(a.dateDetection || 0)).slice(0, 5);
+    if (!biens.length) return '<p class="se-muted" style="margin-top:8px">Aucune détection pour l’instant.</p>';
+    return '<div class="se-list" style="margin-top:6px">' + biens.map((b) => {
+      const sc = scorePriorite(b);
+      return '<a class="se-rowlink" href="#/robot-bien/' + b.id + '">' +
+        '<div style="flex:1;min-width:0"><div style="font-size:13px">' + esc(typeRobot(b)) + (b.surface_habitable_m2 != null ? ' · ' + b.surface_habitable_m2 + ' m²' : '') + '</div>' +
+        '<div class="se-hint">' + esc(b.adresse || 'Adresse inconnue') + '</div></div>' +
+        '<span class="se-badge ' + (sc.score != null ? 'open' : 'muted') + '">' + (sc.score != null ? sc.score : '—') + '</span>' +
+      '</a>';
+    }).join('') + '</div>';
+  }
+
+  function prioriteRobot(b) {
+    const prop = b.proprietaire || {};
+    const cs = b.contacts || [];
+    const telVerifie = cs.some((c) => c.type === 'tel' && c.verification === 'VERIFIED');
+    const emailVerifie = cs.some((c) => c.type === 'email' && c.verification === 'VERIFIED');
+    const linkedin = cs.some((c) => c.type === 'linkedin');
+    if (prop.nom && telVerifie) return { level: 1, label: 'Propriétaire + téléphone' };
+    if (prop.nom && emailVerifie) return { level: 2, label: 'Propriétaire + email' };
+    if (prop.nom && linkedin) return { level: 3, label: 'Propriétaire + LinkedIn' };
+    if (prop.nom && prop.type !== 'personne') return { level: 4, label: 'Société à enrichir' };
+    if (prop.nom) return { level: 5, label: 'Propriétaire sans coordonnées' };
+    return { level: 6, label: 'Non identifié' };
+  }
+
+  function typeRobot(b) {
+    if (b.type) return b.type;
+    if (b.contenance_cadastrale_m2 != null) return 'Parcelle';
+    return 'Bien non typé';
+  }
+
+  function rappelsRobot() {
+    const today = new Date().toDateString();
+    const taches = (state.taches || []).filter((t) => !t.fait);
+    const enRetard = taches.filter((t) => t.echeance && new Date(t.echeance) < new Date(today));
+    const duJour = taches.filter((t) => t.echeance && new Date(t.echeance).toDateString() === today);
+    if (!enRetard.length && !duJour.length) return '<p class="se-muted" style="margin-top:8px">Aucune relance en attente.</p>';
+    let h = '<div class="se-list" style="margin-top:6px">';
+    enRetard.slice(0, 4).forEach((t) => {
+      h += '<div class="se-list-item"><div style="flex:1;min-width:0"><div style="font-size:13px">' + esc(t.titre) + '</div><div class="se-hint late">En retard</div></div><a class="se-btn ghost sm" href="#/taches">Voir</a></div>';
+    });
+    duJour.slice(0, 4).forEach((t) => {
+      h += '<div class="se-list-item"><div style="flex:1;min-width:0"><div style="font-size:13px">' + esc(t.titre) + '</div><div class="se-hint">Aujourd\'hui</div></div><a class="se-btn ghost sm" href="#/taches">Voir</a></div>';
+    });
+    return h + '</div>';
+  }
+
+  function viewRobotDashboard() {
+    const biens = robotBiens();
+    const ms = matchings();
+    const ids = new Set(ms.map((m) => m.bienId));
+    const stats = {
+      total: biens.length,
+      nouveaux: biens.filter((b) => b.statutProspection === 'nouveau').length,
+      proprio: biens.filter((b) => b.proprietaire && b.proprietaire.nom).length,
+      sci: biens.filter((b) => b.proprietaire && b.proprietaire.type === 'sci').length,
+      verifies: biens.filter((b) => (b.contacts || []).some((c) => c.verification === 'VERIFIED')).length,
+      avecMatch: ids.size,
+      forts: ms.filter((m) => m.score >= 75).length,
+      etudier: ms.filter((m) => m.score >= 40 && m.score < 75).length,
+      sans: biens.length - ids.size,
+      clients: new Set(ms.map((m) => m.clientId)).size
+    };
+    const ind = (kicker, num, route, sub) => '<a class="se-card se-stat se-stat-link" href="#/' + route + '"><span class="se-kicker">' + kicker + '</span><span class="se-num">' + num + '</span><span class="se-sub">' + sub + '</span></a>';
+    return head('Prospection', 'Immo Data Robot', 'Le Radar détecte les biens. Le CRM connaît les clients. Le Robot rapproche les deux.', '') +
+      tabsRobot('robot') +
+      '<div class="se-card" style="margin-bottom:14px">' +
+        '<h3>Recherche cadastrale</h3>' +
+        '<form class="se-form-grid" data-form="robot-search" style="margin-top:12px;grid-template-columns:repeat(3,1fr)">' +
+          '<div class="se-field"><label>Adresse</label><input class="se-input" name="adresse" placeholder="12 boulevard Flandrin"/></div>' +
+          '<div class="se-field"><label>Ville</label><input class="se-input" name="ville" placeholder="Paris"/></div>' +
+          '<div class="se-field"><label>Code postal</label><input class="se-input" name="code_postal" placeholder="75116"/></div>' +
+          '<div class="se-field"><label>Section cadastrale</label><input class="se-input" name="section" placeholder="EC"/></div>' +
+          '<div class="se-field"><label>Numéro de parcelle</label><input class="se-input" name="numero" placeholder="32"/></div>' +
+          '<div class="se-field"><label>DPE (A–G)</label><input class="se-input" name="dpe" maxlength="1" placeholder="E"/></div>' +
+        '</form>' +
+        '<div style="display:flex;align-items:center;gap:10px;margin-top:12px">' +
+          '<button class="se-btn" data-act="robot-search">Rechercher</button>' +
+          '<span class="se-hint" id="robot-status"></span>' +
+        '</div>' +
+      '</div>' +
+      '<div class="se-grid cols-4" style="margin-bottom:14px">' +
+        ind('Biens détectés', stats.total, 'robot-radar', 'portefeuille radar') +
+        ind('Nouveaux biens', stats.nouveaux, 'robot-radar', 'détections récentes') +
+        ind('Propriétaires identifiés', stats.proprio, 'robot-radar', 'enrichissement') +
+        ind('Biens en SCI', stats.sci, 'robot-radar', 'personnes morales') +
+      '</div>' +
+      '<div class="se-grid cols-4" style="margin-bottom:14px">' +
+        ind('Contacts vérifiés', stats.verifies, 'robot-radar', 'VERIFIED') +
+        ind('Biens avec correspondance', stats.avecMatch, 'robot-opportunites', '1+ client') +
+        ind('Correspondances fortes', stats.forts, 'robot-opportunites', 'score ≥ 75') +
+        ind('À étudier', stats.etudier, 'robot-opportunites', 'score 40–74') +
+      '</div>' +
+      '<div class="se-grid cols-4">' +
+        ind('Sans acquéreur', stats.sans, 'robot-radar', 'à qualifier') +
+        ind('Clients concernés', stats.clients, 'robot-opportunites', 'nouvelles opportunités') +
+        '<div class="se-card se-stat"><span class="se-kicker">Correspondances</span><span class="se-num">' + ms.length + '</span><span class="se-sub">couples bien × recherche</span></div>' +
+        '<div class="se-card se-stat"><span class="se-kicker">Pipeline</span><span class="se-num">' + Object.keys(ST_MATCHING).length + '</span><span class="se-sub">statuts commerciaux</span></div>' +
+      '</div>' +
+      '<div class="se-split" style="grid-template-columns:1fr 340px;align-items:start;gap:16px;margin-top:16px">' +
+        '<div class="se-card"><h3>Secteurs prioritaires</h3>' +
+          '<div class="se-list" style="margin-top:8px">' + secteursPrioritaires().slice(0, 8).map((s) => {
+            const pct = s.biens ? Math.round(s.proprietaires / s.biens * 100) : 0;
+            return '<a class="se-rowlink" href="#/robot-radar" data-act="robot-filtre-secteur" data-sec="' + esc(s.secteur) + '">' +
+              '<div style="flex:1;min-width:0"><div style="font-size:13.5px;font-weight:500">' + esc(s.secteur.toUpperCase()) + '</div>' +
+              '<div class="se-hint">' + s.biens + ' logement(s) · ' + s.proprietaires + ' propriétaire(s) · ' + s.verifies + ' contact(s) vérifié(s) · ' + s.matchs + ' match(s)</div>' +
+              '<div class="se-bar" style="margin-top:6px"><div class="se-bar-fill" style="width:' + pct + '%"></div></div></div>' +
+              '<span class="se-hint" style="flex:0 0 auto;margin-left:8px">' + pct + '%</span>' +
+            '</a>';
+          }).join('') + '</div>' +
+          (!secteursPrioritaires().length ? '<p class="se-muted" style="margin-top:8px">Aucun secteur détecté.</p>' : '') +
+        '</div>' +
+        '<div class="se-card"><h3>Dernières détections</h3>' + dernieresDetections() + '</div>' +
+      '</div>';
+  }
+
+  function explicationMatching(m, rb, rec) {
+    const s = scoreRobotBien(rb, rec);
+    const connus = s.inconnus.length;
+    const manquants = s.inconnus.slice(0, 3);
+    let txt = 'Ce bien correspond à ' + (6 - connus) + ' des 6 critères de la recherche.';
+    if (manquants.length) txt += ' À confirmer : ' + manquants.join(', ') + '.';
+    txt += ' Couverture : ' + s.couverture + ' %.';
+    return txt;
+  }
+
+  async function synchroniserPermis() {
+    const biens = robotBiens();
+    const insees = new Set();
+    biens.forEach((b) => {
+      const insee = postalToInsee(b.codePostal) || b.codeInsee;
+      if (insee) insees.add(insee);
+    });
+    if (!insees.size) { toast('Aucune commune identifiée (code postal / INSEE manquant sur les biens).', 'warn'); return; }
+    toast('Synchronisation des permis sur ' + insees.size + ' commune(s)…');
+    const all = [];
+    for (const insee of insees) {
+      try {
+        const r = await fetch('/api/robot/aucadastre/commune/' + encodeURIComponent(insee) + '/permits', { credentials: 'same-origin' }).then((x) => x.json());
+        if (r.ok && r.permits) all.push(...r.permits);
+      } catch (e) { /* commune en erreur */ }
+    }
+    state.permis = all;
+    commit(); render();
+    toast(all.length + ' permis synchronisés sur ' + insees.size + ' commune(s).', 'ok');
+  }
+
+  function permisPourBien(b) {
+    const permis = state.permis || [];
+    const siren = (b.proprietaire && b.proprietaire.siren) || '';
+    const adresseNorm = String((b.adresse || '')).toLowerCase().replace(/[^a-z0-9]/g, '');
+    return permis.filter((p) => {
+      if (siren && p.applicant_siren && String(p.applicant_siren) === siren) return true;
+      const wa = String((p.works_address || '')).toLowerCase().replace(/[^a-z0-9]/g, '');
+      return adresseNorm && wa && (wa.indexOf(adresseNorm.slice(0, 30)) > -1 || adresseNorm.indexOf(wa.slice(0, 30)) > -1);
+    });
+  }
+
+  function signauxVendeurs() {
+    const biens = robotBiens();
+    const signaux = [];
+    biens.forEach((b) => {
+      const prop = b.proprietaire || {};
+      if (b.dpe === 'F' || b.dpe === 'G') {
+        signaux.push({ bien: b, nature: 'Passoire thermique', explication: 'DPE classe ' + b.dpe + ' — interdiction progressive de location', source: 'ADEME', intensite: 'forte' });
+      }
+      if (b.dvfMutations && b.dvfMutations.length) {
+        const d = b.dvfMutations[0];
+        signaux.push({ bien: b, nature: 'Mutation récente', explication: 'Vente du ' + d.date + ' · ' + d.valeur + ' €', source: 'DVF', intensite: 'moyenne' });
+      }
+      if (b.confidence_owner != null && b.confidence_owner < 50 && prop.nom) {
+        signaux.push({ bien: b, nature: 'Propriétaire à confirmer', explication: 'Identification à confirmer (confiance ' + b.confidence_owner + ' %)', source: 'FPMU', intensite: 'faible' });
+      }
+      (permisPourBien(b) || []).slice(0, 3).forEach((p) => {
+        const nature = { demolition: 'Permis de démolition', construction: 'Permis de construire', extension: 'Extension', surelevation: 'Surélévation', reabilitation: 'Réhabilitation' }[p.family] || 'Autorisation d’urbanisme';
+        signaux.push({ bien: b, nature: nature, explication: (p.state || '') + ' · ' + (p.date || '') + ' · ' + (p.applicant || '') + (p.works_address ? ' · ' + p.works_address : ''), source: 'Aucadastre (urbanisme)', intensite: p.family === 'demolition' ? 'forte' : 'moyenne' });
+      });
+    });
+    return signaux;
+  }
+
+  function viewOpportunites() {
+    const ms = matchings().slice().sort((a, b) => b.score - a.score);
+    const recherches = (state.recherchesServeur || []).concat(state.recherches);
+    const rows = ms.map((m) => {
+      const rb = robotBien(m.bienId);
+      const rec = recherches.find((r) => r.id === m.rechercheId) || {};
+      const client = clientDeRecherche(rec);
+      const prio = niveauPriorite(m.score);
+      const statuts = Object.keys(ST_MATCHING).map((k) =>
+        '<button class="se-btn ghost sm' + (m.statut === k ? ' is-on' : '') + '" data-act="matching-statut" data-key="' + m.key + '" data-statut="' + k + '">' + ST_MATCHING[k] + '</button>').join('');
+      return '<div class="se-card" style="margin-bottom:12px">' +
+        '<div class="se-row" style="justify-content:space-between;align-items:flex-start">' +
+          '<div style="min-width:0"><b style="font-weight:600">' + esc((rb && rb.adresse) || 'Bien') + '</b>' +
+          '<div class="se-hint">' + esc((rb && rb.type) || '') + (rb && rb.ville ? ' · ' + esc(rb.ville) : '') + (rb && rb.surface_habitable_m2 != null ? ' · ' + rb.surface_habitable_m2 + ' m² hab.' : (rb && rb.contenance_cadastrale_m2 != null ? ' · parcelle ' + rb.contenance_cadastrale_m2 + ' m²' : '')) + '</div></div>' +
+          '<span class="se-badge ' + prio.cls + '" style="flex:0 0 auto">' + m.score + '% · ' + prio.label + '</span>' +
+        '</div>' +
+        '<div class="se-row" style="gap:12px;margin-top:10px">' +
+          '<div style="flex:1"><div class="se-kicker" style="font-size:9.5px">Client</div><a href="#/client/' + (client ? client.id : '') + '">' + (client ? esc(nomClient(client)) : '—') + '</a></div>' +
+          '<div style="flex:2"><div class="se-kicker" style="font-size:9.5px">Recherche</div><div class="se-hint">' + (rec.titre ? esc(rec.titre) : '—') + (rec.prixMax ? ' · budget ' + euro(rec.prixMax) : '') + (rec.surfaceMin ? ' · ≥ ' + rec.surfaceMin + ' m²' : '') + '</div></div>' +
+        '</div>' +
+        '<div class="se-hint" style="margin-top:8px;line-height:1.5">' + explicationMatching(m, rb || {}, rec) + '</div>' +
+        '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px">' + statuts + '</div>' +
+      '</div>';
+    }).join('');
+    const signaux = signauxVendeurs();
+    const signauxHtml = signaux.length
+      ? '<div class="se-list" style="margin-top:10px">' + signaux.map((s) => '<div class="se-list-item">' +
+          '<div style="flex:1;min-width:0">' +
+            '<div style="font-size:13.5px;font-weight:600">' + esc(s.nature) + ' <span class="se-badge ' + (s.intensite === 'forte' ? 'open' : 'muted') + '">' + s.intensite + '</span></div>' +
+            '<div class="se-hint">' + esc((s.bien.adresse) || 'Bien') + ' · ' + esc(s.explication) + '</div>' +
+          '</div>' +
+          '<a class="se-btn ghost sm" href="#/robot-bien/' + s.bien.id + '">Voir le bien</a>' +
+        '</div>').join('') + '</div>'
+      : '<p class="se-muted" style="margin-top:10px">Aucun signal vendeur détecté pour l’instant.</p>';
+    return head('Prospection', 'Signaux vendeurs', 'Événements et indices pouvant annoncer une vente. Un indice n’est jamais une certitude.', '') +
+      tabsRobot('robot-opportunites') +
+      '<div class="se-row" style="gap:8px;margin-bottom:12px;justify-content:flex-end"><button class="se-btn ghost sm" data-act="synchroniser-permis">Synchroniser les permis</button></div>' +
+      '<div class="se-card"><h3>' + signaux.length + ' signal(s) vendeur(s)</h3>' + signauxHtml + '</div>' +
+      '<div class="se-card" style="margin-top:16px"><h3>Opportunités clients</h3>' + (ms.length ? rows : '<p class="se-muted" style="margin-top:10px">Aucune correspondance acquéreur.</p>') + '</div>';
+  }
+
+  function verifTag(v) {
+    const s = String(v || '').toUpperCase();
+    if (s === 'VERIFIED') return '<span class="se-badge open">VERIFIED</span>';
+    if (s === 'GENERATED') return '<span class="se-badge warn">GENERATED</span>';
+    if (s === 'PUBLISHED') return '<span class="se-badge">PUBLISHED</span>';
+    if (s === 'INVALID') return '<span class="se-badge muted">INVALID</span>';
+    if (s === 'NOT_FOUND' || s === 'NOT FOUND') return '<span class="se-badge muted">À rechercher</span>';
+    return '<span class="se-badge muted">' + esc(v || 'À rechercher') + '</span>';
+  }
+
+  function categorieSociete(s) {
+    const d = String(s.denomination || '').toUpperCase();
+    const rules = [
+      { re: /SNCF|RATP|RTE|RESEAU|TRANSPORT|ENEDIS|GRTGAZ|RFF|SNCF RESEAU/, cat: 'Transport et infrastructures' },
+      { re: /ENERGIE|ELECTRI|GAZ DE|DISTRIBUTION/, cat: 'Énergie et réseaux' },
+      { re: /HLM|HABITAT|OPH|LOGEMENT|SEQENS|ICF|ESPACIL|VILOGIA|3F|IN.LI|IMMOBILIERE 3F/, cat: 'Bailleur social' },
+      { re: /PROMOTION|IMMOBILIER|BOUYGUES/, cat: 'Promoteur immobilier' },
+      { re: /FONCIER|AMENAGEMENT|EPA|EPF|SEM|GRAND PARIS/, cat: 'Aménageur / opérateur public' },
+      { re: /SCI|CIVILE IMMOBILIERE/, cat: 'Société immobilière (SCI)' },
+      { re: /DEPARTEMENT|COMMUNE|REGION|VILLE|ETAT|MINISTERE|AP-HP/, cat: 'Opérateur public' }
+    ];
+    for (const r of rules) if (r.re.test(d)) return { categorie: r.cat, justification: 'Dénomination (règle documentée)', source: 'SIRENE (dénomination)', confiance: 'moyenne' };
+    return { categorie: 'À qualifier', justification: 'Profil non déterminé par la dénomination', source: '—', confiance: 'faible' };
+  }
+
+  function scorePotentielSociete(s) {
+    const nb = s.nbParcelles || 0;
+    const perm = s.nbPermis || 0;
+    const cat = categorieSociete(s).categorie;
+    const patrimoine = nb >= 50000 ? 35 : nb >= 10000 ? 28 : nb >= 1000 ? 20 : nb >= 100 ? 12 : 5;
+    const activite = perm >= 5 ? 30 : perm >= 2 ? 22 : perm >= 1 ? 14 : 0;
+    const profil = /Promoteur|Foncière|Aménageur|Investisseur/.test(cat) ? 20 : /Bailleur|Immobilière/.test(cat) ? 12 : /Transport|Énergie|Public/.test(cat) ? 4 : 8;
+    const relationnel = Math.min(15, (s.dirigeants && s.dirigeants.length ? 10 : 0) + (s.contacts && s.contacts.length ? 5 : 0));
+    const parts = [
+      { label: 'Patrimoine', points: patrimoine, max: 35 },
+      { label: 'Activité urbanistique', points: activite, max: 30 },
+      { label: 'Profil immobilier', points: profil, max: 20 },
+      { label: 'Potentiel relationnel', points: relationnel, max: 15 }
+    ];
+    const total = parts.reduce((a, c) => a + c.max, 0);
+    const pts = parts.reduce((a, c) => a + c.points, 0);
+    return { score: Math.round(pts / total * 100), parts };
+  }
+
+  function viewPortefeuilleFoncier() {
+    const list = (state.portefeuilleFoncier || []).slice().sort((a, b) => scorePotentielSociete(b).score - scorePotentielSociete(a).score);
+    const rows = list.length
+      ? '<div class="se-list" style="margin-top:10px">' + list.map((s) => {
+          const cat = categorieSociete(s);
+          const sc = scorePotentielSociete(s);
+          return '<a class="se-rowlink" href="#/societe-fonciere/' + encodeURIComponent(s.siren) + '"><div style="flex:1;min-width:0">' +
+            '<div style="font-size:14px;font-weight:600">' + esc(s.denomination || '—') + ' <span class="se-hint">· ' + esc(cat.categorie) + '</span></div>' +
+            '<div class="se-hint">SIREN ' + esc(s.siren || '—') + ' · ' + (s.nbParcelles || 0) + ' parcelles · ' + (s.nbCommunes || 0) + ' communes · ' + (s.nbPermis || 0) + ' permis' + (s.asnieres ? ' · Asnières' : '') + '</div>' +
+          '</div><span class="se-score-badge" style="width:40px;height:40px;font-size:15px" title="' + esc(sc.parts.map((p) => p.label + ' : ' + p.points + '/' + p.max).join('\n')) + '">' + sc.score + '</span></a>';
+        }).join('') + '</div>'
+      : '<p class="se-muted" style="margin-top:10px">Aucune société enregistrée. Lancez le croisement FPMU × permis.</p>';
+    return head('Prospection', 'Portefeuille foncier', 'Sociétés cumulant patrimoine immobilier (FPMU) et activité urbanistique (permis).', '') +
+      tabsRobot('robot') +
+      '<div class="se-card"><h3>' + list.length + ' société(s) à patrimoine et activité urbanistique</h3>' + rows + '</div>';
+  }
+
+  function viewSocieteFonciere(r) {
+    const siren = decodeURIComponent(r.param || '');
+    const s = (state.portefeuilleFoncier || []).find((x) => x.siren === siren);
+    if (!s) return head('Prospection', 'Société', '', '') + tabsRobot('robot') + '<div class="se-card"><p class="se-muted">Société introuvable.</p></div>';
+    return head('Prospection', 'Société foncière', 'Dossier société.', '') +
+      tabsRobot('robot') +
+      '<div class="se-card">' +
+        '<div style="font-size:20px;font-weight:700">' + esc(s.denomination || '—') + '</div>' +
+        '<div class="se-hint" style="margin-top:4px">SIREN ' + esc(s.siren) + ' · source Aucadastre × FPMU (DGFiP)</div>' +
+      '</div>' +
+      '<div class="se-grid cols-4" style="margin-top:12px">' +
+        '<div class="se-card se-stat"><span class="se-kicker">Parcelles FPMU</span><span class="se-num">' + (s.nbParcelles || 0).toLocaleString('fr-FR') + '</span></div>' +
+        '<div class="se-card se-stat"><span class="se-kicker">Communes</span><span class="se-num">' + (s.nbCommunes || 0) + '</span></div>' +
+        '<div class="se-card se-stat"><span class="se-kicker">Permis</span><span class="se-num">' + (s.nbPermis || 0) + '</span></div>' +
+        '<div class="se-card se-stat"><span class="se-kicker">Asnières</span><span class="se-num">' + (s.asnieres ? 'Oui' : 'Non') + '</span></div>' +
+      '</div>' +
+      '<div class="se-card" style="margin-top:12px"><h3>Droits fonciers</h3><div class="se-chips" style="margin-top:8px">' + (s.droits || []).map((d) => '<span class="se-chip">' + esc(d) + '</span>').join('') + '</div></div>' +
+      '<div class="se-card" style="margin-top:12px"><h3>Communes de détention (' + (s.nbCommunes || 0) + ')</h3><p class="se-hint" style="margin-top:6px">' + esc((s.communes || []).slice(0, 40).join(', ')) + ((s.communes || []).length > 40 ? '…' : '') + '</p></div>' +
+      '<div class="se-row" style="gap:8px;margin-top:12px;flex-wrap:wrap">' +
+        '<button class="se-btn ghost" data-act="societe-enrichir" data-siren="' + esc(s.siren) + '">Rechercher les dirigeants (SIRENE)</button>' +
+        '<button class="se-btn ghost" data-act="societe-favori" data-siren="' + esc(s.siren) + '">' + (s.favori ? '★ Favori' : '☆ Favori') + '</button>' +
+        '<button class="se-btn ghost" data-act="societe-tache" data-siren="' + esc(s.siren) + '">Créer une tâche</button>' +
+      '</div>';
+  }
+
+  function viewProprietaires() {
+    const biens = robotBiens().filter((b) => b.proprietaire && b.proprietaire.nom);
+    const groupes = {};
+    biens.forEach((b) => {
+      const key = b.proprietaire.siren || b.proprietaire.nom;
+      groupes[key] = groupes[key] || { nom: b.proprietaire.nom, siren: b.proprietaire.siren || '', type: b.proprietaire.type || '', biens: [] };
+      groupes[key].biens.push(b);
+    });
+    const list = Object.values(groupes);
+    const rows = list.length
+      ? '<div class="se-list" style="margin-top:10px">' + list.map((g) => '<div class="se-list-item">' +
+          '<a class="se-rowlink" href="#/robot-proprietaire/' + encodeURIComponent(g.siren || g.nom) + '" style="flex:1;min-width:0">' +
+            '<div style="font-size:14px;font-weight:600">' + esc(g.nom) + (g.type === 'sci' ? ' · SCI' : g.type === 'societe' ? ' · Société' : ' · Particulier') + '</div>' +
+            '<div class="se-hint">SIREN ' + esc(g.siren || '—') + ' · ' + g.biens.length + ' bien(s) identifié(s)</div>' +
+          '</a>' +
+          '<a class="se-btn ghost sm" href="#/robot-radar">Voir les biens</a>' +
+        '</div>').join('') + '</div>'
+      : '<p class="se-muted" style="margin-top:10px">Aucun propriétaire identifié pour l’instant. Lancez une recherche DPE puis l’enrichissement automatique.</p>';
+    return head('Prospection', 'Propriétaires', 'Sociétés et personnes identifiées par le moteur, avec leur patrimoine.', '') +
+      tabsRobot('robot-proprietaires') +
+      '<div class="se-card"><h3>' + list.length + ' propriétaire(s) identifié(s)</h3>' + rows + '</div>';
+  }
+
+  function viewProprietaire(r) {
+    const key = decodeURIComponent(r.param || '');
+    const biens = robotBiens().filter((b) => b.proprietaire && (b.proprietaire.siren === key || b.proprietaire.nom === key));
+    if (!biens.length) return head('Prospection', 'Propriétaire', '', '') + tabsRobot('robot-proprietaires') + '<div class="se-card"><p class="se-muted">Propriétaire introuvable.</p></div>';
+    const g = biens[0].proprietaire;
+    const dirigeants = g.dirigeants || [];
+    const biensHtml = '<div class="se-list" style="margin-top:10px">' + biens.map((b) => {
+      const sc = scorePriorite(b);
+      const surf = b.surface_habitable_m2 != null ? b.surface_habitable_m2 + ' m²' : '—';
+      return '<a class="se-rowlink" href="#/robot-bien/' + b.id + '"><div style="flex:1;min-width:0">' +
+        '<div style="font-size:13.5px;font-weight:500">' + esc(b.adresse || 'Adresse inconnue') + '</div>' +
+        '<div class="se-hint">' + esc(typeRobot(b)) + ' · ' + surf + (b.dpe ? ' · DPE ' + esc(b.dpe) : '') + '</div>' +
+      '</div><div style="flex:0 0 auto;text-align:right">' +
+        '<span class="se-score-badge" style="width:36px;height:36px;font-size:15px">' + (sc.score != null ? sc.score : '—') + '</span>' +
+        '<div class="se-hint" style="margin-top:2px">ID ' + sc.scores.identification + ' · CT ' + sc.scores.coordonnees + ' · PV ' + sc.scores.potentiel + '</div>' +
+      '</div></a>';
+    }).join('') + '</div>';
+    return head('Prospection', 'Propriétaire', 'Patrimoine immobilier identifié.', '') +
+      tabsRobot('robot-proprietaires') +
+      '<div class="se-card">' +
+        '<div style="font-size:20px;font-weight:700">' + esc(g.nom) + '</div>' +
+        '<div class="se-hint" style="margin-top:4px">SIREN ' + esc(g.siren || '—') + ' · ' + (g.type === 'sci' ? 'SCI' : g.type === 'societe' ? 'Société' : 'Particulier') + '</div>' +
+        (dirigeants.length ? '<div class="se-hint" style="margin-top:4px">Dirigeants : ' + dirigeants.map((d) => esc(typeof d === 'string' ? d : (d.nom || d.name || ''))).filter(Boolean).join(', ') + '</div>' : '') +
+      '</div>' +
+      '<div class="se-card"><h3>Patrimoine identifié (' + biens.length + ')</h3>' + biensHtml + '</div>';
+  }
+
+  function viewRobotBien(r) {
+    const b = robotBien(r.param);
+    if (!b) return '<div class="se-card se-empty"><div class="se-empty-title">Bien introuvable</div><a class="se-btn" href="#/robot-radar">Retour au Radar</a></div>';
+    const tab = state.robotBienTab || 'immo';
+    const prop = b.proprietaire || {};
+    const ms = matchings().filter((m) => m.bienId === b.id);
+    const onglets = [['immo', 'Immobilier'], ['cadastre', 'Cadastre & géo'], ['proprietaire', 'Propriétaire'], ['societe', 'Société & dirigeants'], ['contacts', 'Coordonnées'], ['clients', 'Clients correspondants'], ['historique', 'Historique'], ['actions', 'Actions']];
+    const tabBar = '<div class="se-tabs" style="margin-bottom:14px">' + onglets.map(([k, label]) => '<button class="se-btn ghost sm' + (tab === k ? ' is-on' : '') + '" data-act="robot-bien-tab" data-tab="' + k + '">' + label + '</button>').join('') + '</div>';
+
+    const typeProp = prop.type === 'sci' ? 'SCI' : prop.type === 'societe' ? 'Société' : prop.type === 'personne' ? 'Personne physique' : '—';
+
+    let body = '';
+    if (tab === 'immo') {
+      body = '<div class="se-card"><h3>Informations immobilières</h3><div class="se-kv" style="margin-top:12px">' +
+        kv('Adresse', esc(b.adresse)) + kv('Ville', esc(b.ville || '—')) + kv('Code postal', esc(b.codePostal || '—')) +
+        kv('Type', esc(b.type || '—')) + kv('Surface habitable', b.surface_habitable_m2 != null ? b.surface_habitable_m2 + ' m²' : '—') + kv('Surface réf. DPE', b.surface_reference_dpe_m2 != null ? b.surface_reference_dpe_m2 + ' m²' : '—') + kv('Terrain', b.surface_terrain_m2 != null ? b.surface_terrain_m2 + ' m²' : '—') + kv('Contenance cadastrale', b.contenance_cadastrale_m2 != null ? b.contenance_cadastrale_m2 + ' m²' : '—') +
+        kv('Pièces', b.pieces || '—') + kv('Chambres', b.chambres || '—') + kv('DPE', b.dpe || '—') +
+        '</div></div>';
+    } else if (tab === 'cadastre') {
+      body = '<div class="se-card"><h3>Cadastre & géolocalisation</h3><div class="se-kv" style="margin-top:12px">' +
+        kv('Parcelle cadastrale', esc(b.parcelle || '—')) + kv('Coordonnées', b.coords ? b.coords[0].toFixed(5) + ', ' + b.coords[1].toFixed(5) : '—') +
+        kv('Date de détection', dFR(b.dateDetection)) + kv('Statut prospection', esc(b.statutProspection || 'nouveau')) + kv('Confiance géocodage', (b.confidence_geocoding != null ? b.confidence_geocoding + ' %' : '—')) + kv('Confiance propriétaire', (b.confidence_owner != null ? b.confidence_owner + ' %' : '—')) +
+        '</div></div>';
+    } else if (tab === 'proprietaire') {
+      body = '<div class="se-card"><h3>Propriétaire</h3><div class="se-kv" style="margin-top:12px">' +
+        kv('Nom', esc(prop.nom || 'Non identifié')) + kv('Type', typeProp) +
+        '</div>' + (prop.nom ? '' : '<p class="se-muted" style="margin-top:10px">Le propriétaire n’est pas encore identifié. Lancez l’enrichissement pour le rechercher.</p>') + '</div>';
+    } else if (tab === 'societe') {
+      body = '<div class="se-card"><h3>Société & dirigeants</h3><div class="se-kv" style="margin-top:12px">' +
+        kv('SIREN', esc(prop.siren || '—')) + kv('Dirigeants', (prop.dirigeants || []).join(', ') || '—') +
+        '</div>' + (typeProp === 'SCI' || typeProp === 'Société' ? '' : '<p class="se-muted" style="margin-top:10px">Ce bien est détenu par une personne physique (pas de société).</p>') + '</div>';
+    } else if (tab === 'contacts') {
+      body = '<div class="se-card"><h3>Coordonnées & vérifications</h3>' +
+        ((b.contacts || []).length
+          ? '<div class="se-list" style="margin-top:10px">' + b.contacts.map((ct) => '<div class="se-list-item"><div style="flex:1;min-width:0"><div style="font-size:13.5px">' + esc(ct.valeur) + '</div><div class="se-hint">' + (ct.type === 'email' ? 'Email' : 'Téléphone') + (ct.source ? ' · ' + esc(ct.source) : '') + '</div></div>' + verifTag(ct.verification) + '</div>').join('') + '</div>'
+          : '<p class="se-muted" style="margin-top:10px">Aucune coordonnée disponible.</p>') +
+        '<p class="se-hint" style="margin-top:10px">Distinction stricte : GENERATED = hypothèse, VERIFIED = vérifié.</p></div>';
+    } else if (tab === 'clients') {
+      body = '<div class="se-card"><h3>Clients correspondants</h3>' +
+        (ms.length ? '<div class="se-list" style="margin-top:10px">' + ms.map((m) => {
+          const rec = ((state.recherchesServeur || []).concat(state.recherches)).find((x) => x.id === m.rechercheId) || {};
+          const cli = clientDeRecherche(rec);
+          const prio = niveauPriorite(m.score);
+          return '<a class="se-rowlink" href="#/client/' + (cli ? cli.id : '') + '"><div style="flex:1;min-width:0"><div style="font-size:13.5px">' + (cli ? esc(nomClient(cli)) : '—') + '</div><div class="se-sub">' + (rec.titre ? esc(rec.titre) : 'Recherche') + ' · budget ' + (rec.prixMax ? euro(rec.prixMax) : '—') + '</div></div><span class="se-badge ' + prio.cls + '">' + m.score + '%</span></a>';
+        }).join('') + '</div>' : '<p class="se-muted" style="margin-top:10px">Aucun client ne correspond à ce bien.</p>') + '</div>';
+    } else if (tab === 'historique') {
+      const dvf = b.dvfMutations || [];
+      const dvfHtml = dvf.length
+        ? '<div class="se-list" style="margin-top:10px">' + dvf.map((m) => '<div class="se-list-item" style="align-items:flex-start">' +
+            '<div style="flex:1;min-width:0"><div style="font-size:13.5px;font-weight:500">' + esc(m.nature || 'Mutation') + ' · ' + esc(m.date || '') + '</div>' +
+            '<div class="se-hint">' + esc(m.valeur || '—') + ' € · ' + esc(m.typeLocal || '—') + (m.surface ? ' · ' + esc(m.surface) + ' m²' : '') + (m.pieces ? ' · ' + esc(m.pieces) + ' pièces' : '') + '</div></div>' +
+            '<span class="se-badge muted">DVF</span></div>').join('') + '</div>'
+        : '<p class="se-muted" style="margin-top:10px">Aucune mutation DVF chargée pour cette parcelle.</p>';
+      body = '<div class="se-card"><h3>Historique des recherches</h3><div class="se-list" style="margin-top:10px">' +
+        '<div class="se-list-item"><div style="flex:1"><div style="font-size:13.5px">Détection initiale</div><div class="se-hint">' + dFR(b.dateDetection) + '</div></div><span class="se-badge muted">' + (b.confidence_geocoding != null ? b.confidence_geocoding + '%' : '—') + ' confiance géo</span></div>' +
+        '</div></div>' +
+        '<div class="se-card" style="margin-top:16px"><h3>Mutations DVF</h3>' + dvfHtml +
+        '<button class="se-btn ghost sm" style="margin-top:10px" data-act="robot-dvf" data-id="' + b.id + '">Charger l’historique DVF</button></div>';
+    } else if (tab === 'actions') {
+      const statutBtns = '<div class="se-row" style="gap:6px;flex-wrap:wrap;margin-top:10px">' + STATUTS_PROSPECTION.map(([k, label]) =>
+        '<button class="se-btn ghost sm' + (b.statutProspection === k ? ' is-on' : '') + '" data-act="robot-statut" data-id="' + b.id + '" data-statut="' + k + '">' + label + '</button>').join('') + '</div>';
+      body = '<div class="se-card"><h3>Statut de prospection</h3>' + statutBtns + '</div>' +
+        '<div class="se-card" style="margin-top:16px"><h3>Actions commerciales</h3>' +
+        '<div class="se-row" style="gap:8px;flex-wrap:wrap;margin-top:10px">' +
+
+          '<button class="se-btn" data-act="robot-ajouter" data-json="' + esc(JSON.stringify({ nom: prop.nom || '', prenom: '', email: ((b.contacts || []).find((c) => c.type === 'email') || {}).valeur || '', tel: ((b.contacts || []).find((c) => c.type === 'tel') || {}).valeur || '', type: prop.type || 'personne', siren: prop.siren || '', dirigeants: prop.dirigeants || [], adresseBien: b.adresse, ville: b.ville || '', parcelle: b.parcelle || '', dpe: b.dpe || '' })) + '">Ajouter comme prospect vendeur</button>' +
+          '<button class="se-btn ghost" data-act="rechercher-telephones" data-id="' + b.id + '">Rechercher les téléphones (Exa)</button>' +
+          '<button class="se-btn ghost" data-act="robot-favori" data-id="' + b.id + '">' + (b.favori ? '★ Favori' : '☆ Favori') + '</button>' +
+          '<button class="se-btn ghost" data-act="robot-tache" data-id="' + b.id + '">Créer une tâche</button>' +
+          '<button class="se-btn ghost" data-act="robot-note" data-id="' + b.id + '">Ajouter une note</button>' +
+        '</div>' +
+        '<p class="se-hint" style="margin-top:12px">La qualification reste humaine : un bien détecté n’est pas automatiquement à vendre, et un contact GENERATED n’est pas VERIFIED.</p></div>';
+    }
+
+    return '<div class="se-fiche-head"><div style="flex:1"><div class="kicker" style="color:var(--color-taupe)">Bien détecté · ' + esc(b.statutProspection || 'nouveau') + '</div>' +
+      '<h1 class="display" style="font-size:28px;margin:4px 0 2px">' + esc(b.adresse) + '</h1>' +
+      '<div class="se-row" style="gap:8px">' + (b.type ? '<span class="se-pill">' + esc(b.type) + '</span>' : '') + (b.ville ? '<span class="se-pill">' + esc(b.ville) + '</span>' : '') + (b.proprietaire && b.proprietaire.nom ? '<span class="se-pill">' + typeProp + '</span>' : '') + '</div></div>' +
+      '<a class="se-btn ghost" href="#/robot-radar">← Radar</a></div>' +
+      tabBar + body;
+  }
+
+  function dpeKey(r) {
+    return String(r.adresse_ban || r.adresse_brut || r.adresse_complete_brut || r.numero_dpe || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  }
+
+  function classeBadge(c) {
+    const map = { A: '#1b3a32', B: '#2e6b4f', C: '#7da860', D: '#e5c94e', E: '#e8a33d', F: '#d97b34', G: '#c0392b' };
+    return '<span class="se-badge" style="background:' + (map[c] || '#999') + ';color:#fff">' + (c || '—') + '</span>';
+  }
+
+  function viewRobotDpe() {
+    const res = state.dpe || null;
+    const cls = state.dpeClasses || [];
+    const rows = (res && res.results) ? res.results : [];
+    const DPE_CLASSES = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
+    const chk = (c) => '<label class="se-chip" style="cursor:pointer"><input type="checkbox" name="classe" value="' + c + '"' + (cls.indexOf(c) > -1 ? ' checked' : '') + ' style="margin-right:5px"/>' + c + '</label>';
+    const groupes = {};
+    rows.forEach((r) => {
+      const k = dpeKey(r) || ('n' + Math.random());
+      groupes[k] = groupes[k] || { key: k, adresse: r.adresse_ban || 'Adresse inconnue', dpes: [] };
+      groupes[k].dpes.push(r);
+    });
+    const dedupes = Object.values(groupes);
+    const liste = dedupes.length
+      ? '<div class="se-list" style="margin-top:10px">' + dedupes.map((g) => {
+          const latest = g.dpes[0];
+          const historique = g.dpes.map((d) =>
+            '<div class="se-list-item" style="align-items:flex-start">' +
+              '<div style="flex:1;min-width:0">' +
+                '<div class="se-hint">' + esc(d.date_reception_dpe || '—') + ' · ' + esc(d.numero_dpe || '') + (d.annee_construction ? ' · ' + d.annee_construction : '') + '</div>' +
+                '<div class="se-hint">' + (d.conso_5_usages_par_m2_ep != null ? d.conso_5_usages_par_m2_ep + ' kWhEP/m²/an' : '') + (d.emission_ges_5_usages_par_m2 != null ? ' · ' + d.emission_ges_5_usages_par_m2 + ' kgCO₂/m²/an' : '') + '</div>' +
+              '</div>' +
+              '<div style="flex:0 0 auto">' + classeBadge(d.etiquette_dpe) + '</div>' +
+            '</div>').join('');
+          return '<div class="se-list-item" style="align-items:stretch;flex-direction:column;gap:6px">' +
+            '<div class="se-row" style="width:100%;justify-content:space-between;align-items:flex-start">' +
+              '<div style="flex:1;min-width:0">' +
+                '<div style="font-size:13.5px;font-weight:500">' + esc(g.adresse) + '</div>' +
+                '<div class="se-hint">' + esc(latest.type_batiment || '') + (latest.surface_habitable_logement ? ' · ' + latest.surface_habitable_logement + ' m²' : '') + (latest.annee_construction ? ' · ' + latest.annee_construction : '') + '</div>' +
+                '<div class="se-hint" style="margin-top:2px">' + (latest.conso_5_usages_par_m2_ep != null ? latest.conso_5_usages_par_m2_ep + ' kWhEP/m²/an' : '') + (latest.emission_ges_5_usages_par_m2 != null ? ' · ' + latest.emission_ges_5_usages_par_m2 + ' kgCO₂/m²/an' : '') + '</div>' +
+              '</div>' +
+              '<div style="flex:0 0 auto;text-align:right">' + classeBadge(latest.etiquette_dpe) + '<div class="se-hint" style="margin-top:2px">' + g.dpes.length + ' DPE</div><div style="margin-top:4px"><button class="se-btn ghost sm" data-act="dpe-fiche" data-key="' + esc(g.key || g.adresse) + '">Fiche</button></div></div>' +
+            '</div>' +
+            (g.dpes.length > 1 ? '<details style="width:100%"><summary style="cursor:pointer;font-size:12px;color:var(--color-taupe)">Historique des ' + g.dpes.length + ' diagnostics</summary><div class="se-list" style="margin-top:6px">' + historique + '</div></details>' : '') +
+          '</div>';
+        }).join('') + '</div>'
+      : '<p class="se-muted" style="margin-top:10px">Lancez une recherche pour interroger la base DPE de l’ADEME (données réelles).</p>';
+    return head('Prospection', 'Recherche DPE', 'Diagnostics de performance énergétique — source ADEME (données réelles).', '') +
+      tabsRobot('robot-dpe') +
+      '<div class="se-card" style="margin-bottom:16px">' +
+        '<h3>Recherche DPE</h3>' +
+        '<form data-form="dpe-search" style="margin-top:12px">' +
+          '<div class="se-row" style="gap:10px;align-items:flex-end;flex-wrap:wrap">' +
+            '<div class="se-field" style="flex:1;min-width:200px"><label>Adresse ou ville</label><input class="se-input" name="ville" placeholder="75011 Paris"/></div>' +
+            '<div class="se-field" style="width:150px"><label>Code postal</label><input class="se-input" name="code_postal" placeholder="75011"/></div>' +
+            '<div class="se-field" style="width:130px"><label>Section</label><input class="se-input" name="section" placeholder="EC"/></div>' +
+            '<div class="se-field" style="width:140px"><label>N° parcelle</label><input class="se-input" name="numero" placeholder="32"/></div>' +
+            '<button class="se-btn" type="button" data-act="dpe-search">Rechercher</button>' +
+            '<span class="se-hint" id="dpe-status"></span>' +
+          '</div>' +
+          '<details style="margin-top:14px">' +
+            '<summary style="cursor:pointer;font-size:13px;color:var(--color-taupe);user-select:none">Critères avancés</summary>' +
+            '<div class="se-form-grid" style="margin-top:12px;grid-template-columns:repeat(4,1fr)">' +
+              '<div class="se-field"><label>Date début (AAAA-MM-JJ)</label><input class="se-input" name="date_debut" placeholder="2024-01-01"/></div>' +
+              '<div class="se-field"><label>Date fin (AAAA-MM-JJ)</label><input class="se-input" name="date_fin" placeholder="2025-12-31"/></div>' +
+              '<div class="se-field"><label>Surface min (m²)</label><input class="se-input" name="surface_min" type="number" placeholder="40"/></div>' +
+              '<div class="se-field"><label>Surface max (m²)</label><input class="se-input" name="surface_max" type="number" placeholder="100"/></div>' +
+              '<div class="se-field"><label>Type de bien</label><select class="se-select" name="type"><option value="tout">Tous</option><option value="appartement">Appartement</option><option value="maison">Maison</option><option value="immeuble">Immeuble</option></select></div>' +
+              '<div class="se-field"><label>Tri</label><select class="se-select" name="tri"><option value="recent">DPE le plus récent</option><option value="ancien">DPE le plus ancien</option><option value="surface_desc">Surface décroissante</option><option value="surface_asc">Surface croissante</option><option value="classe_asc">Classe A→G</option><option value="classe_desc">Classe G→A</option></select></div>' +
+            '</div>' +
+            '<div style="margin-top:12px"><span class="se-hint">Classes énergétiques :</span></div>' +
+            '<div class="se-chips" style="margin-top:8px">' + DPE_CLASSES.map(chk).join('') + '<label class="se-chip" style="cursor:pointer"><input type="checkbox" data-dpe-toutes style="margin-right:5px"/> Toutes</label>' + '</div>' +
+            '<div class="se-row" style="gap:8px;margin-top:8px;flex-wrap:wrap">' +
+              '<button class="se-btn ghost sm" type="button" data-act="dpe-preset" data-preset="passoires">Passoires thermiques (F/G)</button>' +
+              '<button class="se-btn ghost sm" type="button" data-act="dpe-preset" data-preset="anciens">DPE anciens (&lt; 2023)</button>' +
+            '</div>' +
+          '</details>' +
+        '</form>' +
+      '</div>' +
+      (res ? '<div class="se-card"><div class="se-row" style="justify-content:space-between"><h3>Résultats</h3><span class="se-hint">' + res.count + ' affiché(s) · ' + res.total + ' DPE au total · source ADEME</span></div>' + liste + '</div>' : '');
+  }
+
+  function dpeFicheModal() {
+    const key = state.dpeFiche;
+    const rows = (state.dpe && state.dpe.results) || [];
+    const groupes = {};
+    rows.forEach((r) => { const k = dpeKey(r); groupes[k] = groupes[k] || { adresse: r.adresse_ban || 'Adresse inconnue', dpes: [] }; groupes[k].dpes.push(r); });
+    const g = groupes[key];
+    if (!g) return '<h3>Bien introuvable</h3><p class="se-muted">Relancez une recherche DPE.</p>';
+    const enrichi = state.dpeEnrichi || null;
+    const dpesHtml = g.dpes.map((d) =>
+      '<div class="se-list-item"><div style="flex:1;min-width:0"><div class="se-hint">' + esc(d.date_reception_dpe || '—') + ' · ' + esc(d.numero_dpe || '') + '</div><div class="se-hint">' + (d.conso_5_usages_par_m2_ep != null ? d.conso_5_usages_par_m2_ep + ' kWhEP/m²/an' : '') + (d.emission_ges_5_usages_par_m2 != null ? ' · ' + d.emission_ges_5_usages_par_m2 + ' kgCO₂/m²/an' : '') + '</div></div>' + classeBadge(d.etiquette_dpe) + '</div>').join('');
+    let enrichHtml = '';
+    if (enrichi) {
+      if (enrichi.error) {
+        enrichHtml = '<div class="se-note" style="margin-top:12px">' + esc(enrichi.error) + '</div>';
+      } else if (enrichi.message) {
+        enrichHtml = '<div class="se-note" style="margin-top:12px">' + esc(enrichi.message) + '</div>';
+      } else if (enrichi.dossiers && enrichi.dossiers.length) {
+        enrichHtml = '<div style="margin-top:12px"><div class="se-hint" style="font-weight:600">' + enrichi.dossiers.length + ' dossier(s) propriétaire</div>' + enrichi.dossiers.map((d) => {
+          const o = d.owner || {};
+          const cand = (o.candidates && o.candidates[0]) || {};
+          const parc = d.parcel || {};
+          return '<div class="se-list-item" style="align-items:flex-start"><div style="flex:1;min-width:0">' +
+            '<div class="se-hint">' + esc(parc.parcel_ref || 'Parcelle') + (parc.address ? ' · ' + esc(parc.address) : '') + '</div>' +
+            (cand.nom || cand.name || cand.raison_sociale ? '<div class="se-hint" style="margin-top:2px">Propriétaire : ' + esc(cand.nom || cand.name || cand.raison_sociale) + '</div>' : '') +
+            (cand.siren ? '<div class="se-hint">SIREN : ' + esc(cand.siren) + '</div>' : '') +
+            ((cand.dirigeants || []).length ? '<div class="se-hint">Dirigeants : ' + esc(cand.dirigeants.join(', ')) + '</div>' : '') +
+            '<div class="se-hint">Statut : ' + esc(o.status || 'UNKNOWN') + '</div>' +
+          '</div></div>';
+        }).join('') + '</div>';
+      }
+    }
+    return '<h3>Fiche DPE</h3><div style="font-size:15px;font-weight:600;margin-top:4px">' + esc(g.adresse) + '</div>' +
+      '<p class="se-muted">' + g.dpes.length + ' diagnostic(s) DPE · source ADEME</p>' +
+      '<div class="se-list" style="margin-top:12px">' + dpesHtml + '</div>' +
+      enrichHtml +
+      '<div class="se-modal-foot">' +
+        '<button class="se-btn ghost" type="button" data-act="modal-close">Fermer</button>' +
+      '</div>';
+  }
+
+  function viewMembres() {
+    const membres = state.clients.filter((c) => c.serveurStatut === 'accepte' || c.statut === 'actif' || c.statut === 'client');
+    return head('Le Club', 'Membres', membres.length + ' membre(s) validé(s).', '') +
+      '<div class="se-card" style="padding:8px 16px">' +
+        '<table class="se-table"><thead><tr><th>Membre</th><th>Email</th><th>Profil</th><th>Accès</th><th></th></tr></thead><tbody>' +
+        membres.map((c) => '<tr><td><b style="font-weight:500">' + esc(nomClient(c)) + '</b></td><td class="se-hint">' + esc(c.email) + '</td><td>' + (c.type === 'vendeur' ? 'Vendeur' : c.type === 'acquereur' ? 'Acquéreur' : 'Mixte') + '</td><td>' + badgeClient(c.statut) + '</td><td><a class="se-btn ghost sm" href="#/client/' + c.id + '">Ouvrir</a></td></tr>').join('') +
+        '</tbody></table>' +
+      '</div>';
+  }
+
+  function viewBiensClub() {
+    const list = state.membresBiens || [];
+    return head('Le Club', 'Biens des membres', list.length + ' bien(s) off-market déposé(s).', '') +
+      (list.length
+        ? '<div class="se-grid cols-2" style="gap:14px">' + list.map((b) => '<div class="se-card"><div style="font-weight:500">' + esc(b.titre || 'Bien') + '</div><div class="se-hint" style="margin-top:4px">' + esc(b.label || '') + ' · ' + euro(b.prix) + '</div><div style="margin-top:8px">' + badgeBien(b.statut) + '</div></div>').join('') + '</div>'
+        : '<div class="se-card se-empty"><div class="se-empty-title">Aucun bien membre</div><p>Les biens déposés par les membres apparaîtront ici.</p></div>');
+  }
+
+  function viewDemandeDetail(r) {
+    const d = state.demandes.find((x) => x.id === r.param || x.serverDemandeId === r.param);
+    if (!d) return '<div class="se-card se-empty"><div class="se-empty-title">Demande introuvable</div><a class="se-btn" href="#/demandes">Retour aux candidatures</a></div>';
+    const lead = (d.leadId ? state.clients.find((c) => c.serverId === d.leadId) : null) ||
+      state.clients.find((c) => d.email && c.email && c.email.toLowerCase() === d.email.toLowerCase()) || null;
+    const rec = lead ? (state.recherchesServeur || []).concat(state.recherches).find((x) => x.clientId === lead.id || x.clientId === lead.serverId) : null;
+    const b = d.bienId ? bien(d.bienId) : null;
+    const docs = lead ? (state.docsParLead[lead.serverId] || []) : [];
+    const n = d.statut === 'nouvelle';
+    const refusee = d.statut === 'refusee';
+    const bienMembre = (state.biensServeur || []).find((x) => d.email && x.email && x.email.toLowerCase() === d.email.toLowerCase());
+    const bloquee = !!(bienMembre && bienMembre.exclusivite && bienMembre.exclusivite.statut === 'alerte_doublon');
+    const statutBadge = refusee ? '<span class="se-badge muted">Refusée</span>' : d.statut === 'suspendue' ? '<span class="se-badge warn">Suspendue</span>' : n ? '<span class="se-badge warn">En attente</span>' : '<span class="se-badge open">Validée</span>';
+    const profil = lead ? lead.type : (d.role === 'vendeur' ? 'vendeur' : d.role === 'mixte' ? 'mixte' : 'acquereur');
+    const estAcheteur = profil !== 'vendeur';
+    const estVendeur = profil !== 'acquereur';
+    const typeBien = (lead && lead.typeBien) || (rec && rec.type) || '';
+    const secteurs = (lead && lead.quartiers && lead.quartiers.length) ? lead.quartiers : (rec && rec.quartiers) || [];
+    const budgetMax = (lead && lead.budgetMax) || (rec && rec.prixMax) || 0;
+    const surfaceMin = (lead && lead.surfaceMin) || (rec && rec.surfaceMin) || 0;
+    const surfaceMax = (lead && lead.surfaceMax) || (rec && rec.surfaceMax) || 0;
+    const piecesMin = (lead && lead.piecesMin) || (rec && rec.piecesMin) || 0;
+    const delai = (lead && lead.delai) || (rec && rec.delai) || '';
+    const apport = (lead && lead.apport) || (rec && rec.apport) || 0;
+    const financement = (lead && lead.financement) || (rec && rec.financement) || '';
+    const courtier = (lead && lead.courtier) || (rec && rec.courtier) || false;
+    const bienAVendre = (lead && lead.bienAVendre) || (rec && rec.bienAVendre) || false;
+    const villeClient = (lead && lead.ville) || '';
+    const profilLabel = profil === 'vendeur' ? 'Vendeur' : profil === 'mixte' ? 'Acheteur et vendeur' : 'Acheteur';
+    const NR = 'Non renseigné';
+    const photoSrc = (p) => (/^(data:|https?:|\/)/.test(p) ? p : 'assets/img/' + p);
+    const criteresCard = (d.type === 'candidature' && estAcheteur)
+      ? '<div class="se-card"><h3>Critères de recherche</h3><div class="se-kv" style="margin-top:10px">' +
+          kv('Type de bien', esc(typeBien || NR)) +
+          kv('Secteurs', secteurs.length ? secteurs.map(qLabel).join(', ') : NR) +
+          kv('Budget max', budgetMax ? euro(budgetMax) : NR) +
+          kv('Apport', apport ? euro(apport) : NR) +
+          kv('Surface', (surfaceMin || surfaceMax) ? (surfaceMin ? surfaceMin + ' m² min' : '') + (surfaceMax ? ' · ' + surfaceMax + ' m² max' : '') : NR) +
+          kv('Pièces min', piecesMin ? piecesMin + ' et +' : NR) +
+          kv('Délai', esc(delai || NR)) +
+          kv('Bien à vendre pour financer', bienAVendre ? 'Oui' : 'Non') +
+        '</div></div>'
+      : '';
+    const bienCard = (d.type === 'candidature' && estVendeur && bienMembre)
+      ? '<div class="se-card"><h3>Fiche du bien (vendeur)</h3><div class="se-kv" style="margin-top:10px">' +
+          kv('Type', esc(bienMembre.type || NR)) +
+          kv('Adresse', esc([bienMembre.adresse, bienMembre.codePostal, bienMembre.ville].filter(Boolean).join(' ') || NR)) +
+          kv('Étage', esc(bienMembre.etage || NR)) +
+          kv('Surface', bienMembre.surface ? bienMembre.surface + ' m²' : NR) +
+          kv('Pièces', bienMembre.pieces ? bienMembre.pieces : NR) +
+          kv('Chambres', bienMembre.chambres ? bienMembre.chambres : NR) +
+          kv('Salles de bain', bienMembre.sdb ? bienMembre.sdb : NR) +
+          kv('État', esc(bienMembre.etat || NR)) +
+          kv('DPE', esc(bienMembre.dpe || NR)) +
+          kv('GES', esc(bienMembre.ges || NR)) +
+          kv('Extérieur / annexes', ([bienMembre.exterieur].concat(bienMembre.annexes || [], bienMembre.atouts || [])).filter(Boolean).join(', ') || NR) +
+          kv('Prix', bienMembre.prix ? euro(bienMembre.prix) : NR) +
+          kv('Charges', bienMembre.charges ? euro(bienMembre.charges) + ' / an' : NR) +
+          kv('Description', esc(bienMembre.description || NR)) +
+          (bienMembre.photos && bienMembre.photos.length
+            ? '<div style="margin-top:10px"><div class="se-hint">Photos (' + bienMembre.photos.length + ')</div><div class="se-row" style="gap:6px;margin-top:6px;flex-wrap:wrap">' +
+                bienMembre.photos.slice(0, 12).map((p) => '<a href="' + esc(photoSrc(p)) + '" target="_blank" rel="noopener"><img src="' + esc(photoSrc(p)) + '" alt="" style="width:64px;height:64px;object-fit:cover;border-radius:8px;display:block"/></a>').join('') +
+              '</div></div>'
+            : '<p class="se-hint" style="margin-top:8px">Aucune photo.</p>') +
+        '</div></div>'
+      : '';
+    return '<div style="margin-bottom:16px"><a class="se-btn ghost sm" href="#/demandes">← Retour</a></div>' +
+      '<div class="se-fiche-head">' +
+        '<span class="se-avatar">' + esc((d.nom || '?').trim().charAt(0).toUpperCase()) + '</span>' +
+        '<div style="flex:1"><div class="kicker" style="color:var(--color-taupe)">' + esc((DEMANDE[d.type] || DEMANDE.info).label) + '</div>' +
+        '<h1 class="display" style="font-size:28px;margin:4px 0 6px">' + esc(d.nom || 'Demande') + '</h1>' +
+        '<div class="se-row" style="gap:8px">' + statutBadge + '<span class="se-hint">Reçue le ' + dFR(d.cree) + '</span></div></div>' +
+      '</div>' +
+      '<div class="se-split">' +
+        '<div class="se-grid" style="gap:18px">' +
+          '<div class="se-card"><h3>Coordonnées & financement</h3><div class="se-kv" style="margin-top:10px">' +
+            kv('Nom', esc(lead && lead.nom ? lead.nom : (d.nom || NR))) +
+            kv('Prénom', esc(lead && lead.prenom ? lead.prenom : NR)) +
+            kv('Email', esc(d.email || NR)) +
+            kv('Téléphone', esc(lead && lead.tel ? lead.tel : NR)) +
+            kv('Ville', esc(villeClient || NR)) +
+            kv('Profil', profilLabel) +
+            kv('Apport', apport ? euro(apport) : NR) +
+            kv('Financement', esc(financement || NR)) +
+            kv('Courtier', courtier ? 'Oui' : 'Non') +
+          '</div></div>' +
+          criteresCard +
+          bienCard +
+          (d.type !== 'candidature' ? '<div class="se-card"><h3>Message</h3><p class="se-muted" style="margin-top:8px">' + esc(d.message || '—') + '</p>' + (d.type === 'modification' && d.prix ? kv('Prix proposé', euro(d.prix)) : '') + '</div>' : '') +
+          (b ? '<div class="se-card"><h3>Bien concerné</h3><div class="se-kv" style="margin-top:10px">' + kv('Titre', esc(b.titre || '—')) + kv('Adresse', esc(b.adresse || '—')) + kv('Prix', euro(b.prix)) + (d.montant ? kv('Montant proposé', euro(d.montant)) : '') + kv('Statut', badgeBien(b.statut)) + '</div></div>' : '') +
+        '</div>' +
+        '<div class="se-grid" style="gap:18px">' +
+          '<div class="se-card"><h3>Documents</h3><div class="se-list" style="margin-top:8px">' +
+            ['identite', 'financement', 'bien'].map((t) => {
+              const doc = docs.find((x) => x.type === t);
+              return '<div class="se-list-item"><div style="flex:1;min-width:0"><div style="font-size:13px">' + esc(libelleDoc(t)) + '</div><div class="se-hint">' + (doc ? esc(doc.nom) : 'Non renseigné') + '</div></div>' + (doc ? '<a class="se-btn ghost sm" href="' + esc(doc.fichier) + '" target="_blank" rel="noopener">Voir</a>' : '<span class="se-hint">—</span>') + '</div>';
+            }).join('') +
+          '</div></div>' +
+          '<div class="se-card"><h3>Actions</h3>' +
+            (d.type === 'offre'
+              ? (n
+                  ? '<button class="se-btn soft block" data-act="offre-accepter" data-id="' + d.id + '">Accepter l’offre</button>' +
+                    '<button class="se-btn ghost block" style="margin-top:8px" data-act="offre-contre" data-id="' + d.id + '">Contre-offre</button>'
+                  : '<span class="se-hint">Offre traitée.</span>')
+              : ((n ? (bloquee
+                  ? '<div class="se-note" style="background:var(--color-alert-soft);color:var(--color-alert)">Résolvez l’alerte d’exclusivité de son bien avant de valider son compte.</div>'
+                  : '<button class="se-btn soft block" data-act="accepter-adhesion" data-id="' + d.id + '">Accepter l’adhésion</button>') : '') +
+                (n ? '<button class="se-btn ghost block" style="margin-top:8px" data-act="suspendre-adhesion" data-id="' + d.id + '">Suspendre l’adhésion</button>' : '') +
+                (n ? '<button class="se-btn danger ghost block" style="margin-top:8px" data-act="refuser-adhesion" data-id="' + d.id + '">Refuser</button>' : '') +
+                (refusee ? '<button class="se-btn ghost block" data-act="demande-relancer" data-id="' + d.id + '">Relancer la demande</button>' : ''))) +
+            (d.type === 'candidature' && !n && !refusee ? '<button class="se-btn ghost block" style="margin-top:8px" data-act="renvoyer-email" data-id="' + (d.serverDemandeId || '') + '">Renvoyer l’email d’accès</button>' : '') +
+            (d.__whatsapp ? '<a class="se-btn soft block" style="margin-top:8px" href="' + d.__whatsapp + '" target="_blank" rel="noopener">Envoyer WhatsApp</a>' : '') +
+          '</div>' +
+        '</div>' +
+      '</div>';
+  }
+
+  async function decisionDemande(id, decision, motif) {
+    const d = state.demandes.find((x) => x.id === id || x.serverDemandeId === id);
+    if (!d) return;
+    const serverId = d.serverDemandeId || d.id;
+    if (!d.serverDemandeId) {
+      toast('Ceci est une fiche de test, veuillez utiliser une vraie candidature.', 'warn');
+      return;
+    }
+    try {
+      const r = await fetch('/api/demandes/' + serverId + '/decision', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ decision: decision, motif: motif || '' }) });
+      const res = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(res.error || 'Erreur serveur');
+      d.statut = decision === 'valider' ? 'validee' : decision === 'suspendre' ? 'suspendue' : 'refusee';
+      if (decision === 'valider' && res.lien) d.__whatsapp = whatsappHref(res.tel, res.prenom, res.lien);
+      const tv = (state.tachesVerif || []).find((x) => x.demandeId === serverId && x.statut === 'en_attente');
+      if (tv) tv.statut = 'terminee';
+      commit();
+      if (decision === 'valider' && res.emailEnvoye === false) {
+        toast('Adhésion acceptée, mais l’email a échoué : ' + (res.emailErreur || 'erreur SMTP'), 'warn');
+      } else {
+        toast(decision === 'valider' ? 'Adhésion acceptée. Email envoyé et WhatsApp prêt.' : decision === 'suspendre' ? 'Adhésion suspendue avec succès.' : 'Demande refusée.', 'ok');
+      }
+    } catch (e) { toast('Action impossible : ' + (e.message || 'erreur'), 'warn'); }
+  }
+
+  function suspendreModal(id) {
+    return '<h3>Suspendre l’adhésion</h3><p class="se-muted">Indiquez un motif. Il sera enregistré dans la timeline du membre.</p>' +
+      '<form data-form="suspendre" data-id="' + id + '">' +
+        '<div class="se-field" style="margin-top:12px"><label>Motif</label><textarea class="se-textarea" name="motif" style="min-height:80px" placeholder="Ex : bien trouvé sur un autre site"></textarea></div>' +
+        '<div class="se-modal-foot"><button class="se-btn ghost" type="button" data-act="modal-close">Annuler</button><button class="se-btn" type="submit">Suspendre</button></div>' +
+      '</form>';
+  }
+
+  function viewRapprochements() {
+    const tousBiens = (state.biensServeur || []).concat(state.biens);
+    const recherches = (state.recherchesServeur || []).concat(state.recherches);
+    const matches = [];
+    recherches.forEach((r) => {
+      const c = client(r.clientId);
+      if (!c || c.type === 'vendeur') return;
+      tousBiens.filter((b) => b.statut !== 'vendu' && b.statut !== 'brouillon').forEach((b) => {
+        if (correspond(b, c)) {
+          const score = scoreBien(b, c);
+          if (score >= 40) matches.push({ bien: b, client: c, score: score });
+        }
+      });
+    });
+    matches.sort((a, b) => b.score - a.score);
+    const fort = matches.filter((m) => m.score >= 70).length;
+    return head('Intelligence', 'Rapprochements',
+      matches.length + ' correspondance(s) · ' + fort + ' forte(s) (≥ 70 %).',
+      '<a class="se-btn ghost sm" href="#/recherches">Recherche manuelle</a>') +
+      (matches.length ? '<div class="se-grid" style="gap:14px">' + matches.slice(0, 40).map((m) => {
+        const c = m.client, b = m.bien;
+        const tel = (c.tel || '').replace(/[^0-9]/g, '');
+        const texte = 'Bonjour ' + (c.prenom || '') + ', nous avons trouvé un bien qui correspond à votre recherche : ' + (b.titre || '') + ' — ' + euro(b.prix) + (b.adresse ? ' (' + b.adresse + ')' : '') + '. Souhaitez-vous le visiter ?';
+        const wa = tel ? 'https://wa.me/' + tel + '?text=' + encodeURIComponent(texte) : null;
+        const mailto = c.email ? 'mailto:' + c.email + '?subject=' + encodeURIComponent('Un bien pour vous : ' + (b.titre || '')) + '&body=' + encodeURIComponent(texte) : null;
+        return '<div class="se-card">' +
+          '<div class="se-row" style="justify-content:space-between;align-items:center">' +
+            '<span class="kicker" style="color:var(--color-taupe);margin:0">' + esc(nomClient(c)) + '</span>' +
+            scoreTag(m.score) +
+          '</div>' +
+          '<div style="margin-top:10px"><div style="font-weight:500">' + esc(b.titre || 'Bien') + '</div>' +
+          '<div class="se-hint">' + esc(b.adresse || b.ref || '') + ' · ' + euro(b.prix) + ' · ' + (b.surface || 0) + ' m² · ' + (b.pieces || 0) + ' p.</div></div>' +
+          '<div class="se-row" style="gap:8px;margin-top:12px">' +
+            '<a class="se-btn ghost sm" href="#/bien/' + b.id + '">Voir le bien</a>' +
+            (wa ? '<a class="se-btn soft sm" href="' + wa + '" target="_blank" rel="noopener">Proposer (WhatsApp)</a>' : '') +
+            (mailto ? '<a class="se-btn ghost sm" href="' + mailto + '">Proposer (Email)</a>' : '') +
+          '</div>' +
+        '</div>';
+      }).join('') + '</div>' : '<div class="se-card se-empty"><div class="se-empty-title">Aucun rapprochement</div><p>Les correspondances apparaîtront dès qu\'un client et un bien matchent.</p></div>');
+  }
+
+  function viewTracking() {
+    const enAttente = state.clients.filter((c) => c.serveurStatut === 'en_attente' || c.statut === 'prospect');
+    const suspendus = state.clients.filter((c) => c.serveurStatut === 'suspendu');
+    const relance = (c, motif) => {
+      const tel = (c.tel || '').replace(/[^0-9]/g, '');
+      const msg = 'Bonjour ' + (c.prenom || '') + ', ' + motif;
+      const wa = tel ? 'https://wa.me/' + tel + '?text=' + encodeURIComponent(msg) : null;
+      const mailto = c.email ? 'mailto:' + c.email + '?subject=' + encodeURIComponent('Votre candidature Seecret') + '&body=' + encodeURIComponent(msg) : null;
+      return (wa ? '<a class="se-btn soft sm" href="' + wa + '" target="_blank" rel="noopener">Relancer (WhatsApp)</a>' : '') +
+        (mailto ? '<a class="se-btn ghost sm" href="' + mailto + '">Relancer (Email)</a>' : '');
+    };
+    const row = (c, motif) => '<div class="se-list-item">' +
+      '<div style="flex:1;min-width:0"><div style="font-size:13.5px">' + esc(nomClient(c)) + '</div>' +
+      '<div class="se-hint">' + esc(c.email || '') + ' · ' + motif + '</div></div>' +
+      relance(c, motif) + '</div>';
+    return head('Intelligence', 'Tracking & relances', 'Les candidatures à relancer pour ne rien laisser de côté.', '') +
+      '<div class="se-grid cols-2" style="gap:18px;align-items:start">' +
+        '<div class="se-card"><h3>Dossiers incomplets ou en attente (' + enAttente.length + ')</h3>' +
+          (enAttente.length ? '<div class="se-list" style="margin-top:8px">' + enAttente.map((c) => row(c, 'votre dossier est incomplet : il manque des documents ou des photos. Souhaitez-vous de l\'aide pour finaliser ?')).join('') + '</div>' : '<p class="se-muted" style="margin-top:8px">Rien à relancer.</p>') +
+        '</div>' +
+        '<div class="se-card"><h3>Comptes suspendus (' + suspendus.length + ')</h3>' +
+          (suspendus.length ? '<div class="se-list" style="margin-top:8px">' + suspendus.map((c) => row(c, 'votre accès a été suspendu. Souhaitez-vous en discuter ?')).join('') + '</div>' : '<p class="se-muted" style="margin-top:8px">Aucun compte suspendu.</p>') +
+        '</div>' +
+      '</div>';
+  }
+
+  function offreContreModal(d) {
+    return '<h3>Contre-offre</h3><p class="se-muted">Proposez un contre-montant à ' + esc(d.nom || '') + '.</p>' +
+      '<form data-form="offre-contre" data-offre="' + (d.offreId || d.id) + '">' +
+        '<div class="se-field"><label>Contre-montant (€)</label><input class="se-input" name="contre" type="number" value="' + esc(d.montant || '') + '"/></div>' +
+        '<div class="se-modal-foot"><button class="se-btn ghost" type="button" data-act="modal-close">Annuler</button><button class="se-btn" type="submit">Envoyer la contre-offre</button></div>' +
+      '</form>';
+  }
+
+  /* --------------------------------- clients ------------------------------ */
+
+  function notifications() {
+    const out = [];
+    const traitees = state.notificationsTraitees || [];
+    (state.taches || []).filter((t) => !t.fait && t.echeance && new Date(t.echeance) < new Date()).forEach((t) => {
+      out.push({ id: 'tache-' + t.id, clientId: t.clientId || '', sujet: t.titre, actionAuto: 'Rappel programmé', actionHumaine: 'Relance à effectuer', date: t.echeance, priorite: 'haute', type: 'relance' });
+    });
+    state.demandes.filter((d) => d.statut === 'nouvelle').forEach((d) => {
+      out.push({ id: 'demande-' + d.id, clientId: d.clientId || '', sujet: 'Nouvelle demande d’adhésion', actionAuto: 'Dossier reçu', actionHumaine: 'Traiter la demande', date: d.cree || new Date().toISOString(), priorite: 'haute', type: 'demande' });
+    });
+    state.clients.filter((c) => c.serveurStatut === 'suspendu').forEach((c) => {
+      out.push({ id: 'suspendu-' + c.id, clientId: c.id, sujet: 'Adhésion suspendue', actionAuto: 'Suspension enregistrée', actionHumaine: 'Régularisation à suivre', date: new Date().toISOString(), priorite: 'moyenne', type: 'adhesion' });
+    });
+    return out.filter((n) => traitees.indexOf(n.id) === -1);
+  }
+
+  function viewNotifications() {
+    const list = notifications();
+    const anciennete = (iso) => { const j = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000); return j < 1 ? 'Aujourd’hui' : 'Il y a ' + j + ' jour' + (j > 1 ? 's' : ''); };
+    const carte = (n) => {
+      const c = n.clientId ? client(n.clientId) : null;
+      const tel = c ? String(c.tel || '').replace(/[^0-9]/g, '') : '';
+      return '<div class="se-list-item" style="align-items:flex-start">' +
+        '<div style="flex:1;min-width:0">' +
+          '<div class="se-kicker" style="font-size:9.5px">' + esc(n.type.toUpperCase()) + '</div>' +
+          '<div style="font-size:13.5px;font-weight:500">' + esc(n.sujet) + '</div>' +
+          '<div class="se-hint">' + esc(n.actionAuto) + ' → ' + esc(n.actionHumaine) + '</div>' +
+          '<div class="se-hint">' + anciennete(n.date) + (c ? ' · ' + esc(nomClient(c)) : '') + '</div>' +
+        '</div>' +
+        '<div style="flex:0 0 auto;display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end">' +
+          (tel ? '<button class="se-btn ghost sm" data-act="notification-whatsapp" data-id="' + n.id + '">WhatsApp</button>' : '') +
+          (c ? '<a class="se-btn ghost sm" href="#/client/' + c.id + '">Fiche</a>' : '') +
+          '<button class="se-btn ghost sm" data-act="notification-traiter" data-id="' + n.id + '">Traité</button>' +
+        '</div>' +
+      '</div>';
+    };
+    return head('Intelligence', 'Notifications', list.length + ' action(s) humaine(s) à effectuer.', '') +
+      (list.length ? '<div class="se-card"><div class="se-list">' + list.map(carte).join('') + '</div></div>' : '<div class="se-card"><p class="se-muted">Aucune action en attente. Tout est à jour.</p></div>');
+  }
+
+  const PIPELINE_COLS = [
+    ['a_contacter', 'À contacter'], ['contacte', 'Contacté'], ['a_relancer', 'À relancer'], ['converti', 'Converti'], ['ecarte', 'Écarté']
+  ];
+
+  function whatsappMessage(c) {
+    return 'Bonjour ' + (c.prenom || '') + ',\n\nJe me permets de vous contacter au sujet de votre bien situé ' + (c.adresseBien || c.ville || 'dans votre secteur') + '.\n\nJe souhaiterais échanger avec vous afin de savoir si vous envisagez une évolution de votre situation immobilière.\n\nSeriez-vous disponible pour un court échange ?\n\nBien cordialement,\nGabriel Taieb\nSeecret';
+  }
+
+  function whatsappModal(c) {
+    const tel = String(c.tel || '').replace(/[^0-9]/g, '');
+    return '<h3>Envoyer par WhatsApp</h3><p class="se-muted">' + esc(nomClient(c)) + ' · ' + esc(c.tel || 'numéro indisponible') + '</p>' +
+      '<div class="se-field" style="margin-top:12px"><label>Message (modifiable)</label><textarea class="se-textarea" id="wa-msg" style="min-height:170px">' + esc(whatsappMessage(c)) + '</textarea></div>' +
+      '<div class="se-modal-foot">' +
+        '<button class="se-btn ghost" type="button" data-act="modal-close">Annuler</button>' +
+        (tel ? '<button class="se-btn" data-act="whatsapp-ouvrir" data-tel="' + tel + '">Ouvrir WhatsApp</button>' : '<button class="se-btn" disabled>Numéro indisponible</button>') +
+      '</div>' +
+      '<p class="se-hint" style="margin-top:10px">Aucun envoi n’est enregistré tant que vous n’avez pas confirmé le contact.</p>';
+  }
+
+  function viewPipeline() {
+    const leads = state.clients.filter((c) => c.type === 'vendeur' || c.projet === 'prospect' || c.source === 'Immo Data Robot' || c.type === 'societe' || c.type === 'sci' || c.type === 'personne');
+    const parColonne = (k) => leads.filter((c) => (c.pipeline || 'a_contacter') === k);
+    const typeLead = (c) => c.type === 'sci' ? 'SCI' : c.type === 'societe' ? 'Société' : c.type === 'personne' ? 'Particulier' : c.type === 'vendeur' ? 'Vendeur' : c.type === 'acquereur' ? 'Acquéreur' : 'Lead';
+    const carte = (c) => {
+      const tel = String(c.tel || '').replace(/[^0-9]/g, '');
+      return '<div class="se-pipe-card">' +
+        '<div class="se-pipe-nom">' + esc(nomClient(c)) + '</div>' +
+        '<div class="se-hint">' + typeLead(c) + (c.siren ? ' · SIREN ' + esc(c.siren) : '') + '</div>' +
+        (c.adresseBien ? '<div class="se-hint">' + esc(c.adresseBien) + '</div>' : (c.ville ? '<div class="se-hint">' + esc(c.ville) + '</div>' : '')) +
+        (c.tel || c.email ? '<div class="se-hint">' + esc(c.tel || '') + (c.tel && c.email ? ' · ' : '') + esc(c.email || '') + '</div>' : '<div class="se-hint muted">Aucun contact</div>') +
+        '<div class="se-pipe-actions">' +
+          (tel ? '<button class="se-btn ghost sm" data-act="whatsapp-preview" data-id="' + c.id + '">WhatsApp</button>' : '') +
+          '<a class="se-btn ghost sm" href="#/client/' + c.id + '">Fiche</a>' +
+          '<select class="se-select" style="width:auto" data-act="pipeline-deplacer" data-id="' + c.id + '">' + PIPELINE_COLS.map(([k, l]) => '<option value="' + k + '"' + ((c.pipeline || 'a_contacter') === k ? ' selected' : '') + '>' + l + '</option>').join('') + '</select>' +
+        '</div>' +
+      '</div>';
+    };
+    return head('Prospection', 'Pipeline de relance', leads.length + ' lead(s) dans le pipeline de prospection.', '<a class="se-btn ghost sm" href="#/clients">Liste Leads</a>') +
+      '<div class="se-pipe">' + PIPELINE_COLS.map(([k, label]) => {
+        const items = parColonne(k);
+        return '<div class="se-pipe-col"><div class="se-pipe-col-head">' + label + ' <span class="se-badge muted">' + items.length + '</span></div>' +
+          (items.length ? items.map(carte).join('') : '<p class="se-muted" style="font-size:12px;padding:10px">Aucun lead</p>') +
+        '</div>';
+      }).join('') + '</div>';
+  }
+
+  function viewClients() {
+    const q = (state.filtres.q || '').toLowerCase();
+    const type = state.filtres.typeClient || '';
+    const leadType = state.filtres.leadType || 'plateforme';
+    const isPlateforme = (c) => !!c.serverId;
+    const list = state.clients.filter((c) => {
+      if (leadType === 'plateforme' && !isPlateforme(c)) return false;
+      if (leadType === 'manuel' && isPlateforme(c)) return false;
+      if (type && c.type !== type) return false;
+      if (q && (nomClient(c) + ' ' + c.email + ' ' + (c.tags || []).join(' ')).toLowerCase().indexOf(q) === -1) return false;
+      return true;
+    });
+    const count = (lt) => state.clients.filter((c) => lt === 'plateforme' ? isPlateforme(c) : !isPlateforme(c)).length;
+
+    return head('Prospection', 'Leads',
+      list.length + ' lead(s) · ' + count('plateforme') + ' plateforme · ' + count('manuel') + ' manuel(s).',
+      '<a class="se-btn ghost sm" href="#/pipeline">Pipeline de relance</a><button class="se-btn ghost sm" data-act="client-nouveau">' + ICONS.plus + ' Nouveau lead</button>') +
+      '<div class="se-tabs" style="margin-bottom:18px">' +
+        '<a href="#" data-act="filtre" data-id="leadType:plateforme" class="' + (leadType === 'plateforme' ? 'active' : '') + '">Leads Plateforme<span>' + count('plateforme') + '</span></a>' +
+        '<a href="#" data-act="filtre" data-id="leadType:manuel" class="' + (leadType === 'manuel' ? 'active' : '') + '">Leads Manuels<span>' + count('manuel') + '</span></a>' +
+      '</div>' +
+      '<div class="se-card pad-sm" style="margin-bottom:18px"><div class="se-filters">' +
+        '<select class="se-select" data-filter="typeClient"><option value="">Tous</option>' +
+          '<option value="acquereur"' + (type === 'acquereur' ? ' selected' : '') + '>Acquéreurs</option>' +
+          '<option value="vendeur"' + (type === 'vendeur' ? ' selected' : '') + '>Vendeurs</option>' +
+          '<option value="mixte"' + (type === 'mixte' ? ' selected' : '') + '>Acheteurs-vendeurs</option>' +
+        '</select>' +
+        '<span class="se-hint">' + list.length + ' résultat(s)</span>' +
+      '</div></div>' +
+      '<div class="se-card" style="padding:8px 16px">' +
+        '<table class="se-table"><thead><tr><th>Client</th><th>Type</th><th>Budget / critères</th><th>Statut</th><th>Agent</th><th></th></tr></thead><tbody>' +
+        list.map((c) => '<tr>' +
+          '<td><a href="#/client/' + c.id + '" style="color:inherit;text-decoration:none"><b style="font-weight:500">' + esc(nomClient(c)) + '</b><div class="se-hint">' + esc(c.email) + '</div></a></td>' +
+          '<td>' + (c.type === 'acquereur' ? 'Acquéreur' : c.type === 'vendeur' ? 'Vendeur' : 'Les deux') + '</td>' +
+          '<td>' + (c.type === 'vendeur' ? '<span class="se-hint">propriétaire</span>' : euro(c.budgetMin) + ' – ' + euro(c.budgetMax) + '<div class="se-hint">' + c.piecesMin + '+ pièces · ' + c.surfaceMin + '+ m² · ' + (c.quartiers || []).map(qLabel).join(', ') + '</div>') + '</td>' +
+          '<td>' + badgeClient(c.statut) + '</td>' +
+          '<td class="se-hint">' + esc(c.agent || '') + '</td>' +
+          '<td><a class="se-btn ghost sm" href="#/client/' + c.id + '">Ouvrir</a></td>' +
+        '</tr>').join('') +
+        '</tbody></table>' +
+      '</div>';
+  }
+
+  function carteOpportunitesRadar(c) {
+    if (!c || c.type === 'vendeur') return '';
+    const ms = matchings().filter((m) => m.clientId === c.id).sort((a, b) => b.score - a.score);
+    return '<div class="se-card"><h3>Opportunités Radar</h3>' +
+      (ms.length
+        ? '<div class="se-list" style="margin-top:8px">' + ms.slice(0, 8).map((m) => {
+            const rb = robotBien(m.bienId);
+            const prio = niveauPriorite(m.score);
+            return '<a class="se-rowlink" href="#/robot-opportunites">' +
+              '<div style="flex:1;min-width:0"><div style="font-size:13.5px">' + esc((rb && rb.adresse) || 'Bien') + '</div>' +
+              '<div class="se-sub">' + (rb ? esc(rb.type || '') + ' · ' + (rb.surface_habitable_m2 != null ? rb.surface_habitable_m2 + ' m²' : (rb.contenance_cadastrale_m2 != null ? rb.contenance_cadastrale_m2 + ' m² parcelle' : '—')) : '') + ' · ' + (ST_MATCHING[m.statut] || m.statut) + '</div></div>' +
+              '<span class="se-badge ' + prio.cls + '">' + m.score + '%</span></a>';
+          }).join('') + '</div>'
+        : '<p class="se-muted" style="margin-top:8px">Aucune opportunité Radar pour ce client. Le Robot croise automatiquement les biens détectés et ses recherches.</p>') +
+      '</div>';
+  }
+
+  function viewClient(r) {
+    const c = client(r.param);
+    if (!c) return '<div class="se-card se-empty"><div class="se-empty-title">Client introuvable</div><a class="se-btn" href="#/clients">Retour</a></div>';
+
+    const recherches = ((state.recherchesServeur || []).concat(state.recherches)).filter((x) => x.clientId === c.id);
+    const compat = c.type !== 'vendeur' ? biensCompatibles(c, 30) : [];
+    const demandes = state.demandes.filter((d) => d.clientId === c.id);
+    const visites = state.visites.filter((v) => v.clientId === c.id);
+    const offres = state.offres.filter((o) => o.clientId === c.id);
+    const biensPossedes = ((state.biensServeur || []).concat(state.biens)).filter((b) => b.proprietaireId === c.id || b.leadId === c.serverId);
+
+    return '<div class="se-fiche-head">' +
+        '<span class="se-avatar">' + esc((c.prenom.charAt(0) + c.nom.charAt(0)).toUpperCase()) + '</span>' +
+        '<div style="flex:1"><div class="kicker" style="color:var(--color-taupe)">' + (c.type === 'acquereur' ? 'Acquéreur' : c.type === 'vendeur' ? 'Vendeur' : 'Acquéreur & vendeur') + ' · ' + esc(c.source) + '</div>' +
+        '<h1 class="display" style="font-size:30px;margin:4px 0 2px">' + esc(nomClient(c)) + '</h1>' +
+        '<div class="se-row" style="gap:8px">' + badgeClient(c.statut) + (c.tags || []).map((t) => '<span class="se-pill">' + esc(t) + '</span>').join('') + '</div></div>' +
+        '<div class="se-actions">' +
+          ((biensPossedes.some((x) => x.validation === 'en_attente')) ? '<button class="se-btn soft" data-act="bien-valider" data-id="' + biensPossedes.find((x) => x.validation === 'en_attente').id + '">Valider ce bien</button>' : '') +
+          (biensPossedes.length ? '<a class="se-btn ghost" href="#/bien/' + biensPossedes[0].id + '">Voir son Bien</a>' : '') +
+          (recherches.length ? '<a class="se-btn ghost" href="#/recherche/' + recherches[0].id + '">Voir sa Recherche</a>' : '') +
+          '<button class="se-btn ghost" data-act="client-editer" data-id="' + c.id + '">Modifier</button>' +
+          '<button class="se-btn ghost" data-act="recherche-nouvelle" data-id="' + c.id + '">Nouvelle recherche</button>' +
+          '<button class="se-btn" data-act="visite-nouvelle" data-id="' + c.id + '">Planifier une visite</button>' +
+        '</div>' +
+      '</div>' +
+
+      '<div class="se-split">' +
+        '<div class="se-grid" style="gap:18px">' +
+          '<div class="se-card"><h3>Coordonnées</h3><div class="se-kv" style="margin-top:12px">' +
+            kv('Email', esc(c.email)) + kv('Téléphone', esc(c.tel)) + kv('Prénom', esc(c.prenom || '—')) +
+            kv('Financement', esc(c.financement || '—')) + kv('Apport', c.apport ? euro(c.apport) : '—') + kv('Courtier', c.courtier ? 'Oui' : 'Non') +
+            kv('Source', esc(c.source)) + kv('Agent', esc(c.agent || '—')) +
+            kv('Budget', c.type === 'vendeur' ? '—' : euro(c.budgetMin) + ' – ' + euro(c.budgetMax)) +
+            kv('Secteurs', (c.quartiers || []).map(qLabel).join(', ') || '—') +
+            kv('Critères', c.type === 'vendeur' ? '—' : (c.piecesMin || 0) + '+ pièces · ' + (c.surfaceMin || 0) + '+ m² · ' + (c.typeBien || 'tout')) +
+            kv('Créé le', dFR(c.cree)) +
+          '</div>' + (c.notes ? '<div class="se-note" style="margin-top:14px">' + esc(c.notes) + '</div>' : '') + '</div>' +
+
+          carteOpportunitesRadar(c) +
+
+          (recherches.length ? '<div class="se-card"><h3>Recherches</h3><div class="se-list" style="margin-top:8px">' + recherches.map((x) => {
+            const n = biensCompatibles(x, 50).length;
+            return '<a class="se-rowlink" href="#/recherche/' + x.id + '"><div style="flex:1"><div style="font-size:14px">' + esc(x.titre) + '</div>' +
+              '<div class="se-sub">≤ ' + euro(x.prixMax) + ' · ' + x.piecesMin + '+ pièces · ' + (x.quartiers || []).map(qLabel).join(', ') + '</div></div>' +
+              '<span class="se-badge ' + (n ? 'open' : 'muted') + '">' + n + ' bien(s)</span></a>';
+          }).join('') + '</div></div>' : '') +
+
+          (c.type !== 'vendeur' ? '<div class="se-card"><h3>Biens compatibles</h3>' +
+            (compat.length ? '<div class="se-list" style="margin-top:8px">' + compat.slice(0, 5).map((x) => '<a class="se-rowlink" href="#/bien/' + x.bien.id + '">' +
+              '<img class="se-thumb" src="' + photo(x.bien) + '" alt="" style="width:40px;height:40px;flex:0 0 40px"/>' +
+              '<div style="flex:1;min-width:0"><div style="font-size:13.5px">' + esc(x.bien.titre) + '</div><div class="se-sub">' + esc(x.bien.ref) + ' · ' + euro(x.bien.prix) + '</div></div>' +
+              scoreTag(x.score) + '</a>').join('') + '</div>' : '<p class="se-muted" style="margin-top:8px">Aucun bien ne correspond pour l’instant.</p>') +
+            '</div>' : '') +
+        '</div>' +
+
+        '<div class="se-grid" style="gap:18px">' +
+          (biensPossedes.length ? '<div class="se-card"><h3>Biens au portefeuille</h3><div class="se-list" style="margin-top:8px">' + biensPossedes.map((b) => '<a class="se-rowlink" href="#/bien/' + b.id + '"><div style="flex:1"><div style="font-size:13.5px">' + esc(b.titre) + '</div><div class="se-sub">' + esc(b.ref) + ' · ' + euro(b.prix) + '</div></div>' + badgeBien(b.statut) + '</a>').join('') + '</div></div>' : '') +
+          '<div class="se-card"><h3>Activité</h3><div class="se-timeline" style="margin-top:12px">' +
+            (visites.length ? visites.map((v) => '<div class="se-timeline-item">Visite ' + esc(bien(v.bienId) ? bien(v.bienId).titre : '') + '<span>' + dFR(v.date) + ' · ' + v.heure + ' · ' + statutVisite(v.statut) + '</span></div>').join('') : '') +
+            (demandes.length ? demandes.map((d) => '<div class="se-timeline-item">' + esc((DEMANDE[d.type] || DEMANDE.info).label) + '<span>' + ilYa(d.cree) + '</span></div>').join('') : '') +
+            (offres.length ? offres.map((o) => '<div class="se-timeline-item">Offre ' + euro(o.montant) + '<span>' + dFR(o.cree) + ' · ' + statutOffre(o.statut) + '</span></div>').join('') : '') +
+            (!visites.length && !demandes.length && !offres.length ? '<p class="se-muted">Aucune activité.</p>' : '') +
+          '</div></div>' +
+          (c.serverId ? '<div class="se-card"><h3>Accès & documents du membre</h3>' +
+            '<div class="se-row" style="justify-content:space-between;margin-top:10px"><span class="se-hint">Accès</span>' +
+              (c.serveurStatut === 'accepte' ? '<span class="se-badge open">Validé</span>' : '<span class="se-badge warn">En attente</span>') + '</div>' +
+            (c.serveurStatut !== 'accepte'
+              ? '<button class="se-btn block" style="margin-top:10px" data-act="lead-valider" data-id="' + c.serverId + '">Valider l’accès</button>'
+              : '') +
+            (c.bienInfo ? '<div class="se-hint" style="margin-top:10px">' + esc(c.bienInfo.titre || 'Bien du membre') +
+              (c.bienInfo.exterieur && c.bienInfo.exterieur !== 'Aucun' ? ' · ' + esc(c.bienInfo.exterieur) + (c.bienInfo.surfaceExterieur ? ' ' + c.bienInfo.surfaceExterieur + ' m²' : '') : '') +
+              ' · ' + c.bienInfo.photos + ' photo(s)</div>' : '') +
+            '<div class="se-list" style="margin-top:12px">' +
+              ((state.docsParLead[c.serverId] || []).length
+                ? (state.docsParLead[c.serverId] || []).map((d) => '<div class="se-list-item">' +
+                    '<div style="flex:1;min-width:0"><div style="font-size:13.5px">' + esc(libelleDoc(d.type)) + '</div>' +
+                    '<div class="se-hint" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(d.nom) + '</div></div>' +
+                    (d.statut === 'valide' ? '<span class="se-badge open">Validé</span>' : '<button class="se-btn ghost sm" data-act="doc-valider" data-id="' + d.id + '">Valider la pièce</button>') +
+                    '<a class="se-btn ghost sm" href="' + esc(d.fichier) + '" target="_blank" rel="noopener">Voir</a>' +
+                  '</div>').join('')
+                : '<p class="se-muted" style="margin:8px 0 0">Aucun document reçu pour l’instant.</p>') +
+            '</div></div>' : '') +
+          '<div class="se-card"><h3>Message</h3><button class="se-btn ghost block" style="margin-top:10px" data-act="message-ouvrir" data-id="' + c.id + '">Ouvrir la conversation</button>' +
+          '<a class="se-btn soft block" style="margin-top:8px" href="tel:' + esc(c.tel) + '">Appeler ' + esc(c.tel) + '</a></div>' +
+        '</div>' +
+      '</div>';
+  }
+
+  function kv(k, v) { return '<div><dt>' + k + '</dt><dd>' + v + '</dd></div>'; }
+
+  /* ---------------------------------- biens ------------------------------- */
+
+  function viewBiens() {
+    const q = (state.filtres.q || '').toLowerCase();
+    const st = state.filtres.statutBien || '';
+    const list = (state.biensServeur || []).concat(state.biens).filter((b) => {
+      if (st && b.statut !== st) return false;
+      if (q && (b.titre + ' ' + b.ref + ' ' + qLabel(b.quartier)).toLowerCase().indexOf(q) === -1) return false;
+      return true;
+    });
+
+    return head('Portefeuille', 'Biens',
+      list.length + ' bien(s) · ' + euro(list.reduce((n, b) => n + b.prix, 0)) + ' de valeur de présentation.',
+      '<button class="se-btn" data-act="bien-nouveau">' + ICONS.plus + ' Nouveau bien</button>') +
+      '<div class="se-card pad-sm" style="margin-bottom:18px"><div class="se-filters">' +
+        '<select class="se-select" data-filter="statutBien"><option value="">Tous les statuts</option>' +
+          Object.keys(ST_BIEN).map((k) => '<option value="' + k + '"' + (st === k ? ' selected' : '') + '>' + ST_BIEN[k].label + '</option>').join('') +
+        '</select><span class="se-hint">' + list.length + ' résultat(s)</span>' +
+      '</div></div>' +
+      '<div class="se-bien-grid">' + list.map((b) => '<a class="se-card se-bien" href="#/bien/' + b.id + '">' +
+        '<div class="se-bien-photo">' + (photo(b) ? '<img src="' + photo(b) + '" alt=""/>' : '') + badgeBien(b.statut) + '</div>' +
+        '<div class="se-bien-body"><span class="se-sub">' + esc(b.ref) + ' · ' + esc(b.type) + '</span>' +
+        '<h3>' + esc(b.titre) + '</h3><span class="se-price">' + euro(b.prix) + '</span>' +
+        '<div class="se-bien-foot">' + esc(qLabel(b.quartier)) + ' · ' + num(b.surface) + ' m² · ' + b.pieces + ' p.</div></div></a>').join('') + '</div>';
+  }
+
+  function viewBien(r) {
+    const b = bien(r.param);
+    if (!b) return '<div class="se-card se-empty"><div class="se-empty-title">Bien introuvable</div><a class="se-btn" href="#/biens">Retour</a></div>';
+
+    const prop = client(b.proprietaireId);
+    const compat = clientsCompatibles(b);
+    const visites = state.visites.filter((v) => v.bienId === b.id);
+    const offres = state.offres.filter((o) => o.bienId === b.id);
+    const scan = state.scan && state.scan.id === b.id ? state.scan : null;
+
+    // Bloc de résultat du scanner Off-Market.
+    let scanHtml = '';
+    if (scan && scan.loading) {
+      scanHtml = '<div class="se-muted" style="margin-top:10px;display:flex;align-items:center;gap:8px">Recherche des annonces en cours…</div>';
+    } else if (scan && scan.error) {
+      scanHtml = '<div class="se-note" style="margin-top:10px">' + esc(scan.error) + '</div>';
+    } else if (scan && scan.data) {
+      const d = scan.data;
+      if (d.statut === 'doublon') {
+        scanHtml = '<div class="se-note" style="margin-top:10px;background:var(--color-alert-soft);border:0;color:var(--color-alert)"><b>Forte probabilité de doublon.</b></div>' +
+          '<div class="se-list" style="margin-top:8px">' + d.trouves.map((t) => '<a class="se-list-item" href="' + esc(t.url) + '" target="_blank" rel="noopener" style="text-decoration:none;color:inherit"><div style="flex:1"><div style="font-size:13.5px">' + esc(t.plateforme) + '</div><div class="se-hint">' + esc(t.query) + '</div></div><span>↗</span></a>').join('') + '</div>';
+      } else if (d.statut === 'valide') {
+        scanHtml = '<div class="se-note" style="margin-top:10px;background:var(--color-ok-soft);border:0;color:var(--color-ok)"><b>Bien non trouvé sur le marché. Validé pour l’Off-Market.</b></div>';
+      } else {
+        scanHtml = '<div class="se-note" style="margin-top:10px;background:var(--color-warn-soft);border:0;color:var(--color-warn)"><b>Vérification manuelle conseillée.</b> Google a bloqué la recherche automatique — ouvrez les recherches ci-dessous.</div>';
+      }
+      if (d.requetes && d.requetes.length) {
+        scanHtml += '<div class="se-list" style="margin-top:10px">' + d.requetes.map((t) => '<a class="se-list-item" href="' + esc(t.url) + '" target="_blank" rel="noopener" style="text-decoration:none;color:inherit"><div style="flex:1;min-width:0"><div style="font-size:13.5px">' + esc(t.plateforme) + '</div><div class="se-hint" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(t.query) + '</div></div><span>↗</span></a>').join('') + '</div>';
+      }
+    }
+
+    return '<div class="se-fiche-head">' +
+      '<div style="flex:1"><div class="kicker" style="color:var(--color-taupe)">' + esc(b.ref) + ' · ' + esc(b.type) + ' · ' + esc(qLabel(b.quartier)) + (prop ? ' · <a href="#/client/' + prop.id + '" style="color:var(--color-club-violet);text-decoration:none">Propriétaire : ' + esc(nomClient(prop)) + '</a>' : '') + '</div>' +
+      '<h1 class="display" style="font-size:30px;margin:4px 0 2px">' + esc(b.titre) + '</h1>' +
+      '<div class="se-row" style="gap:8px">' + badgeBien(b.statut) + badgeExclusivite(b) + badgeValidation(b) + '<span class="se-pill"><b>' + euro(b.prix) + '</b></span><span class="se-pill">' + euro(prixM2(b)) + ' /m²</span></div></div>' +
+      '<div class="se-actions">' +
+        '<button class="se-btn ghost" data-act="bien-editer" data-id="' + b.id + '">Modifier</button>' +
+        '<button class="se-btn ghost" data-act="bien-statut" data-id="' + b.id + '">Changer le statut</button>' +
+        '<button class="se-btn" data-act="visite-nouvelle" data-id="' + b.id + '" data-bien="' + b.id + '">Planifier une visite</button>' +
+      '</div></div>' +
+
+      '<div class="se-split">' +
+        '<div class="se-grid" style="gap:18px">' +
+          '<div class="se-card" style="padding:0;overflow:hidden"><div class="se-bien-photo" style="aspect-ratio:16/9">' + (photo(b) ? '<img src="' + photo(b) + '" alt=""/>' : '') + '</div>' +
+            '<div class="se-photos" style="padding:12px">' + (b.photos || []).map((p) => '<div class="se-photo"><img src="' + (/^(data:|https?:|\/)/.test(p) ? p : 'assets/img/' + p) + '" alt=""/></div>').join('') + '</div></div>' +
+          '<div class="se-card"><h3>Descriptif</h3><p style="color:var(--color-graphite);font-size:14.5px;line-height:1.65;margin:10px 0 0">' + esc(b.description) + '</p>' +
+            '<div class="se-chips" style="margin-top:14px">' + (b.atouts || []).map((a) => '<span class="se-chip" style="cursor:default">' + esc(a) + '</span>').join('') + '</div></div>' +
+          '<div class="se-card"><h3>Acquéreurs compatibles</h3>' +
+            (compat.length
+              ? '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;gap:10px">' +
+                  '<label style="font-size:13px;display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" class="sel-tous" style="margin:0"/> Tout sélectionner</label>' +
+                  '<button class="se-btn ghost sm" id="btn-envoi-sel" data-act="bien-envoyer-sel" data-bien="' + b.id + '" data-all="' + esc(JSON.stringify(compat.map((x) => x.client.id))) + '">Envoyer à tous les matchs</button>' +
+                '</div>' +
+                '<div class="se-list" style="margin-top:8px">' + compat.slice(0, 8).map((x) => '<div class="se-list-item">' +
+                  '<input type="checkbox" class="sel-acq" value="' + x.client.id + '" style="margin:0;flex:0 0 auto;width:16px;height:16px"/>' +
+                  '<a href="#/client/' + x.client.id + '" style="flex:1;min-width:0;display:flex;align-items:center;gap:10px;text-decoration:none;color:inherit">' +
+                    '<span class="se-avatar" style="width:32px;height:32px;flex:0 0 32px;font-size:12px">' + esc((x.client.prenom.charAt(0) + x.client.nom.charAt(0)).toUpperCase()) + '</span>' +
+                    '<div style="flex:1;min-width:0"><div style="font-size:13.5px">' + esc(nomClient(x.client)) + '</div><div class="se-sub">' + (x.budgetMax ? euro(x.budgetMax) + ' max' : 'Budget non renseigné') + '</div></div>' +
+                    scoreTag(x.score) +
+                  '</a>' +
+                  '<button class="se-btn ghost sm" data-act="bien-envoyer" data-bien="' + b.id + '" data-client="' + x.client.id + '">Envoyer</button>' +
+                '</div>').join('') + '</div>'
+              : '<p class="se-muted" style="margin-top:8px">Aucun acquéreur ne correspond pour l’instant.</p>') +
+          '</div>' +
+        '</div>' +
+        '<div class="se-grid" style="gap:18px">' +
+          '<div class="se-card"><h3>Le bien</h3><div class="se-kv" style="margin-top:12px">' +
+            kv('Référence', esc(b.ref)) + kv('Surface', num(b.surface) + ' m²') +
+            kv('Pièces', b.pieces + ' · ' + b.chambres + ' ch. · ' + b.sdb + ' sdb') +
+            kv('Étage', esc(b.etage || '—')) + kv('DPE', esc(b.dpe)) + kv('Statut', badgeBien(b.statut)) +
+          '</div></div>' +
+          '<div class="se-card"><h3>Mandat & propriétaire</h3><div class="se-kv" style="margin-top:12px">' +
+            kv('Propriétaire', prop ? '<a href="#/client/' + prop.id + '">' + esc(nomClient(prop)) + '</a>' : '<span class="se-hint">non renseigné</span>') +
+            kv('Type de mandat', b.mandat ? (b.mandat.type === 'exclusif' ? 'Exclusif' : 'Simple') : '—') +
+            kv('Échéance', b.mandat ? dFR(b.mandat.fin) : '—') +
+            kv('Mise en ligne', dFR(b.cree)) +
+          '</div></div>' +
+          '<div class="se-card"><h3>Exclusivité</h3>' +
+            '<div class="se-row" style="margin-top:8px">' + badgeExclusivite(b) + '</div>' +
+            '<p class="se-muted" style="margin-top:6px">Vérifie si ce bien est déjà diffusé sur les portails immobiliers.</p>' +
+            (b.exclusivite && b.exclusivite.erreur ? '<p class="se-hint" style="margin-top:8px;color:var(--color-alert)">' + esc(b.exclusivite.erreur) + '</p>' : '') +
+            '<button class="se-btn block" style="margin-top:12px" data-act="exclusivite-scan" data-id="' + b.id + '">Lancer le scan d’exclusivité</button>' +
+            (b.validation === 'en_attente' ? '<button class="se-btn soft block" style="margin-top:8px" data-act="bien-valider" data-id="' + b.id + '">Valider ce bien</button>' : '') +
+            (b.exclusivite && b.exclusivite.liens && b.exclusivite.liens.length
+              ? '<div class="se-list" style="margin-top:10px">' + b.exclusivite.liens.map((l) => '<a class="se-list-item" href="' + esc(l) + '" target="_blank" rel="noopener" style="text-decoration:none;color:inherit"><div style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px">' + esc(l) + '</div><span class="se-hint">↗</span></a>').join('') + '</div>'
+              : (b.exclusivite && b.exclusivite.statut === 'verifie_exclusif' ? '<p class="se-hint" style="margin-top:10px;color:var(--color-ok)">Aucune annonce concurrente trouvée.</p>' : '')) +
+          '</div>' +
+          '<div class="se-card"><h3>Visites & offres</h3>' +
+            (visites.length ? '<div class="se-list" style="margin-top:8px">' + visites.map((v) => '<div class="se-list-item"><div style="flex:1"><div style="font-size:13.5px">' + esc(nomClient(client(v.clientId))) + '</div><div class="se-hint">' + dCourt(v.date) + ' · ' + v.heure + '</div></div><span class="se-badge muted">' + statutVisite(v.statut) + '</span></div>').join('') + '</div>' : '') +
+            (offres.length ? '<div class="se-divider"></div><div class="se-list">' + offres.map((o) => '<div class="se-list-item"><div style="flex:1"><div style="font-size:13.5px">' + euro(o.montant) + '</div><div class="se-hint">' + esc(nomClient(client(o.clientId))) + ' · ' + dFR(o.cree) + '</div></div></div>').join('') + '</div>' : '') +
+            (!visites.length && !offres.length ? '<p class="se-muted" style="margin-top:8px">Rien pour l’instant.</p>' : '') +
+          '</div>' +
+        '</div>' +
+      '</div>';
+  }
+
+  /* ------------------------------- recherches ----------------------------- */
+
+  function viewRecherches() {
+    const list = (state.recherchesServeur || []).concat(state.recherches).map((r) => ({ r, n: biensCompatibles(r, 50).length })).sort((a, b) => b.n - a.n);
+    return head('Matching', 'Recherches',
+      'Les critères de vos acquéreurs, confrontés en continu au portefeuille.',
+      '<button class="se-btn" data-act="recherche-nouvelle">' + ICONS.plus + ' Nouvelle recherche</button>') +
+      '<div class="se-grid cols-2">' + list.map(({ r, n }) => {
+        const c = client(r.clientId);
+        return '<a class="se-card" href="#/recherche/' + r.id + '" style="text-decoration:none;color:inherit">' +
+          '<div class="se-row" style="justify-content:space-between"><span class="kicker" style="color:var(--color-taupe)">' + esc(nomClient(c)) + '</span>' +
+          '<span class="se-badge ' + (n ? 'open' : 'muted') + '">' + n + ' bien(s)</span></div>' +
+          '<h3 style="font-family:var(--font-serif);font-weight:420;font-size:20px;margin:8px 0 6px">' + esc(r.titre) + '</h3>' +
+          '<div class="se-hint">≤ ' + euro(r.prixMax) + ' · ' + r.piecesMin + '+ pièces · ' + r.surfaceMin + '+ m²</div>' +
+          '<div class="se-hint" style="margin-top:4px">' + (r.quartiers || []).map(qLabel).join(' · ') + '</div>' +
+          '</a>';
+      }).join('') + '</div>';
+  }
+
+  function viewRecherche(r) {
+    const rec = recherche(r.param);
+    if (!rec) return '<div class="se-card se-empty"><div class="se-empty-title">Recherche introuvable</div><a class="se-btn" href="#/recherches">Retour</a></div>';
+    const c = client(rec.clientId);
+    const matches = biensCompatibles(rec, 40);
+
+    return head(esc(nomClient(c)), esc(rec.titre), 'Critères confrontés à ' + state.biens.length + ' biens du portefeuille.',
+      '<button class="se-btn ghost" data-act="recherche-editer" data-id="' + rec.id + '">Modifier</button>' +
+      '<button class="se-btn" data-act="recherche-envoyer" data-id="' + rec.id + '">Envoyer la sélection</button>') +
+      '<div class="se-split">' +
+        '<div class="se-card"><h3>Biens compatibles</h3>' +
+          (matches.length ? '<div class="se-list" style="margin-top:8px">' + matches.map((m) => '<div class="se-list-item">' +
+            '<a href="#/bien/' + m.bien.id + '" style="flex:1;min-width:0;display:flex;align-items:center;gap:10px;text-decoration:none;color:inherit">' +
+              '<img class="se-thumb" src="' + photo(m.bien) + '" alt="" style="width:40px;height:40px;flex:0 0 40px"/>' +
+              '<div style="flex:1;min-width:0"><div style="font-size:14px">' + esc(m.bien.titre) + '</div>' +
+              '<div class="se-sub">' + esc(m.bien.ref) + ' · ' + euro(m.bien.prix) + ' · ' + num(m.bien.surface) + ' m² · ' + esc(qLabel(m.bien.quartier)) + '</div></div>' +
+              scoreTag(m.score) +
+            '</a>' +
+            '<button class="se-btn ghost sm" data-act="bien-envoyer" data-bien="' + m.bien.id + '" data-client="' + c.id + '">Envoyer</button>' +
+          '</div>').join('') + '</div>' : '<p class="se-muted" style="margin-top:8px">Aucun bien ne correspond encore.</p>') +
+        '</div>' +
+        '<div class="se-card"><h3>Critères</h3><div class="se-kv" style="margin-top:12px">' +
+          kv('Budget max', euro(rec.prixMax)) + kv('Type', esc(rec.type || 'tout')) +
+          kv('Pièces min', rec.piecesMin || '—') + kv('Surface', (rec.surfaceMin ? rec.surfaceMin + ' m² min' : '—') + (rec.surfaceMax ? ' · ' + rec.surfaceMax + ' m² max' : '')) +
+          kv('Délai', esc(rec.delai || '—')) +
+          kv('Secteurs', (rec.quartiers || []).map(qLabel).join(', ') || '—') +
+          kv('Alertes', rec.alertes ? 'Activées' : 'Désactivées') +
+        '</div>' + (c ? '<a class="se-btn ghost block" style="margin-top:14px" href="#/client/' + c.id + '">Acquéreur : ' + esc(nomClient(c)) + '</a>' : '') + '</div>' +
+      '</div>';
+  }
+
+  /* --------------------------------- visites ------------------------------ */
+
+  function viewVisites() {
+    const avenir = state.visites.filter((v) => v.statut === 'demandee' || v.statut === 'confirmee').sort((a, b) => a.date.localeCompare(b.date));
+    const passees = state.visites.filter((v) => v.statut === 'realisee' || v.statut === 'annulee');
+
+    const row = (v) => {
+      const b = bien(v.bienId);
+      const c = client(v.clientId);
+      return '<div class="se-list-item">' +
+        '<div style="flex:1;min-width:0"><div style="font-size:14px">' + esc(b ? b.titre : 'Bien') + '</div>' +
+        '<div class="se-hint">' + esc(nomClient(c)) + ' · ' + dCourt(v.date) + ' · ' + v.heure + (v.note ? ' · ' + esc(v.note) : '') + '</div></div>' +
+        '<span class="se-badge ' + (v.statut === 'confirmee' ? 'open' : v.statut === 'demandee' ? 'warn' : 'muted') + '">' +
+          ({ demandee: 'À confirmer', confirmee: 'Confirmée', realisee: 'Réalisée', annulee: 'Annulée' }[v.statut]) + '</span>' +
+        (v.statut === 'demandee' ? '<button class="se-btn sm" data-act="visite-confirmer" data-id="' + v.id + '">Confirmer</button>' : '') +
+        (v.statut !== 'annulee' && v.statut !== 'realisee' ? '<button class="se-btn ghost sm" data-act="visite-annuler" data-id="' + v.id + '">Annuler</button>' : '') +
+      '</div>';
+    };
+
+    return head('Agenda', 'Visites', 'Ce que Seecret organise pour vous.',
+      '<button class="se-btn" data-act="visites-nouvelle">' + ICONS.plus + ' Planifier</button>') +
+      '<div class="se-grid cols-2" style="align-items:start">' +
+        '<div class="se-card"><h3>À venir</h3>' + (avenir.length ? '<div class="se-list" style="margin-top:8px">' + avenir.map(row).join('') + '</div>' : '<p class="se-muted" style="margin-top:8px">Aucune visite programmée.</p>') + '</div>' +
+        '<div class="se-card"><h3>Historique</h3>' + (passees.length ? '<div class="se-list" style="margin-top:8px">' + passees.map(row).join('') + '</div>' : '<p class="se-muted" style="margin-top:8px">Rien encore.</p>') + '</div>' +
+      '</div>';
+  }
+
+  /* ---------------------------------- offres ------------------------------ */
+
+  function statutOffre(s) {
+    return { recue: 'Reçue', contre: 'Contre-offre', acceptee: 'Acceptée', refusee: 'Refusée' }[s] || s;
+  }
+
+  function statutVisite(s) {
+    return { demandee: 'À confirmer', confirmee: 'Confirmée', realisee: 'Réalisée', annulee: 'Annulée' }[s] || s;
+  }
+
+  function viewOffres() {
+    const list = state.offres.slice().sort((a, b) => (a.cree < b.cree ? 1 : -1));
+    return head('Négociation', 'Offres', 'Chaque offre, son écart au prix, et la décision à prendre.') +
+      '<div class="se-card" style="padding:8px 16px"><table class="se-table"><thead><tr><th>Bien</th><th>Client</th><th>Montant</th><th>Écart</th><th>Date</th><th>Statut</th><th></th></tr></thead><tbody>' +
+      list.map((o) => {
+        const b = bien(o.bienId);
+        const c = client(o.clientId);
+        const delta = b ? Math.round(((o.montant - b.prix) / b.prix) * 1000) / 10 : 0;
+        return '<tr><td><a href="#/bien/' + o.bienId + '" style="color:inherit">' + esc(b ? b.titre : '—') + '</a></td>' +
+          '<td>' + esc(nomClient(c)) + '</td><td><b>' + euro(o.montant) + '</b></td>' +
+          '<td class="' + (delta < 0 ? '' : '') + '">' + (delta > 0 ? '+' : '') + delta + ' %</td>' +
+          '<td class="se-hint">' + dFR(o.cree) + '</td><td>' + statutOffre(o.statut) + '</td>' +
+          '<td>' + (o.statut === 'recue' || o.statut === 'contre'
+            ? '<div class="se-row" style="gap:6px"><button class="se-btn ghost sm" data-act="offre-refusee" data-id="' + o.id + '">Refuser</button><button class="se-btn sm" data-act="offre-acceptee" data-id="' + o.id + '">Accepter</button></div>'
+            : '') + '</td></tr>';
+      }).join('') + '</tbody></table></div>';
+  }
+
+  /* ---------------------------------- tâches ------------------------------ */
+
+  function taskRow(t) {
+    const late = !t.fait && t.echeance && new Date(t.echeance) < new Date(new Date().toDateString());
+    return '<div class="se-task ' + (t.fait ? 'done' : '') + '">' +
+      '<input type="checkbox" data-act="tache-toggle" data-id="' + t.id + '"' + (t.fait ? ' checked' : '') + ' style="cursor:pointer"/>' +
+      '<span style="flex:1"><span class="se-task-titre">' + esc(t.titre) + '</span>' +
+      '<span class="se-hint ' + (late ? 'late' : '') + '">' + (t.echeance ? dansX(t.echeance) : 'sans date') + (t.clientId ? ' · ' + esc(nomClient(client(t.clientId))) : '') + '</span></span>' +
+    '</div>';
+  }
+
+  function verifTaskRow(t) {
+    const done = t.statut !== 'en_attente';
+    return '<div class="se-task' + (done ? ' done' : '') + '">' +
+      '<span style="flex:1"><span class="se-task-titre">' + esc(t.titre || 'Tâche') + '</span>' +
+      '<span class="se-hint">' + esc(t.nom || '') + ' · ' + ilYa(t.cree) + '</span></span>' +
+      (t.demandeId ? '<button class="se-btn ghost sm" data-act="demande-ouvrir" data-id="' + t.demandeId + '">Voir</button>' : '') +
+    '</div>';
+  }
+
+  function viewTaches() {
+    const ouvertes = state.taches.filter((t) => !t.fait);
+    const finies = state.taches.filter((t) => t.fait);
+    const verifOuvertes = (state.tachesVerif || []).filter((t) => t.type === 'demande' && t.statut === 'en_attente');
+    const verifFinies = (state.tachesVerif || []).filter((t) => t.type === 'demande' && t.statut !== 'en_attente');
+    return head('Suivi', 'Tâches', 'Les relances qui font la différence.',
+      '<button class="se-btn" data-act="tache-nouvelle">' + ICONS.plus + ' Nouvelle tâche</button>') +
+      '<div class="se-grid cols-2" style="align-items:start">' +
+        '<div class="se-card"><h3>En cours (' + (ouvertes.length + verifOuvertes.length) + ')</h3>' + verifOuvertes.map(verifTaskRow).join('') + (ouvertes.length ? ouvertes.map(taskRow).join('') : '') + (!verifOuvertes.length && !ouvertes.length ? '<p class="se-muted" style="margin-top:8px">Tout est fait.</p>' : '') + '</div>' +
+        '<div class="se-card"><h3>Terminées</h3>' + verifFinies.map(verifTaskRow).join('') + (finies.length ? finies.map(taskRow).join('') : '') + (!verifFinies.length && !finies.length ? '<p class="se-muted" style="margin-top:8px">—</p>' : '') + '</div>' +
+      '</div>';
+  }
+
+  function viewVerifications() {
+    const list = (state.tachesVerif || []).slice().sort((a, b) => (a.statut === 'en_attente' ? 0 : 1) - (b.statut === 'en_attente' ? 0 : 1));
+    return head('Adhésions', 'Vérifications', 'Les dossiers des membres en attente de validation.') +
+      (list.length
+        ? '<div class="se-grid" style="gap:14px">' + list.map((t) => {
+            const docs = t.documents || [];
+            const enAttente = t.statut === 'en_attente';
+            const statutBadge = enAttente ? '<span class="se-badge warn">En attente</span>' : (t.statut === 'validee' ? '<span class="se-badge open">Validé</span>' : '<span class="se-badge muted">Refusé</span>');
+            return '<div class="se-card">' +
+              '<div class="se-row" style="justify-content:space-between">' +
+                '<div><div style="font-weight:600;font-size:15px">' + esc(t.nom || ((t.prenom || '') + ' ' + (t.nomFamille || '')).trim()) + '</div>' +
+                '<div class="se-hint">' + esc(t.email || '') + ' · reçu le ' + dFR(t.cree) + '</div></div>' +
+                statutBadge +
+              '</div>' +
+              '<div class="se-list" style="margin-top:10px">' +
+                (docs.length ? docs.map((d) => '<div class="se-list-item"><div style="flex:1;min-width:0"><div style="font-size:13px">' + esc(libelleDoc(d.type)) + '</div><div class="se-hint" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(d.nom || d.type) + '</div></div><a class="se-btn ghost sm" href="' + esc(d.fichier) + '" target="_blank" rel="noopener">Voir</a></div>').join('') : '<p class="se-muted">Aucun document.</p>') +
+              '</div>' +
+              (enAttente ? '<div class="se-row" style="gap:8px;margin-top:14px">' +
+                '<button class="se-btn block" data-act="verif-valider" data-id="' + t.id + '">Valider le compte</button>' +
+                '<button class="se-btn ghost block" data-act="verif-refuser" data-id="' + t.id + '">Refuser</button>' +
+              '</div>' : '') +
+            '</div>';
+          }).join('') + '</div>'
+        : '<div class="se-card se-empty"><div class="se-empty-title">Aucune vérification en attente</div><p>Les dossiers soumis par les membres apparaîtront ici.</p></div>');
+  }
+
+  /* -------------------------------- messages ------------------------------ */
+
+  function viewMessages() {
+    const ids = Object.keys(state.threads || {});
+    return head('Messagerie', 'Conversations', 'Le fil avec vos clients, au même endroit.') +
+      '<div class="se-grid cols-2" style="align-items:start">' +
+        '<div class="se-card"><h3>Fils</h3><div class="se-list" style="margin-top:8px">' +
+          (ids.length ? ids.map((id) => {
+            const c = client(id);
+            const t = state.threads[id];
+            const last = t[t.length - 1];
+            return '<a class="se-rowlink" href="#/messages/' + id + '"><span class="se-avatar" style="width:30px;height:30px;flex:0 0 30px;font-size:11px">' + esc(c ? (c.prenom.charAt(0) + c.nom.charAt(0)).toUpperCase() : '?') + '</span>' +
+              '<div style="flex:1;min-width:0"><div style="font-size:13.5px">' + esc(nomClient(c)) + '</div><div class="se-sub" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(last ? last.texte : '') + '</div></div>' +
+              '<span class="se-hint">' + (last ? dCourt(last.at) : '') + '</span></a>';
+          }).join('') : '<p class="se-muted">Aucune conversation.</p>') +
+        '</div></div>' +
+        '<div class="se-card"><h3>Astuce</h3><p class="se-muted">Ouvrez une conversation depuis une fiche client, ou cliquez sur un fil.</p></div>' +
+      '</div>';
+  }
+
+  function viewThread(r) {
+    const id = r.param;
+    const c = client(id);
+    const t = (state.threads && state.threads[id]) || [];
+    return head(esc(nomClient(c)), 'Conversation', esc(c ? c.email : '')) +
+      '<div class="se-card" style="max-width:720px">' +
+        '<div class="se-chat">' + t.map((m) => '<div class="se-bubble ' + (m.de === 'agent' ? 'me' : 'agent') + '">' + esc(m.texte) + '<time>' + dCourt(m.at) + ' ' + tFR(m.at) + '</time></div>').join('') + '</div>' +
+        '<form class="se-composer" data-form="msg" data-client="' + id + '"><input class="se-input" name="texte" placeholder="Écrire au client…" autocomplete="off"/><button class="se-btn" type="submit">Envoyer</button></form>' +
+      '</div>';
+  }
+
+  /* --------------------------------- réglages ----------------------------- */
+
+  function viewReglages() {
+    const a = state.agent;
+    return head('Compte', 'Réglages', 'Votre agent, l’agence, et vos données.') +
+      '<div class="se-grid cols-2" style="align-items:start">' +
+        '<form class="se-card" data-form="agent">' +
+          '<h3>Agent</h3><div class="se-form-grid" style="margin-top:14px">' +
+            '<div class="se-field"><label>Prénom</label><input class="se-input" name="prenom" value="' + esc(a.prenom) + '"/></div>' +
+            '<div class="se-field"><label>Nom</label><input class="se-input" name="nom" value="' + esc(a.nom) + '"/></div>' +
+            '<div class="se-field"><label>Email</label><input class="se-input" name="email" value="' + esc(a.email) + '"/></div>' +
+            '<div class="se-field"><label>Téléphone</label><input class="se-input" name="tel" value="' + esc(a.tel) + '"/></div>' +
+            '<div class="se-field full"><label>Agence</label><input class="se-input" name="agence" value="' + esc(a.agence) + '"/></div>' +
+          '</div><button class="se-btn" type="submit" style="margin-top:16px">Enregistrer</button>' +
+        '</form>' +
+        '<div class="se-grid" style="gap:18px">' +
+          '<div class="se-card"><h3>Données</h3><p class="se-muted">Tout est stocké dans ce navigateur.</p>' +
+            '<div class="se-grid" style="margin-top:12px;gap:8px">' +
+              '<button class="se-btn ghost block" data-act="export-clients">Exporter les clients (CSV)</button>' +
+              '<button class="se-btn ghost block" data-act="export-biens">Exporter les biens (CSV)</button>' +
+              '<button class="se-btn ghost block" data-act="export-json">Sauvegarde complète (JSON)</button>' +
+              '<label class="se-btn ghost block" style="cursor:pointer">Restaurer un JSON<input type="file" accept="application/json" hidden data-upload="import"/></label>' +
+              '<button class="se-btn danger block" data-act="reset">Réinitialiser le CRM</button>' +
+            '</div>' +
+          '</div>' +
+          '<div class="se-card"><h3>Accès</h3><p class="se-muted">Deux faces du même club.</p>' +
+            '<a class="se-btn ghost block" style="margin-top:12px" href="espace.html">Espace membre</a>' +
+            '<a class="se-btn ghost block" style="margin-top:8px" href="index.html">Site public</a>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+  }
+
+  /* ================================ modales =============================== */
+
+  function field(label, name, value, opts) {
+    const o = opts || {};
+    return '<div class="se-field ' + (o.full ? 'full' : '') + '"><label>' + label + '</label>' +
+      (o.type === 'select'
+        ? '<select class="se-select" name="' + name + '">' + o.options.map((x) => '<option value="' + esc(x.value) + '"' + (String(x.value) === String(value) ? ' selected' : '') + '>' + esc(x.label) + '</option>').join('') + '</select>'
+        : o.type === 'textarea'
+          ? '<textarea class="se-textarea" name="' + name + '" placeholder="' + esc(o.placeholder || '') + '">' + esc(value) + '</textarea>'
+          : '<input class="se-input" name="' + name + '" type="' + (o.type || 'text') + '" value="' + esc(value) + '" placeholder="' + esc(o.placeholder || '') + '"/>') +
+      '</div>';
+  }
+
+  function clientModal(c) {
+    const v = c || { type: 'acquereur', prenom: '', nom: '', email: '', tel: '', statut: 'prospect', source: 'Candidature', budgetMin: '', budgetMax: '', quartiers: [], piecesMin: '', surfaceMin: '', typeBien: '', notes: '', agent: state.agent.prenom + ' ' + state.agent.nom };
+    return '<h3>' + (c ? 'Modifier le client' : 'Nouveau client') + '</h3><p class="se-muted">Les critères servent au matching.</p>' +
+      '<form data-form="client" data-id="' + (c ? c.id : '') + '"><div class="se-form-grid">' +
+        field('Type', 'type', v.type, { type: 'select', options: [{ value: 'acquereur', label: 'Acquéreur' }, { value: 'vendeur', label: 'Vendeur' }, { value: 'mixte', label: 'Acheteur & vendeur' }] }) +
+        field('Statut', 'statut', v.statut, { type: 'select', options: Object.keys(ST_CLIENT).map((k) => ({ value: k, label: ST_CLIENT[k].label })) }) +
+        field('Prénom', 'prenom', v.prenom) + field('Nom', 'nom', v.nom) +
+        field('Email', 'email', v.email, { type: 'email' }) + field('Téléphone', 'tel', v.tel) +
+        field('Budget min (€)', 'budgetMin', v.budgetMin, { type: 'number' }) +
+        field('Budget max (€)', 'budgetMax', v.budgetMax, { type: 'number' }) +
+        field('Pièces min', 'piecesMin', v.piecesMin, { type: 'number' }) +
+        field('Surface min (m²)', 'surfaceMin', v.surfaceMin, { type: 'number' }) +
+        field('Type de bien', 'typeBien', v.typeBien, { type: 'select', options: [{ value: '', label: 'Indifférent' }].concat(TYPES.map((t) => ({ value: t, label: t }))) }) +
+        field('Source', 'source', v.source, { type: 'select', options: ['Candidature', 'Site web', 'Instagram', 'Recommandation', 'Bouche à oreille', 'Portail'].map((s) => ({ value: s, label: s })) }) +
+        '<div class="se-field full"><label>Secteurs recherchés</label><div class="se-chips">' +
+          QUARTIERS.map((q) => '<button type="button" class="se-chip" data-act="q-toggle" data-id="' + q.id + '" aria-pressed="' + ((v.quartiers || []).indexOf(q.id) > -1) + '">' + q.label + '</button>').join('') +
+        '</div></div>' +
+        field('Notes', 'notes', v.notes, { type: 'textarea', full: true, placeholder: 'Ce qu’il faut retenir de ce client…' }) +
+      '</div><div class="se-modal-foot"><button class="se-btn ghost" type="button" data-act="modal-close">Annuler</button><button class="se-btn" type="submit">' + (c ? 'Enregistrer' : 'Créer le client') + '</button></div></form>';
+  }
+
+  function bienModal(b) {
+    const v = b || { ref: 'SC-' + Math.floor(1000 + Math.random() * 8999), titre: '', adresse: '', type: 'Appartement', quartier: 'p11', surface: '', pieces: '', chambres: '', sdb: '', etage: '', dpe: 'D', prix: '', statut: 'mandat', proprio: '', description: '', atouts: [], photos: [] };
+    return '<h3>' + (b ? 'Modifier le bien' : 'Nouveau bien') + '</h3><p class="se-muted">Référence, mandat et photos.</p>' +
+      '<form data-form="bien" data-id="' + (b ? b.id : '') + '"><div class="se-form-grid">' +
+        field('Référence', 'ref', v.ref) +
+        field('Adresse', 'adresse', v.adresse, { full: true, placeholder: '12 rue de la Verrerie, Paris 4e' }) +
+        field('Type', 'type', v.type, { type: 'select', options: TYPES.map((t) => ({ value: t, label: t })) }) +
+        field('Quartier', 'quartier', v.quartier, { type: 'select', options: QUARTIERS.map((q) => ({ value: q.id, label: q.label })) }) +
+        field('Statut', 'statut', v.statut, { type: 'select', options: Object.keys(ST_BIEN).map((k) => ({ value: k, label: ST_BIEN[k].label })) }) +
+        field('Titre', 'titre', v.titre, { full: true, placeholder: 'Quatre pièces sur la Seine' }) +
+        field('Surface (m²)', 'surface', v.surface, { type: 'number' }) +
+        field('Pièces', 'pieces', v.pieces, { type: 'number' }) +
+        field('Chambres', 'chambres', v.chambres, { type: 'number' }) +
+        field('Salles de bain', 'sdb', v.sdb, { type: 'number' }) +
+        field('Étage', 'etage', v.etage) + field('DPE', 'dpe', v.dpe, { type: 'select', options: ['A', 'B', 'C', 'D', 'E', 'F', 'G'].map((d) => ({ value: d, label: d })) }) +
+        field('Prix (€)', 'prix', v.prix, { type: 'number' }) +
+        field('Propriétaire', 'proprio', v.proprio || (b && b.proprietaireId) || '', { type: 'select', options: [{ value: '', label: '— aucun —' }].concat(state.clients.map((c) => ({ value: c.id, label: nomClient(c) }))) }) +
+        field('Description', 'description', v.description, { type: 'textarea', full: true }) +
+      '</div><div class="se-modal-foot"><button class="se-btn ghost" type="button" data-act="modal-close">Annuler</button><button class="se-btn" type="submit">' + (b ? 'Enregistrer' : 'Créer le bien') + '</button></div></form>';
+  }
+
+  function rechercheModal(r, clientId) {
+    const v = r || { clientId: clientId || (state.clients[0] && state.clients[0].id), titre: '', type: 'Appartement', prixMax: 2000000, piecesMin: 3, surfaceMin: 80, quartiers: [], alertes: true };
+    return '<h3>' + (r ? 'Modifier la recherche' : 'Nouvelle recherche') + '</h3><p class="se-muted">Le CRM confrontera ces critères au portefeuille.</p>' +
+      '<form data-form="recherche" data-id="' + (r ? r.id : '') + '"><div class="se-form-grid">' +
+        field('Client', 'clientId', v.clientId, { type: 'select', options: state.clients.filter((c) => c.type !== 'vendeur').map((c) => ({ value: c.id, label: nomClient(c) })) }) +
+        field('Type', 'type', v.type, { type: 'select', options: [{ value: '', label: 'Indifférent' }].concat(TYPES.map((t) => ({ value: t, label: t }))) }) +
+        field('Intitulé', 'titre', v.titre, { full: true, placeholder: 'Trois pièces et plus, rive gauche' }) +
+        field('Budget max (€)', 'prixMax', v.prixMax, { type: 'number' }) +
+        field('Pièces min', 'piecesMin', v.piecesMin, { type: 'number' }) +
+        field('Surface min (m²)', 'surfaceMin', v.surfaceMin, { type: 'number' }) +
+        '<div class="se-field full"><label>Secteurs</label><div class="se-chips">' +
+          QUARTIERS.map((q) => '<button type="button" class="se-chip" data-act="q-toggle" data-id="' + q.id + '" aria-pressed="' + ((v.quartiers || []).indexOf(q.id) > -1) + '">' + q.label + '</button>').join('') +
+        '</div></div>' +
+      '</div><div class="se-modal-foot"><button class="se-btn ghost" type="button" data-act="modal-close">Annuler</button><button class="se-btn" type="submit">' + (r ? 'Enregistrer' : 'Créer la recherche') + '</button></div></form>';
+  }
+
+  function previewModal(bienId, clientId, tab) {
+    const b = bien(bienId);
+    const c = client(clientId);
+    const t = tab || 'email';
+    const pdf = b ? ('/api/biens/' + (b.serverId || b.id) + '/pdf') : '';
+    const msgDefaut = 'Bonjour ' + (c ? c.prenom : '') + ', voici un bien qui correspond à votre recherche : ' + (b ? b.titre : '') + ' — ' + (b ? euro(b.prix) : '') + (b && b.adresse ? ' (' + b.adresse + ')' : '') + '. Souhaitez-vous le visiter ?';
+    const msg = state.__previewMsg !== undefined ? state.__previewMsg : msgDefaut;
+    const ph = photo(b);
+    const photos = (b && b.photos) || [];
+    const pdfName = 'Fiche_Seecret_' + (b ? (b.titre || 'Bien').replace(/[^a-z0-9]+/gi, '_') : 'Bien') + '.pdf';
+    const tabBtn = (id, label) => '<button class="se-studio-tab' + (t === id ? ' active' : '') + '" data-act="preview-tab" data-tab="' + id + '" data-bien="' + bienId + '" data-client="' + clientId + '">' + label + '</button>';
+
+    const emailView = '<div class="se-mail-preview">' +
+      '<div class="se-mail-top">' +
+        '<div class="se-mail-from">Bonjour Seecret <small>&lt;contact.immogroupe@gmail.com&gt;</small></div>' +
+        '<div class="se-mail-subject">Objet : Découvrez ce bien exceptionnel</div>' +
+      '</div>' +
+      '<div class="se-mail-body" style="padding:24px">' +
+        '<div style="max-width:560px;margin:0 auto">' +
+          '<div style="font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:#3b2b4a;font-weight:600;">Seecret</div>' +
+          '<h2 style="font-family:Georgia,serif;font-weight:400;font-size:26px;color:#141210;margin:14px 0 0;">' + esc(b ? b.titre : '') + '</h2>' +
+          '<p style="color:#5f5a54;margin:12px 0 0;line-height:1.6;">' + esc(msg) + '</p>' +
+          (b ? '<div style="margin-top:20px;display:flex;align-items:center;gap:14px;border:1px solid #eeebe6;border-radius:14px;padding:12px;background:#fff">' + (ph ? '<img src="' + ph + '" style="width:72px;height:54px;object-fit:cover;border-radius:8px"/>' : '') + '<div><div style="font-weight:500">' + esc(b.titre) + '</div><div style="color:#5f5a54;font-size:13px">' + euro(b.prix) + (b.surface ? ' · ' + b.surface + ' m²' : '') + '</div></div></div>' : '') +
+          '<div style="margin-top:22px"><span style="display:inline-block;background:#241c2e;color:#fff;padding:13px 28px;border-radius:999px;font-size:14px;">Voir le bien sur Seecret</span></div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="se-mail-attach"><span>📎</span> ' + esc(pdfName) + ' <span class="se-hint">(PDF)</span></div>' +
+    '</div>';
+
+    const waView = '<div class="se-wa-preview">' +
+      '<div class="se-wa-head">' + esc(c ? nomClient(c) : 'Client') + '</div>' +
+      '<div class="se-wa-chat">' +
+        '<div class="se-wa-bubble">' + esc(msg) + '</div>' +
+        (b ? '<div class="se-wa-card">' + (ph ? '<img src="' + ph + '" alt=""/>' : '') + '<div class="se-wa-card-body"><div style="font-weight:600">' + esc(b.titre) + '</div><div>' + euro(b.prix) + (b.surface ? ' · ' + b.surface + ' m²' : '') + '</div><div style="color:#027eb5;margin-top:4px;word-break:break-all">' + esc(pdf) + '</div></div></div>' : '') +
+      '</div>' +
+    '</div>';
+
+    const pdfRows = [['Prix', b ? euro(b.prix) : '—'], ['Surface', b && b.surface ? b.surface + ' m²' : '—'], ['Pièces', b && b.pieces ? b.pieces : '—'], ['Chambres', b && b.chambres ? b.chambres : '—'], ['Salles de bain', b && b.sdb ? b.sdb : '—'], ['Étage', b && b.etage ? b.etage : '—'], ['DPE', b && b.dpe ? b.dpe : '—'], ['GES', b && b.ges ? b.ges : '—']];
+    const pdfView = '<div class="se-pdf-preview">' +
+      '<div class="se-pdf-head"><div class="se-pdf-logo">SEECRET</div><div class="se-pdf-tag">Fiche confidentielle</div></div>' +
+      '<div class="se-pdf-body">' +
+        (ph ? '<img class="se-pdf-hero" src="' + ph + '" alt=""/>' : '') +
+        (photos.length > 1 ? '<div class="se-pdf-thumbs">' + photos.slice(1, 5).map((p) => '<img src="' + (/^(data:|https?:|\/)/.test(p) ? p : 'assets/img/' + p) + '" alt=""/>').join('') + '</div>' : '') +
+        '<div class="se-pdf-title">' + esc(b ? b.titre : '') + '</div>' +
+        '<div style="color:#5f5a54;margin-top:6px">' + esc(b && b.adresse ? b.adresse : '') + '</div>' +
+        '<table class="se-pdf-table">' + pdfRows.map((r) => '<tr><td>' + r[0] + '</td><td>' + r[1] + '</td></tr>').join('') + '</table>' +
+        (b && b.description ? '<p style="line-height:1.7;color:#4e4759;font-size:14.5px">' + esc(b.description) + '</p>' : '') +
+        '<div class="se-pdf-foot">Document strictement confidentiel. Voir sur Seecret pour plus d\'informations.</div>' +
+      '</div>' +
+    '</div>';
+
+    return '<div class="se-studio">' +
+      '<div class="se-studio-head"><h3>Studio d\'envoi</h3><div class="se-studio-tabs">' + tabBtn('email', 'Aperçu de l\'Email') + tabBtn('whatsapp', 'Aperçu WhatsApp') + tabBtn('pdf', 'Fiche Produit (PDF)') + '</div></div>' +
+      '<div class="se-studio-body">' + (t === 'whatsapp' ? waView : t === 'pdf' ? pdfView : emailView) + '</div>' +
+      '<div class="se-studio-msg"><label>Message (modifiable)</label><textarea id="preview-msg">' + esc(msg) + '</textarea></div>' +
+      '<div class="se-studio-foot">' +
+        '<button class="se-btn ghost" data-act="modal-close">Annuler</button>' +
+        '<button class="se-btn ghost" data-act="preview-wa" data-client="' + clientId + '">Envoyer par WhatsApp</button>' +
+        '<button class="se-btn" data-act="preview-email" data-bien="' + bienId + '" data-client="' + clientId + '">Envoyer par Email</button>' +
+      '</div>' +
+    '</div>';
+  }
+
+  function visiteModal(opts) {
+    const o = opts || {};
+    const today = new Date().toISOString().slice(0, 10);
+    return '<h3>Planifier une visite</h3><p class="se-muted">Le client reçoit une confirmation.</p>' +
+      '<form data-form="visite"><div class="se-form-grid">' +
+        field('Bien', 'bienId', o.bienId || (state.biens[0] && state.biens[0].id), { type: 'select', full: true, options: state.biens.map((b) => ({ value: b.id, label: b.ref + ' — ' + b.titre })) }) +
+        field('Client', 'clientId', o.clientId || '', { type: 'select', full: true, options: [{ value: '', label: '— visiteur externe —' }].concat(state.clients.map((c) => ({ value: c.id, label: nomClient(c) }))) }) +
+        field('Date', 'date', o.date || today, { type: 'date' }) +
+        field('Heure', 'heure', o.heure || '18:00', { type: 'time' }) +
+        field('Note', 'note', '', { full: true, placeholder: 'Accès, code, remarque…' }) +
+      '</div><div class="se-modal-foot"><button class="se-btn ghost" type="button" data-act="modal-close">Annuler</button><button class="se-btn" type="submit">Planifier</button></div></form>';
+  }
+
+  function offreModal(opts) {
+    const o = opts || {};
+    const b = o.bienId ? bien(o.bienId) : state.biens[0];
+    return '<h3>Enregistrer une offre</h3><p class="se-muted">' + esc(b ? b.titre + ' · ' + euro(b.prix) : '') + '</p>' +
+      '<form data-form="offre"><div class="se-form-grid">' +
+        field('Bien', 'bienId', o.bienId || (state.biens[0] && state.biens[0].id), { type: 'select', full: true, options: state.biens.map((x) => ({ value: x.id, label: x.ref + ' — ' + x.titre })) }) +
+        field('Client', 'clientId', o.clientId || '', { type: 'select', full: true, options: [{ value: '', label: '— acheteur externe —' }].concat(state.clients.map((c) => ({ value: c.id, label: nomClient(c) }))) }) +
+        field('Montant (€)', 'montant', o.montant || (b ? Math.round(b.prix * 0.97) : 0), { type: 'number', full: true }) +
+      '</div><div class="se-modal-foot"><button class="se-btn ghost" type="button" data-act="modal-close">Annuler</button><button class="se-btn" type="submit">Enregistrer</button></div></form>';
+  }
+
+  function tacheModal() {
+    return '<h3>Nouvelle tâche</h3><p class="se-muted">Une relance, un document, un appel.</p>' +
+      '<form data-form="tache"><div class="se-form-grid">' +
+        field('Intitulé', 'titre', '', { full: true, placeholder: 'Rappeler Camille…' }) +
+        field('Échéance', 'echeance', new Date().toISOString().slice(0, 10), { type: 'date' }) +
+        field('Client', 'clientId', '', { type: 'select', options: [{ value: '', label: '—' }].concat(state.clients.map((c) => ({ value: c.id, label: nomClient(c) }))) }) +
+        field('Bien', 'bienId', '', { type: 'select', options: [{ value: '', label: '—' }].concat(state.biens.map((b) => ({ value: b.id, label: b.ref + ' — ' + b.titre }))) }) +
+      '</div><div class="se-modal-foot"><button class="se-btn ghost" type="button" data-act="modal-close">Annuler</button><button class="se-btn" type="submit">Créer</button></div></form>';
+  }
+
+  function bienMembreModal(id) {
+    const d = state.demandes.find((x) => x.id === id);
+    const mb = d ? state.membresBiens.find((b) => (b.email || '').toLowerCase() === (d.email || '').toLowerCase()) : null;
+    const v = mb || { titre: '', adresse: '', quartier: 'p11', statut: 'avant-premiere', prix: 0, description: '' };
+    const statuts = [{ value: 'avant-premiere', label: 'Avant-première' }, { value: 'ouvert', label: 'Ouvert aux visites' }, { value: 'sous-offre', label: 'Sous offre' }, { value: 'vendu', label: 'Vendu' }];
+    return '<h3>Compléter la fiche du bien</h3><p class="se-muted">' + esc((d && d.nom) || '') + ' · le membre verra ces informations dans son espace.</p>' +
+      '<form data-form="bien-membre" data-email="' + esc((d && d.email) || '') + '"><div class="se-form-grid">' +
+        field('Titre', 'titre', v.titre, { full: true, placeholder: 'Quatre pièces sur la Seine' }) +
+        field('Adresse', 'adresse', v.adresse || '', { full: true, placeholder: '12 rue de Turenne' }) +
+        field('Quartier', 'quartier', v.quartier, { type: 'select', options: QUARTIERS.map((q) => ({ value: q.id, label: q.label })) }) +
+        field('Statut', 'statut', v.statut, { type: 'select', options: statuts }) +
+        field('Prix final (€)', 'prix', v.prix, { type: 'number' }) +
+        field('Description', 'description', v.description, { type: 'textarea', full: true, placeholder: 'Ce qui fait la différence : lumière, vue, volumes…' }) +
+      '</div><div class="se-modal-foot"><button class="se-btn ghost" type="button" data-act="modal-close">Annuler</button><button class="se-btn" type="submit">Enregistrer</button></div></form>';
+  }
+
+  function moreSheet() {
+    return '<h3>Menu</h3><p class="se-muted">Tout le CRM.</p><div class="se-list">' +
+      '<a class="se-list-item" href="#/offres" style="text-decoration:none;color:inherit;padding:14px 4px">' + ICONS.tag + '<span style="flex:1;margin-left:10px">Offres</span>' + (offresNouvelles() ? '<span class="se-badge offer">' + offresNouvelles() + '</span>' : '') + '</a>' +
+      '<a class="se-list-item" href="#/taches" style="text-decoration:none;color:inherit;padding:14px 4px">' + ICONS.check + '<span style="flex:1;margin-left:10px">Tâches</span></a>' +
+      '<a class="se-list-item" href="#/messages" style="text-decoration:none;color:inherit;padding:14px 4px">' + ICONS.chat + '<span style="flex:1;margin-left:10px">Messages</span></a>' +
+      '<a class="se-list-item" href="#/reglages" style="text-decoration:none;color:inherit;padding:14px 4px">' + ICONS.tools + '<span style="flex:1;margin-left:10px">Réglages</span></a>' +
+      '<a class="se-list-item" href="espace.html" style="text-decoration:none;color:inherit;padding:14px 4px">' + ICONS.out + '<span style="flex:1;margin-left:10px">Espace membre</span></a>' +
+      '</div>';
+  }
+
+  /* ================================ actions =============================== */
+
+  function csv(rows, cols) {
+    const esc2 = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+    return [cols.join(';')].concat(rows.map((r) => cols.map((c) => esc2(r[c])).join(';'))).join('\n');
+  }
+
+  function download(name, text, type) {
+    const blob = new Blob([text], { type: type || 'text/plain;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 800);
+  }
+
+  const actions = {
+    'more': () => { modal = moreSheet(); render(); },
+    'modal-close': (el, id, e) => {
+      if (e.target.closest('[data-stop]') && !e.target.hasAttribute('data-act')) return;
+      modal = null; modalLarge = false; state.__previewMsg = undefined; render();
+    },
+    'filtre': (el) => {
+      const [key, val] = el.getAttribute('data-id').split(':');
+      state.filtres[key] = val;
+      commit();
+    },
+    'client-nouveau': () => { modal = clientModal(null); render(); },
+    'client-editer': (el, id) => { modal = clientModal(client(id)); render(); },
+    'bien-nouveau': () => { modal = bienModal(null); render(); },
+    'bien-editer': (el, id) => { modal = bienModal(bien(id)); render(); },
+    'recherche-nouvelle': (el, id) => { modal = rechercheModal(null, id); render(); },
+    'recherche-editer': (el, id) => { modal = rechercheModal(recherche(id)); render(); },
+    'recherche-envoyer': (el, id) => {
+      const rec = recherche(id);
+      const n = biensCompatibles(rec, 40).length;
+      toast('Sélection de ' + n + ' bien(s) envoyée à ' + nomClient(client(rec.clientId)) + ' (simulation).', 'ok');
+    },
+    'visite-nouvelle': (el, id) => { modal = visiteModal({ clientId: el.getAttribute('data-id') === 'null' ? '' : (client(id) ? id : ''), bienId: el.getAttribute('data-bien') || '' }); render(); },
+    'visites-nouvelle': () => { modal = visiteModal({}); render(); },
+    'tache-nouvelle': () => { modal = tacheModal(); render(); },
+    'tache-toggle': (el, id) => {
+      const t = state.taches.find((x) => x.id === id);
+      if (t) { t.fait = el.checked; commit(); }
+    },
+    'q-toggle': (el) => {
+      const pressed = el.getAttribute('aria-pressed') === 'true';
+      el.setAttribute('aria-pressed', String(!pressed));
+    },
+    'demande-traiter': (el, id) => {
+      const d = state.demandes.find((x) => x.id === id);
+      if (d) { d.statut = 'traitee'; commit(); toast('Demande traitée.'); }
+    },
+    'demande-client': (el, id) => {
+      const d = state.demandes.find((x) => x.id === id);
+      if (!d) return;
+      const c = {
+        id: uid('c'), type: d.type === 'candidature' ? 'acquereur' : 'acquereur',
+        prenom: (d.nom || 'Nouveau').split(' ')[0], nom: (d.nom || '').split(' ').slice(1).join(' ') || '',
+        email: d.email || '', tel: '', statut: 'prospect', source: d.source || 'Site web',
+        budgetMin: 0, budgetMax: d.montant || 0, quartiers: [], piecesMin: 0, surfaceMin: 0, typeBien: '',
+        notes: d.message || '', tags: [], agent: state.agent.prenom + ' ' + state.agent.nom, cree: nowISO()
+      };
+      state.clients.push(c);
+      d.clientId = c.id;
+      d.statut = 'traitee';
+      commit();
+      toast('Fiche client créée : ' + nomClient(c), 'ok');
+      location.hash = '#/client/' + c.id;
+    },
+    'demande-visite': (el, id) => {
+      const d = state.demandes.find((x) => x.id === id);
+      modal = visiteModal({ bienId: (d && d.bienId) || '', clientId: (d && d.clientId) || '' });
+      render();
+    },
+    'demande-traitement': (el, id) => {
+      const d = state.demandes.find((x) => x.id === id);
+      modal = offreModal({ bienId: (d && d.bienId) || '', clientId: (d && d.clientId) || '', montant: (d && d.montant) || 0 });
+      render();
+    },
+    'bien-membre-completer': (el, id) => { modal = bienMembreModal(id); render(); },
+    'lead-valider': async (el, id) => {
+      try {
+        const r = await fetch('/api/leads/' + id + '/statut', {
+          method: 'PATCH', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ statut: 'accepte' })
+        });
+        if (!r.ok) throw new Error('Erreur');
+        const c = state.clients.find((x) => x.serverId === id);
+        if (c) { c.serveurStatut = 'accepte'; if (c.statut === 'prospect') c.statut = 'actif'; }
+        commit();
+        toast('Accès validé. Le membre est débloqué.', 'ok');
+      } catch (e) { toast('Validation impossible.', 'warn'); }
+    },
+    'verif-valider': async (el, id) => {
+      try {
+        const r = await fetch('/api/tasks/' + id + '/valider', { method: 'POST' });
+        if (!r.ok) throw new Error('Erreur');
+        const t = (state.tachesVerif || []).find((x) => x.id === id);
+        if (t) t.statut = 'validee';
+        const c = state.clients.find((x) => x.serverId === (t && t.leadId));
+        if (c) { c.serveurStatut = 'accepte'; if (c.statut === 'prospect') c.statut = 'actif'; }
+        commit();
+        toast('Compte validé. Le membre est débloqué.', 'ok');
+      } catch (e) { toast('Validation impossible.', 'warn'); }
+    },
+    'verif-refuser': async (el, id) => {
+      try {
+        const r = await fetch('/api/tasks/' + id + '/refuser', { method: 'POST' });
+        if (!r.ok) throw new Error('Erreur');
+        const t = (state.tachesVerif || []).find((x) => x.id === id);
+        if (t) t.statut = 'refusee';
+        commit();
+        toast('Dossier refusé.', 'warn');
+      } catch (e) { toast('Action impossible.', 'warn'); }
+    },
+    'demande-ouvrir': (el, id) => { const d = state.demandes.find((x) => x.id === id || x.serverDemandeId === id); if (d) { location.hash = '#/demande/' + d.id; } },
+    'accepter-adhesion': async (el, id) => { await decisionDemande(id, 'valider'); },
+    'suspendre-adhesion': (el, id) => { modal = suspendreModal(id); render(); },
+    'refuser-adhesion': async (el, id) => { await decisionDemande(id, 'refuser'); },
+    'offre-accepter': async (el, id) => {
+      const d = state.demandes.find((x) => x.id === id || x.serverDemandeId === id);
+      const offreId = d ? (d.offreId || d.serverDemandeId) : id;
+      try {
+        const r = await fetch('/api/offres/' + offreId + '/accepter', { method: 'POST' });
+        if (!r.ok) throw new Error('Erreur');
+        if (d) d.statut = 'traitee';
+        const b = d && d.bienId ? bien(d.bienId) : null;
+        if (b) b.statut = 'sous-compromis';
+        modal = null;
+        commit();
+        toast('Offre acceptée. Le bien passe sous compromis.', 'ok');
+      } catch (e) { toast('Action impossible.', 'warn'); }
+    },
+    'offre-contre': (el, id) => {
+      const d = state.demandes.find((x) => x.id === id || x.serverDemandeId === id);
+      if (d) { modal = offreContreModal(d); render(); }
+    },
+    'demande-relancer': (el, id) => {
+      const d = state.demandes.find((x) => x.id === id || x.serverDemandeId === id);
+      if (d) { d.statut = 'nouvelle'; commit(); toast('Demande relancée.', 'ok'); }
+    },
+    'bien-valider': async (el, id) => {
+      const b = bien(id);
+      const serverId = b ? (b.serverId || b.id) : id;
+      try {
+        const r = await fetch('/api/biens/' + serverId + '/valider', { method: 'PATCH' });
+        const res = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(res.error || 'Erreur');
+        if (b) b.validation = 'valide';
+        commit();
+        toast('Bien validé. Le marché est débloqué pour ce membre.', 'ok');
+      } catch (e) { toast('Validation impossible : ' + (e.message || 'erreur'), 'warn'); }
+    },
+    'sel-tous': (el) => {
+      const checked = el.checked;
+      document.querySelectorAll('.sel-acq').forEach((b) => { b.checked = checked; });
+      const n = document.querySelectorAll('.sel-acq:checked').length;
+      const btn = document.getElementById('btn-envoi-sel');
+      if (btn) btn.textContent = n ? ('Envoyer à la sélection (' + n + ')') : 'Envoyer à tous les matchs';
+    },
+    'bien-envoyer-sel': (el) => {
+      const bienId = el.getAttribute('data-bien');
+      const all = JSON.parse(el.getAttribute('data-all') || '[]');
+      const ids = Array.prototype.slice.call(document.querySelectorAll('.sel-acq:checked')).map((b) => b.getAttribute('value'));
+      const cibles = ids.length ? ids : all;
+      if (!cibles.length) { toast('Aucun acquéreur à contacter.', 'warn'); return; }
+      state.__sel = cibles;
+      state.__previewMsg = undefined;
+      modalLarge = true;
+      modal = previewModal(bienId, cibles[0]);
+      render();
+    },
+    'prospection-dpe': async (el) => {
+      const input = document.querySelector('input[name="prospection-ville"]');
+      const ville = String((input && input.value) || '').trim();
+      if (!ville) { toast('Saisissez une ville ou un secteur.', 'warn'); return; }
+      const status = document.getElementById('prospection-status');
+      if (status) status.textContent = 'Prospection DPE en cours…';
+      try {
+        const r = await fetch('/api/robot/prospecting?ville=' + encodeURIComponent(ville), { credentials: 'same-origin' }).then((x) => x.json());
+        if (r.ok && r.data && r.data.results) {
+          const biens = r.data.results.map(mapSignalRobotBien);
+          state.robotBiens = biens;
+          state.robot = r.data;
+          state.robotFiltres = {};
+          state.robotPage = 1;
+          if (biens.length) { toast(biens.length + ' signal(s) DPE détecté(s).', 'ok'); }
+          else { toast('Aucun signal DPE trouvé.', 'warn'); }
+        } else { toast(r.error || 'Aucun résultat.', 'warn'); }
+      } catch (e) { toast(e.message || 'Prospection impossible.', 'warn'); }
+      if (status) status.textContent = '';
+      saveRobotBiens();
+      render();
+    },
+    'robot-search': async (el) => {
+      const form = document.querySelector('form[data-form="robot-search"]');
+      const fd = form ? new FormData(form) : new FormData();
+      const params = new URLSearchParams();
+      ['adresse', 'ville', 'code_postal', 'dpe', 'section', 'numero'].forEach((k) => {
+        const v = String(fd.get(k) || '').trim();
+        if (v) params.set(k, v);
+      });
+      if (!params.toString()) { toast('Saisissez au moins une adresse ou une ville.', 'warn'); return; }
+      const status = document.getElementById('robot-status');
+      if (status) status.textContent = 'Prospection en cours…';
+      try {
+        const r = await fetch('/api/robot/search?' + params.toString(), { credentials: 'same-origin' }).then((x) => x.json());
+        if (r.ok && r.data) {
+          const feats = (r.data.features || []).map(mapRobotBien);
+          state.robotBiens = feats;
+          state.robot = r.data;
+          state.robotFiltres = {};
+          state.robotPage = 1;
+          if (feats.length) { toast(feats.length + ' bien(s) trouvé(s) par le moteur.', 'ok'); }
+          else { toast('Aucun bien trouvé.', 'warn'); }
+          const feats2 = feats.map((b) => b.feature).filter(Boolean);
+          if (feats2.length) {
+            fetch('/api/robot/enrichir-lot', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ features: feats2 }) }).then(() => pollEnrichissement()).catch(() => {});
+          }
+        } else { state.robot = null; toast(r.error || 'Aucun résultat.', 'warn'); }
+      } catch (e) {
+        state.robot = null;
+        toast(e.message || 'Prospection impossible (moteur Python injoignable).', 'warn');
+      }
+      if (status) status.textContent = '';
+      saveRobotBiens();
+      render();
+    },
+    'robot-ajouter': async (el) => {
+      const d = JSON.parse(el.getAttribute('data-json') || '{}');
+      if (!d.nom) { toast('Propriétaire non identifié — enrichissez d’abord le bien.', 'warn'); return; }
+      try {
+        const r = await fetch('/api/leads', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({
+          nom: d.nom, prenom: d.prenom || '', email: d.email || '', tel: d.tel || '', type: d.type || 'personne',
+          siren: d.siren || '', dirigeants: d.dirigeants || [], ville: d.ville || '', adresseBien: d.adresseBien || d.adresse || '',
+          parcelle: d.ref || d.parcelle || '', dpe: d.dpe || '', notes: 'Prospection Immo Data Robot'
+        }) }).then((x) => x.json());
+        if (r.ok) { toast('Prospect vendeur ajouté aux Leads.', 'ok'); syncServeur(); location.hash = '#/clients'; }
+        else toast(r.error || 'Ajout impossible.', 'warn');
+      } catch (e) { toast(e.message || 'Ajout impossible.', 'warn'); }
+    },
+    'robot-bien-tab': (el) => { state.robotBienTab = el.getAttribute('data-tab'); render(); },
+    'robot-enrichir': async (el) => {
+      const id = el.getAttribute('data-id');
+      const b = robotBien(id);
+      if (!b || !b.feature) { toast('L\'enrichissement nécessite la référence cadastrale complète.', 'warn'); return; }
+      try {
+        const r = await fetch('/api/robot/enrichir-parcelle', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ feature: b.feature }) }).then((x) => x.json());
+        if (r.ok && r.dossier) {
+          const o = r.dossier.owner || {};
+          const cand = (o.candidates && o.candidates[0]) || {};
+          b.proprietaire = {
+            nom: cand.name || cand.nom || '',
+            type: String(cand.owner_type || cand.type || '').toLowerCase().indexOf('sci') > -1 ? 'sci' : (cand.siren ? 'societe' : 'personne'),
+            siren: cand.siren || '',
+            dirigeants: []
+          };
+          if (r.dossier.scores && r.dossier.scores.data_reliability) {
+            b.confidence_owner = r.dossier.scores.data_reliability.score;
+            b.confidence_owner_source = (r.dossier.owner && r.dossier.owner.source_status) || 'dossier cadastre';
+          }
+          if (r.parcelId) b.parcelId = r.parcelId;
+          commit(); render();
+          toast(b.proprietaire.nom ? 'Propriétaire identifié : ' + b.proprietaire.nom : 'Enrichissement effectué (propriétaire non identifié).', 'ok');
+        } else toast(r.error || 'Enrichissement impossible.', 'warn');
+      } catch (e) { toast(e.message || 'Enrichissement impossible.', 'warn'); }
+    },
+    'dpe-fiche': (el) => {
+      state.dpeFiche = el.getAttribute('data-key');
+      state.dpeEnrichi = null;
+      modal = dpeFicheModal();
+      render();
+    },
+    'dpe-preset': (el) => {
+      const p = el.getAttribute('data-preset');
+      const boxes = document.querySelectorAll('input[name="classe"]');
+      if (p === 'passoires') {
+        boxes.forEach((b) => { b.checked = (b.value === 'F' || b.value === 'G'); });
+      } else if (p === 'anciens') {
+        boxes.forEach((b) => { b.checked = true; });
+        const df = document.querySelector('input[name="date_fin"]');
+        if (df) df.value = '2022-12-31';
+      }
+    },
+    'dpe-enrichir': async (el) => {
+      const adresse = el.getAttribute('data-adresse');
+      toast('Pipeline : cadastre → parcelle → propriétaire…');
+      try {
+        const r = await fetch('/api/robot/enrichir', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ adresse: adresse }) }).then((x) => x.json());
+        state.dpeEnrichi = r;
+      } catch (e) { state.dpeEnrichi = { error: e.message || 'Enrichissement impossible.' }; }
+      modal = dpeFicheModal();
+      render();
+    },
+    'dpe-search': async (el) => {
+      const form = document.querySelector('form[data-form="dpe-search"]');
+      const fd = form ? new FormData(form) : new FormData();
+      const classes = Array.prototype.slice.call(document.querySelectorAll('input[name="classe"]:checked')).map((c) => c.value);
+      state.dpeClasses = classes;
+      const params = new URLSearchParams();
+      ['ville', 'code_postal', 'section', 'numero', 'date_debut', 'date_fin', 'surface_min', 'surface_max', 'type', 'tri'].forEach((k) => {
+        const v = String(fd.get(k) || '').trim();
+        if (v) params.set(k, v);
+      });
+      if (classes.length) params.set('classes', classes.join(','));
+      if (!params.has('ville') && !params.has('code_postal')) { toast('Saisissez une adresse, une ville ou un code postal.', 'warn'); return; }
+      const status = document.getElementById('dpe-status');
+      if (status) status.textContent = 'Recherche ADEME en cours…';
+      try {
+        const r = await fetch('/api/robot/dpe?' + params.toString(), { credentials: 'same-origin' }).then((x) => x.json());
+        if (r.ok && r.results && r.results.length) {
+          state.dpe = r;
+          let biens = r.results.map(mapSignalRobotBien);
+          // fusionner la recherche cadastrale si section/numero renseignés
+          const section = String(fd.get('section') || '').trim();
+          const numero = String(fd.get('numero') || '').trim();
+          if (section || numero) {
+            try {
+              const cp = new URLSearchParams();
+              ['ville', 'code_postal', 'section', 'numero'].forEach((k) => { const v = String(fd.get(k) || '').trim(); if (v) cp.set(k, v); });
+              const cr = await fetch('/api/robot/search?' + cp.toString(), { credentials: 'same-origin' }).then((x) => x.json());
+              if (cr.ok && cr.data && cr.data.features) biens = biens.concat(cr.data.features.map(mapRobotBien));
+            } catch (e) { /* cadastre indisponible */ }
+          }
+          state.robotBiens = biens;
+          state.robotFiltres = {};
+          state.robotPage = 1;
+          saveRobotBiens();
+          toast(biens.length + ' bien(s) DPE détecté(s) — enrichissement automatique lancé.', 'ok');
+          enrichirDpeAuto();
+          location.hash = '#/robot-radar';
+        } else {
+          state.dpe = r;
+          toast('Aucun DPE trouvé.', 'warn');
+        }
+      } catch (e) { state.dpe = null; toast(e.message || 'Recherche impossible.', 'warn'); }
+      if (status) status.textContent = '';
+      render();
+    },
+    'notification-traiter': async (el) => {
+      const id = el.getAttribute('data-id');
+      state.notificationsTraitees = state.notificationsTraitees || [];
+      if (state.notificationsTraitees.indexOf(id) === -1) state.notificationsTraitees.push(id);
+      commit();
+      fetch('/api/notifications', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ traitees: state.notificationsTraitees }) }).catch(() => {});
+      toast('Notification traitée.', 'ok');
+    },
+    'notification-whatsapp': (el) => {
+      const id = el.getAttribute('data-id');
+      const n = notifications().find((x) => x.id === id);
+      const c = n && n.clientId ? client(n.clientId) : null;
+      if (!c) return;
+      modal = whatsappModal(c);
+      render();
+    },
+    'pipeline-deplacer': (el) => {
+      const c = client(el.getAttribute('data-id'));
+      if (c) { c.pipeline = el.value; commit(); }
+      if (c && c.serverId) {
+        fetch('/api/leads/' + c.serverId, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ pipeline: el.value }) }).catch(() => {});
+      }
+    },
+    'whatsapp-preview': (el) => {
+      const c = client(el.getAttribute('data-id'));
+      if (!c) return;
+      modal = whatsappModal(c);
+      render();
+    },
+    'whatsapp-ouvrir': (el) => {
+      const tel = el.getAttribute('data-tel');
+      const msg = document.getElementById('wa-msg');
+      const texte = msg ? msg.value : '';
+      window.open('https://wa.me/' + tel + '?text=' + encodeURIComponent(texte), '_blank');
+      toast('WhatsApp ouvert. Pensez à consigner le contact après échange.', 'info');
+    },
+    'copier-contact': async (el) => {
+      const value = el.getAttribute('data-value') || '';
+      try {
+        await navigator.clipboard.writeText(value);
+        toast('Copié : ' + value, 'ok');
+      } catch (e) {
+        const ta = document.createElement('textarea'); ta.value = value; document.body.appendChild(ta); ta.select();
+        try { document.execCommand('copy'); toast('Copié', 'ok'); } catch (e2) { toast('Copie impossible.', 'warn'); }
+        document.body.removeChild(ta);
+      }
+    },
+    'rechercher-telephones': async (el) => {
+      const b = robotBien(el.getAttribute('data-id'));
+      if (!b || !b.proprietaire || !b.proprietaire.nom) { toast('Propriétaire SCI non identifié — enrichissez d’abord.', 'warn'); return; }
+      const nom = b.proprietaire.nom;
+      toast('Recherche des coordonnées publiées (Exa)…');
+      const requetes = ['"' + nom + '" téléphone contact', '"' + nom + '" coordonnées siège'];
+      const telTrouves = new Set();
+      try {
+        for (const q of requetes) {
+          const r = await fetch('/api/robot/exa-search', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ query: q }) }).then((x) => x.json());
+          if (r.ok && r.results) {
+            r.results.forEach((res) => {
+              const txt = res.text || '';
+              const nums = txt.match(/0[1-9](?:[ .-]?\d{2}){4}/g) || [];
+              nums.forEach((n) => telTrouves.add(n.replace(/[ .-]/g, '')));
+            });
+          }
+        }
+        const contacts = b.contacts || [];
+        telTrouves.forEach((n) => {
+          if (!contacts.some((c) => c.type === 'tel' && c.valeur === n)) {
+            contacts.push({ type: 'tel', valeur: n, source: 'Exa (publication web)', verification: 'FOUND_UNVERIFIED' });
+          }
+        });
+        b.contacts = contacts;
+        commit(); render();
+        toast(telTrouves.size ? telTrouves.size + ' numéro(s) trouvé(s) — à vérifier.' : 'Aucun numéro public trouvé.', telTrouves.size ? 'ok' : 'warn');
+      } catch (e) { toast('Recherche Exa impossible.', 'warn'); }
+    },
+    'robot-dvf': async (el) => {
+      const b = robotBien(el.getAttribute('data-id'));
+      if (!b) return;
+      if (!b.codeInsee || !b.section || !b.numero) { toast('Référence cadastrale incomplète — relancez l’enrichissement pour la récupérer.', 'warn'); return; }
+      toast('Lecture DVF en cours…');
+      try {
+        const r = await fetch('/api/robot/dvf?code_insee=' + encodeURIComponent(b.codeInsee) + '&section=' + encodeURIComponent(b.section) + '&numero=' + encodeURIComponent(b.numero), { credentials: 'same-origin' }).then((x) => x.json());
+        if (r.ok && r.mutations) { b.dvfMutations = r.mutations; commit(); render(); toast(r.mutations.length + ' mutation(s) DVF trouvée(s).', 'ok'); }
+        else toast(r.error || 'Aucune mutation DVF.', 'warn');
+      } catch (e) { toast('Lecture DVF impossible.', 'warn'); }
+    },
+    'robot-favori': (el) => {
+      const b = robotBien(el.getAttribute('data-id'));
+      if (b) { b.favori = !b.favori; commit(); render(); toast(b.favori ? 'Ajouté aux favoris.' : 'Retiré des favoris.', 'ok'); }
+    },
+    'robot-tache': (el) => {
+      const b = robotBien(el.getAttribute('data-id'));
+      if (!b) return;
+      const echeance = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+      state.taches = state.taches || [];
+      state.taches.push({ id: uid('t'), titre: 'Prospecter : ' + (b.adresse || 'bien'), bienId: b.id, echeance: echeance, fait: false });
+      commit(); render(); toast('Tâche créée.', 'ok');
+    },
+    'robot-note': (el) => {
+      const b = robotBien(el.getAttribute('data-id'));
+      if (!b) return;
+      const texte = (window.prompt('Note :') || '').trim();
+      if (!texte) return;
+      b.notes = b.notes || [];
+      b.notes.push({ texte: texte, date: new Date().toISOString() });
+      commit(); render(); toast('Note ajoutée.', 'ok');
+    },
+    'robot-statut': (el) => {
+      const b = robotBien(el.getAttribute('data-id'));
+      if (b) { b.statutProspection = el.getAttribute('data-statut'); commit(); render(); toast('Statut mis à jour.', 'ok'); }
+    },
+    'robot-ignorer': (el) => {
+      const b = robotBien(el.getAttribute('data-id'));
+      if (b) { b.ignore = true; commit(); render(); toast('Bien ignoré — retiré des résultats actifs.', 'ok'); }
+    },
+    'societe-enrichir': async (el) => {
+      const siren = el.getAttribute('data-siren');
+      toast('Recherche des dirigeants (SIRENE)…');
+      try {
+        const r = await fetch('/api/robot/dirigeants?siren=' + encodeURIComponent(siren), { credentials: 'same-origin' }).then((x) => x.json());
+        if (r.ok && r.dirigeants) {
+          const s = (state.portefeuilleFoncier || []).find((x) => x.siren === siren);
+          if (s) { s.dirigeants = r.dirigeants; s.enrichi = new Date().toISOString(); commit(); render(); toast((r.dirigeants.length || 0) + ' dirigeant(s) trouvé(s).', 'ok'); }
+        } else toast(r.error || 'Aucun dirigeant.', 'warn');
+      } catch (e) { toast('Recherche impossible.', 'warn'); }
+    },
+    'societe-favori': (el) => {
+      const s = (state.portefeuilleFoncier || []).find((x) => x.siren === el.getAttribute('data-siren'));
+      if (s) { s.favori = !s.favori; commit(); render(); toast(s.favori ? 'Ajouté aux favoris.' : 'Retiré des favoris.', 'ok'); }
+    },
+    'societe-tache': (el) => {
+      const s = (state.portefeuilleFoncier || []).find((x) => x.siren === el.getAttribute('data-siren'));
+      if (s) { state.taches = state.taches || []; state.taches.push({ id: uid('t'), titre: 'Prospecter : ' + (s.denomination || s.siren), echeance: new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10), fait: false }); commit(); render(); toast('Tâche créée.', 'ok'); }
+    },
+    'synchroniser-permis': async (el) => { await synchroniserPermis(); },
+    'robot-enrichir-masse': async (el) => {
+      const aTraiter = robotBiens().filter((b) => b.adresse && (!b.proprietaire || !b.proprietaire.nom));
+      if (!aTraiter.length) { toast('Aucune fiche à enrichir.', 'ok'); return; }
+      toast('Enrichissement en masse lancé sur ' + aTraiter.length + ' bien(s)…');
+      enrichirDpeAuto();
+    },
+    'robot-priorite-filtre': (el) => {
+      const n = el.getAttribute('data-niveau');
+      state.robotPriorite = n ? Number(n) : null;
+      commit(); render();
+    },
+    'robot-map-toggle': (el) => {
+      state.robotShowMap = !state.robotShowMap;
+      render();
+      if (state.robotShowMap) setTimeout(initRobot, 60);
+    },
+    'robot-page': (el) => {
+      const p = Number(el.getAttribute('data-page')) || 1;
+      state.robotPage = Math.max(1, p);
+      commit(); render();
+    },
+    'robot-filtre-secteur': (el) => {
+      state.robotFiltres = state.robotFiltres || {};
+      state.robotFiltres.secteur = el.getAttribute('data-sec');
+      location.hash = '#/robot-radar';
+    },
+    'robot-reset-filtres': () => { state.robotFiltres = {}; render(); },
+    'matching-statut': (el) => {
+      const key = el.getAttribute('data-key');
+      const statut = el.getAttribute('data-statut');
+      const m = (state.matchings || []).find((x) => x.key === key);
+      if (m) { m.statut = statut; commit(); render(); }
+    },
+    'radar-zone': (el) => {
+      const q = el.getAttribute('data-id');
+      const c = COORDS_CRM[q];
+      if (c && window.__radarMap) window.__radarMap.setView(c, 13);
+    },
+    'bien-envoyer': (el, id, e) => {
+      const bienId = el.getAttribute('data-bien') || id;
+      const clientId = el.getAttribute('data-client');
+      if (bienId && clientId) { modalLarge = true; state.__previewMsg = undefined; modal = previewModal(bienId, clientId); render(); }
+    },
+    'bien-envoyer-tous': (el) => {
+      const bienId = el.getAttribute('data-bien');
+      const ids = JSON.parse(el.getAttribute('data-clients') || '[]');
+      const b = bien(bienId);
+      if (!b || !ids.length) return;
+      (async () => {
+        let n = 0;
+        for (const cid of ids) {
+          const c = client(cid);
+          if (!c || !c.email) continue;
+          try {
+            const r = await fetch('/api/biens/' + (b.serverId || b.id) + '/envoi', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: c.email, nom: c.prenom }) });
+            if (r.ok) n++;
+          } catch (e) { /* continue */ }
+        }
+        toast('Emails envoyés à ' + n + ' acquéreur(s).', 'ok');
+      })();
+    },
+    'preview-tab': (el) => {
+      const tab = el.getAttribute('data-tab');
+      const bienId = el.getAttribute('data-bien');
+      const clientId = el.getAttribute('data-client');
+      const ta = document.getElementById('preview-msg');
+      state.__previewMsg = ta ? ta.value : undefined;
+      modal = previewModal(bienId, clientId, tab);
+      render();
+    },
+    'preview-email': async (el) => {
+      const bienId = el.getAttribute('data-bien');
+      const clientId = el.getAttribute('data-client');
+      const b = bien(bienId);
+      const c = client(clientId);
+      const message = (document.getElementById('preview-msg') ? document.getElementById('preview-msg').value : '');
+      if (!b || !c || !c.email) { toast('Email du client introuvable.', 'warn'); return; }
+      const dom = (c.email || '').toLowerCase().split('@')[1] || '';
+      if (/^(example\.(com|org|net)|test\.com|localhost|invalid\.com|mailinator\.com)$/.test(dom)) { toast('Adresse email invalide ou non délivrable. Veuillez vérifier.', 'warn'); return; }
+      try {
+        const r = await fetch('/api/biens/' + (b.serverId || b.id) + '/envoi', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: c.email, nom: c.prenom, message: message }) });
+        const res = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(res.emailErreur || res.error || 'Erreur serveur');
+        modal = null;
+        commit();
+        if (res.emailEnvoye === false) toast('Email échoué : ' + (res.emailErreur || 'SMTP'), 'warn');
+        else toast('Email envoyé à ' + c.prenom + '.', 'ok');
+      } catch (e) { toast('Envoi impossible : ' + (e.message || 'erreur'), 'warn'); }
+    },
+    'preview-wa': (el) => {
+      const clientId = el.getAttribute('data-client');
+      const c = client(clientId);
+      const message = (document.getElementById('preview-msg') ? document.getElementById('preview-msg').value : '');
+      if (!c || !c.tel) { toast('Téléphone du client introuvable.', 'warn'); return; }
+      const wa = 'https://wa.me/' + String(c.tel).replace(/[^0-9]/g, '') + '?text=' + encodeURIComponent(message);
+      window.open(wa, '_blank');
+    },
+    'renvoyer-email': async (el, id) => {
+      if (!id) { toast('Ceci est une fiche de test, veuillez utiliser une vraie candidature.', 'warn'); return; }
+      try {
+        const r = await fetch('/api/demandes/' + id + '/renvoyer', { method: 'POST' });
+        const res = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(res.error || 'Erreur');
+        if (res.emailEnvoye === false) toast('Email échoué : ' + (res.emailErreur || 'SMTP'), 'warn');
+        else toast('Email d’accès renvoyé au client.', 'ok');
+      } catch (e) { toast('Envoi impossible : ' + (e.message || 'erreur'), 'warn'); }
+    },
+    'exclusivite-scan': async (el, id) => {
+      const b = bien(id);
+      const serverId = b ? (b.serverId || b.id) : id;
+      try {
+        const r = await fetch('/api/biens/' + serverId + '/exclusivite-scan', { method: 'POST' });
+        const res = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(res.error || 'Erreur');
+        if (b && res.exclusivite) b.exclusivite = res.exclusivite;
+        commit();
+        if (res.exclusivite && res.exclusivite.erreur) toast('Scan : ' + res.exclusivite.erreur, 'warn');
+        else if (res.exclusivite && res.exclusivite.statut === 'alerte_doublon') toast('Alerte : ' + ((res.exclusivite.liens || []).length) + ' annonce(s) suspecte(s).', 'warn');
+        else if (res.exclusivite && res.exclusivite.statut === 'verifie_exclusif') toast('Scan terminé : aucun doublon trouvé.', 'ok');
+        else toast('Scan lancé.', 'ok');
+      } catch (e) { toast('Scan impossible : ' + (e.message || 'erreur'), 'warn'); }
+    },
+    'doc-valider': async (el, id) => {
+      try {
+        const r = await fetch('/api/documents/' + id, {
+          method: 'PATCH', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ statut: 'valide' })
+        });
+        if (!r.ok) throw new Error('Erreur');
+        Object.keys(state.docsParLead).forEach((k) => {
+          (state.docsParLead[k] || []).forEach((d) => { if (d.id === id) d.statut = 'valide'; });
+        });
+        commit();
+        toast('Pièce validée.', 'ok');
+      } catch (e) { toast('Validation impossible.', 'warn'); }
+    },
+    'market-scan': async (el, id) => {
+      const b = bien(id);
+      if (!b) return;
+      const adresse = b.adresse || (b.titre ? b.titre + ', ' + qLabel(b.quartier) : qLabel(b.quartier));
+      if (!adresse) { toast('Renseignez l’adresse du bien avant de scanner.', 'warn'); return; }
+      state.scan = { id: id, loading: true };
+      render();
+      try {
+        const r = await fetch('/api/market-search?adresse=' + encodeURIComponent(adresse) + '&surface=' + (b.surface || 0) + '&prix=' + (b.prix || 0), { headers: { accept: 'application/json' } });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || 'Scan impossible');
+        state.scan = { id: id, loading: false, data: d };
+      } catch (e) {
+        state.scan = { id: id, loading: false, error: (e.message || 'Scan impossible — réessayez.') };
+      }
+      render();
+    },
+    'statut-valider': (el, id) => {
+      const d = state.demandes.find((x) => x.id === id);
+      if (!d) return;
+      if (d.serveur && d.serverDemandeId) {
+        fetch('/api/demandes/' + d.serverDemandeId, {
+          method: 'PATCH', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ statut: 'traitee', action: d.role })
+        }).then((r) => {
+          if (!r.ok) throw new Error('Erreur');
+          d.statut = 'traitee';
+          commit();
+          toast('Demande validée côté membre.', 'ok');
+        }).catch(() => toast('Validation impossible.', 'warn'));
+        return;
+      }
+      const cible = d.statut === 'ouvert' ? 'ouvert' : 'avant-premiere';
+      const biens = readBiensMembres();
+      const i = biens.findIndex((b) => (b.email || '').toLowerCase() === (d.email || '').toLowerCase());
+      if (i > -1) { biens[i].statut = cible; biens[i].statutDemande = null; writeBiensMembres(biens); }
+      d.statut = 'traitee';
+      state.membresBiens = biens.map((b) => Object.assign({}, b, { label: qLabel(b.quartier) }));
+      commit();
+      toast(cible === 'ouvert' ? 'Validé : le bien passe en visite possible. Les abonnés sont notifiés.' : 'Validé : retour en avant-première.', 'ok');
+    },
+    'visite-confirmer': (el, id) => {
+      const v = state.visites.find((x) => x.id === id);
+      if (v) { v.statut = 'confirmee'; commit(); toast('Visite confirmée.'); }
+    },
+    'visite-annuler': (el, id) => {
+      const v = state.visites.find((x) => x.id === id);
+      if (v) { v.statut = 'annulee'; commit(); toast('Visite annulée.'); }
+    },
+    'offre-acceptee': (el, id) => {
+      const o = state.offres.find((x) => x.id === id);
+      if (!o) return;
+      o.statut = 'acceptee';
+      state.offres.forEach((x) => { if (x !== o && x.bienId === o.bienId && x.statut === 'recue') x.statut = 'refusee'; });
+      const b = bien(o.bienId);
+      if (b) b.statut = 'sous-offre';
+      commit();
+      toast('Offre acceptée. Le bien passe en « sous offre ».', 'ok');
+    },
+    'offre-refusee': (el, id) => {
+      const o = state.offres.find((x) => x.id === id);
+      if (o) { o.statut = 'refusee'; commit(); toast('Offre refusée.'); }
+    },
+    'message-ouvrir': (el, id) => { location.hash = '#/messages/' + id; },
+    'export-clients': () => {
+      download('clients.csv', csv(state.clients.map((c) => Object.assign({}, c, { quartiers: (c.quartiers || []).map(qLabel).join(' / ') })), ['id', 'prenom', 'nom', 'email', 'tel', 'type', 'statut', 'budgetMin', 'budgetMax', 'piecesMin', 'surfaceMin', 'quartiers', 'agent']), 'text/csv');
+      toast('Export clients prêt.');
+    },
+    'export-biens': () => {
+      download('biens.csv', csv(state.biens.map((b) => Object.assign({}, b, { quartier: qLabel(b.quartier), proprietaire: nomClient(client(b.proprietaireId)) })), ['id', 'ref', 'titre', 'type', 'quartier', 'surface', 'pieces', 'prix', 'statut', 'proprietaire']), 'text/csv');
+      toast('Export biens prêt.');
+    },
+    'export-json': () => { download('seecret-crm.json', JSON.stringify(state, null, 2), 'application/json'); toast('Sauvegarde prête.'); },
+    'reset': () => {
+      if (!confirm('Réinitialiser le CRM ? Toutes les données locales seront effacées.')) return;
+      try { localStorage.removeItem(KEY); } catch (e) {}
+      state = seed(); mergeShared(state); render(); toast('CRM réinitialisé.');
+    },
+    'bien-statut': (el, id) => {
+      const b = bien(id);
+      if (!b) return;
+      const order = ['brouillon', 'mandat', 'avant-premiere', 'ouvert', 'sous-offre', 'vendu'];
+      b.statut = order[(order.indexOf(b.statut) + 1) % order.length];
+      commit();
+      toast('Statut : ' + ST_BIEN[b.statut].label);
+    }
+  };
+
+  /* ================================ events =============================== */
+
+  document.addEventListener('click', (e) => {
+    // Ne pas intercepter les clics sur les boutons submit : laisse le formulaire se soumettre.
+    if (e.target.closest('button[type="submit"], input[type="submit"]')) return;
+    const el = e.target.closest('[data-act]');
+    if (!el) return;
+    const fn = actions[el.getAttribute('data-act')];
+    if (!fn) return;
+    e.preventDefault();
+    fn(el, el.getAttribute('data-id'), e);
+  });
+
+  document.addEventListener('change', (e) => {
+    if (e.target.classList.contains('sel-tous')) {
+      document.querySelectorAll('.sel-acq').forEach((b) => { b.checked = e.target.checked; });
+    }
+    if (e.target.classList.contains('sel-tous') || e.target.classList.contains('sel-acq')) {
+      const n = document.querySelectorAll('.sel-acq:checked').length;
+      const btn = document.getElementById('btn-envoi-sel');
+      if (btn) btn.textContent = n ? ('Envoyer à la sélection (' + n + ')') : 'Envoyer à tous les matchs';
+    }
+    if (e.target.matches('[data-rf]')) {
+      const key = e.target.getAttribute('data-rf');
+      const v = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
+      state.robotFiltres = state.robotFiltres || {};
+      state.robotFiltres[key] = v;
+      commit(); render();
+    }
+    if (e.target.matches('[data-dpe-toutes]')) {
+      const on = e.target.checked;
+      document.querySelectorAll('input[name="classe"]').forEach((b) => { b.checked = on; });
+    }
+  });
+
+  document.addEventListener('submit', async (e) => {
+    const form = e.target.closest('[data-form]');
+    if (!form) return;
+    e.preventDefault();
+    const kind = form.getAttribute('data-form');
+    const data = new FormData(form);
+    const chiffres = (v) => Number(String(v || '').replace(/[^\d.-]/g, '')) || 0;
+
+    if (kind === 'client') {
+      const id = form.getAttribute('data-id');
+      const existing = id ? client(id) : null;
+      const quartiers = $$('.se-chip[aria-pressed="true"]', form).map((c) => c.getAttribute('data-id'));
+      const obj = {
+        id: id || uid('c'), type: data.get('type'), prenom: String(data.get('prenom') || '').trim(),
+        nom: String(data.get('nom') || '').trim(), email: String(data.get('email') || ''), tel: String(data.get('tel') || ''),
+        statut: data.get('statut'), source: data.get('source'),
+        budgetMin: chiffres(data.get('budgetMin')), budgetMax: chiffres(data.get('budgetMax')),
+        piecesMin: chiffres(data.get('piecesMin')), surfaceMin: chiffres(data.get('surfaceMin')),
+        typeBien: data.get('typeBien'), quartiers, notes: String(data.get('notes') || ''),
+        tags: [], agent: state.agent.prenom + ' ' + state.agent.nom,
+        cree: id ? (existing ? existing.cree : nowISO()) : nowISO()
+      };
+      if (!obj.nom && !obj.prenom) { toast('Un nom est nécessaire.', 'warn'); return; }
+      if (existing && existing.serverId) {
+        try {
+          const r = await fetch('/api/leads/' + existing.serverId, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(obj) });
+          const res = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(res.error || 'Erreur serveur');
+          Object.assign(existing, obj);
+          modal = null; commit();
+          toast('Modifications enregistrées.', 'ok');
+        } catch (e) { toast('Erreur : ' + (e.message || 'serveur'), 'warn'); }
+        return;
+      }
+      if (id) { const i = state.clients.findIndex((c) => c.id === id); state.clients[i] = Object.assign(existing, obj); }
+      else state.clients.push(obj);
+      modal = null;
+      commit();
+      toast('Client enregistré.', 'ok');
+      location.hash = '#/client/' + obj.id;
+      return;
+    }
+
+    if (kind === 'demande-edit') {
+      const id = form.getAttribute('data-id');
+      const d = state.demandes.find((x) => x.id === id || x.serverDemandeId === id);
+      if (!d) return;
+      d.nom = String(data.get('nom') || '');
+      d.email = String(data.get('email') || '');
+      d.message = String(data.get('message') || '');
+      if (data.get('prix') !== null) d.prix = Number(data.get('prix')) || 0;
+      commit();
+      toast('Fiche mise à jour.', 'ok');
+      return;
+    }
+
+    if (kind === 'suspendre') {
+      const id = form.getAttribute('data-id');
+      const motif = String(data.get('motif') || '').trim();
+      const ta = form.querySelector('textarea[name="motif"]');
+      if (!motif) {
+        if (ta) { ta.style.borderColor = 'var(--color-alert)'; ta.style.borderWidth = '2px'; }
+        toast('Indiquez un motif de suspension.', 'warn');
+        return;
+      }
+      if (ta) { ta.style.borderColor = ''; ta.style.borderWidth = ''; }
+      modal = null;
+      await decisionDemande(id, 'suspendre', motif);
+      return;
+    }
+
+    if (kind === 'offre-contre') {
+      const offreId = form.getAttribute('data-offre');
+      const contre = Number(data.get('contre')) || 0;
+      try {
+        const r = await fetch('/api/offres/' + offreId + '/contre', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ contre: contre })
+        });
+        const res = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error('Erreur');
+        const d = state.demandes.find((x) => (x.offreId === offreId) || x.id === offreId || x.serverDemandeId === offreId);
+        if (d && res.contre) {
+          d.__whatsapp = 'https://wa.me/' + String(res.tel || '').replace(/[^0-9]/g, '') + '?text=' + encodeURIComponent('Bonjour ' + (res.prenom || '') + ', nous vous proposons une contre-offre de ' + res.contre + ' €. Souhaitez-vous en discuter ?');
+        }
+        modal = null;
+        commit();
+        toast('Contre-offre enregistrée.', 'ok');
+      } catch (e) { toast('Action impossible.', 'warn'); }
+      return;
+    }
+
+    if (kind === 'bien') {
+      const id = form.getAttribute('data-id');
+      const existing = id ? bien(id) : null;
+      const obj = {
+        id: id || uid('b'), ref: String(data.get('ref') || ''), titre: String(data.get('titre') || 'Bien').trim(),
+        adresse: String(data.get('adresse') || '').trim(),
+        type: data.get('type'), quartier: data.get('quartier'), surface: chiffres(data.get('surface')),
+        pieces: chiffres(data.get('pieces')), chambres: chiffres(data.get('chambres')), sdb: chiffres(data.get('sdb')),
+        etage: String(data.get('etage') || ''), dpe: data.get('dpe'), prix: chiffres(data.get('prix')),
+        statut: data.get('statut'), proprietaireId: data.get('proprio') || null,
+        exclusivite: { statut: 'scan_en_cours', liens: [] },
+        description: String(data.get('description') || ''),
+        atouts: existing ? existing.atouts : [],
+        photos: existing ? existing.photos : ['home-1.jpg'],
+        mandat: existing ? existing.mandat : { type: 'simple', fin: '2027-06-30' },
+        cree: existing ? existing.cree : nowISO()
+      };
+      if (!obj.titre || !obj.prix) { toast('Titre et prix sont nécessaires.', 'warn'); return; }
+      if (existing && existing.serverId) {
+        try {
+          const r = await fetch('/api/biens/' + existing.serverId, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(obj) });
+          const res = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(res.error || 'Erreur serveur');
+          Object.assign(existing, obj);
+          modal = null; commit();
+          toast('Modifications enregistrées.', 'ok');
+        } catch (e) { toast('Erreur : ' + (e.message || 'serveur'), 'warn'); }
+        return;
+      }
+      if (id) { const i = state.biens.findIndex((b) => b.id === id); state.biens[i] = Object.assign(existing, obj); }
+      else state.biens.push(obj);
+      modal = null;
+      commit();
+      toast('Bien enregistré.', 'ok');
+      location.hash = '#/bien/' + obj.id;
+      return;
+    }
+
+    if (kind === 'recherche') {
+      const id = form.getAttribute('data-id');
+      const existing = id ? recherche(id) : null;
+      const obj = {
+        id: id || uid('r'), clientId: data.get('clientId'), titre: String(data.get('titre') || 'Recherche').trim(),
+        type: data.get('type'), prixMax: chiffres(data.get('prixMax')), piecesMin: chiffres(data.get('piecesMin')),
+        surfaceMin: chiffres(data.get('surfaceMin')),
+        quartiers: $$('.se-chip[aria-pressed="true"]', form).map((c) => c.getAttribute('data-id')),
+        statut: 'active', alertes: true,
+        cree: existing ? existing.cree : nowISO()
+      };
+      if (existing && existing.serverId) {
+        try {
+          const r = await fetch('/api/recherches/' + existing.serverId, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(obj) });
+          const res = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(res.error || 'Erreur serveur');
+          Object.assign(existing, obj);
+          modal = null; commit();
+          toast('Modifications enregistrées.', 'ok');
+        } catch (e) { toast('Erreur : ' + (e.message || 'serveur'), 'warn'); }
+        return;
+      }
+      if (id) { const i = state.recherches.findIndex((r) => r.id === id); state.recherches[i] = Object.assign(existing, obj); }
+      else state.recherches.push(obj);
+      modal = null;
+      commit();
+      toast('Recherche enregistrée.', 'ok');
+      location.hash = '#/recherche/' + obj.id;
+      return;
+    }
+
+    if (kind === 'visite') {
+      state.visites.push({
+        id: uid('v'), bienId: data.get('bienId'), clientId: data.get('clientId') || null,
+        date: data.get('date'), heure: data.get('heure'), statut: 'confirmee', note: String(data.get('note') || '')
+      });
+      modal = null;
+      commit();
+      toast('Visite planifiée.', 'ok');
+      return;
+    }
+
+    if (kind === 'offre') {
+      const montant = chiffres(data.get('montant'));
+      if (!montant) { toast('Indiquez un montant.', 'warn'); return; }
+      state.offres.push({ id: uid('o'), bienId: data.get('bienId'), clientId: data.get('clientId') || null, montant, statut: 'recue', cree: nowISO() });
+      const d = state.demandes.find((x) => x.type === 'offre' && x.statut === 'nouvelle' && x.bienId === data.get('bienId'));
+      if (d) d.statut = 'traitee';
+      modal = null;
+      commit();
+      toast('Offre enregistrée.', 'ok');
+      return;
+    }
+
+    if (kind === 'tache') {
+      state.taches.push({
+        id: uid('t'), titre: String(data.get('titre') || 'Tâche'), clientId: data.get('clientId') || null,
+        bienId: data.get('bienId') || null, echeance: data.get('echeance'), fait: false
+      });
+      modal = null;
+      commit();
+      toast('Tâche créée.', 'ok');
+      return;
+    }
+
+    if (kind === 'msg') {
+      const id = form.getAttribute('data-client');
+      const texte = String(data.get('texte') || '').trim();
+      if (!texte) return;
+      state.threads = state.threads || {};
+      state.threads[id] = state.threads[id] || [];
+      state.threads[id].push({ de: 'agent', texte, at: nowISO() });
+      save();
+      render();
+      setTimeout(() => {
+        state.threads[id].push({ de: 'client', texte: 'Bien reçu, merci. Je reviens vers vous rapidement.', at: nowISO() });
+        save();
+        render();
+      }, 1500);
+      return;
+    }
+
+    if (kind === 'bien-membre') {
+      const email = form.getAttribute('data-email');
+      const biens = readBiensMembres();
+      const i = biens.findIndex((b) => (b.email || '').toLowerCase() === (email || '').toLowerCase());
+      const prev = i > -1 ? biens[i] : null;
+      const obj = {
+        id: prev ? prev.id : uid('mb'),
+        email: email || (prev ? prev.email : ''),
+        nom: prev ? prev.nom : '',
+        titre: String(data.get('titre') || ''),
+        adresse: String(data.get('adresse') || (prev && prev.adresse) || ''),
+        codePostal: prev ? prev.codePostal : '',
+        ville: prev ? prev.ville : '',
+        type: prev ? prev.type : 'Appartement',
+        quartier: data.get('quartier') || (prev ? prev.quartier : 'p11'),
+        surface: prev ? prev.surface : 0,
+        pieces: prev ? prev.pieces : 0,
+        chambres: prev ? prev.chambres : 0,
+        sdb: prev ? prev.sdb : 0,
+        etage: prev ? prev.etage : '',
+        dpe: prev ? prev.dpe : 'D',
+        etat: prev ? prev.etat : '',
+        prix: chiffres(data.get('prix')),
+        description: String(data.get('description') || ''),
+        photos: prev ? prev.photos : [],
+        atouts: prev ? prev.atouts : [],
+        statut: data.get('statut') || 'avant-premiere',
+        statutDemande: null,
+        suiveurs: prev ? prev.suiveurs : 0,
+        agent: state.agent.prenom + ' ' + state.agent.nom,
+        cree: prev ? prev.cree : nowISO()
+      };
+      if (i > -1) biens[i] = obj; else biens.unshift(obj);
+      writeBiensMembres(biens);
+      state.membresBiens = biens.map((b) => Object.assign({}, b, { label: qLabel(b.quartier) }));
+      const dd = state.demandes.find((x) => (x.email || '').toLowerCase() === (email || '').toLowerCase() && x.type === 'statut' && x.statut === 'nouvelle');
+      if (dd) dd.statut = 'traitee';
+      modal = null;
+      commit();
+      toast('Fiche du bien enregistrée. Le membre la verra dans son espace.', 'ok');
+      return;
+    }
+
+    if (kind === 'agent') {
+      state.agent.prenom = String(data.get('prenom') || '');
+      state.agent.nom = String(data.get('nom') || '');
+      state.agent.email = String(data.get('email') || '');
+      state.agent.tel = String(data.get('tel') || '');
+      state.agent.agence = String(data.get('agence') || '');
+      commit();
+      toast('Réglages enregistrés.', 'ok');
+    }
+  });
+
+  document.addEventListener('input', (e) => {
+    if (e.target.matches('[data-search]')) {
+      state.filtres.q = e.target.value;
+      const v = e.target.value;
+      clearTimeout(window.__s);
+      window.__s = setTimeout(() => {
+        save();
+        const r = parseRoute();
+        if (['clients', 'biens'].indexOf(r.name) === -1) location.hash = '#/clients';
+        render();
+        const input = $('[data-search]');
+        if (input) { input.focus(); input.setSelectionRange(v.length, v.length); }
+      }, 260);
+    }
+  });
+
+  document.addEventListener('change', (e) => {
+    const f = e.target.getAttribute('data-filter');
+    if (f) { state.filtres[f] = e.target.value; save(); render(); return; }
+
+    if (e.target.getAttribute('data-upload') === 'import') {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const parsed = JSON.parse(String(reader.result));
+          state = Object.assign(seed(), parsed);
+          save();
+          render();
+          toast('CRM restauré.', 'ok');
+        } catch (err) { toast('Fichier illisible.', 'warn'); }
+      };
+      reader.readAsText(file);
+    }
+  });
+
+  window.addEventListener('hashchange', () => { modal = null; render(); });
+
+  /* -------------------------------- démarrage ------------------------------ */
+
+  render();
+  syncServeur();
+  setInterval(() => { if (!modal) syncServeur(); }, 15000);
+})();

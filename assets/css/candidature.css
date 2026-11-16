@@ -1,0 +1,98 @@
+/* ------------------------------------------------------------------
+   Seecret — parcours d'adhésion
+   Complète les styles de app.css (mêmes jetons).
+   ------------------------------------------------------------------ */
+
+.cand { display: grid; grid-template-columns: minmax(0, 1fr); min-height: 100svh; }
+@media (min-width: 1024px) {
+  .cand { grid-template-columns: minmax(0, 1fr) 44%; }
+}
+
+.cand-main {
+  width: 100%; max-width: 640px; margin: 0 auto;
+  padding: 22px 22px 140px;
+  display: flex; flex-direction: column;
+}
+
+.cand-top { display: flex; align-items: center; gap: 16px; margin-bottom: 8px; }
+.cand-progress { flex: 1; min-width: 0; }
+.cand-progress-row {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  font-size: 10.5px; letter-spacing: .13em; text-transform: uppercase;
+  color: var(--color-taupe); font-weight: 600;
+}
+.cand-progress-row b { color: var(--color-ink); font-weight: 600; letter-spacing: 0; text-transform: none; font-size: 12px; }
+.cand-bars { display: flex; gap: 5px; margin-top: 9px; }
+.cand-bars span { flex: 1; height: 3px; border-radius: 999px; background: var(--color-stroke); overflow: hidden; }
+.cand-bars span i { display: block; height: 100%; background: var(--color-ink); border-radius: 999px; transform-origin: left; transform: scaleX(0); transition: transform .45s var(--ease-club); }
+.cand-bars span.done i, .cand-bars span.current i { transform: scaleX(1); }
+
+.cand-q { font-family: var(--font-serif); font-weight: 420; font-size: clamp(27px, 4.6vw, 38px); line-height: 1.06; letter-spacing: -.015em; margin: 30px 0 8px; text-wrap: balance; }
+.cand-sub { margin: 0 0 24px; color: var(--color-graphite); font-size: 15px; line-height: 1.55; max-width: 54ch; }
+.cand-body { flex: 1; }
+
+.cand-foot {
+  position: sticky; bottom: 0; z-index: 5;
+  margin: 0 -22px -140px; padding: 14px 22px calc(14px + env(safe-area-inset-bottom));
+  background: rgba(250, 249, 247, .94);
+  backdrop-filter: blur(10px);
+  border-top: 1px solid var(--color-stroke-faint);
+  display: flex; gap: 10px; align-items: center;
+}
+.cand-foot .se-btn { flex: 1; }
+.cand-foot .se-btn.ghost { flex: 0 0 auto; }
+
+.cand-aside { position: sticky; top: 0; height: 100svh; overflow: hidden; display: none; }
+@media (min-width: 1024px) { .cand-aside { display: block; } }
+.cand-aside img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; animation: cand-fade 1.2s ease-out both; }
+.cand-aside .cand-aside-grad { position: absolute; inset: 0; background: linear-gradient(to top, rgba(0,0,0,.55), rgba(0,0,0,.05) 45%, transparent); }
+.cand-aside p { position: absolute; left: 30px; bottom: 28px; color: #fff; font-size: 12px; letter-spacing: .13em; text-transform: uppercase; font-weight: 600; }
+@keyframes cand-fade { from { opacity: 0; transform: scale(1.03); } }
+
+/* cartes de choix */
+.cand-choice {
+  display: flex; gap: 18px; align-items: flex-start; text-align: left; width: 100%;
+  background: var(--color-surface); border: 1px solid var(--color-stroke-faint);
+  border-radius: var(--radius-control); padding: 20px;
+  cursor: pointer; transition: border-color .15s, box-shadow .15s, transform .15s;
+  margin-bottom: 14px; font: inherit; color: inherit;
+}
+.cand-choice:hover { border-color: var(--color-stroke); transform: translateY(-2px); box-shadow: var(--shadow-card); }
+.cand-choice[aria-pressed="true"] { border-color: var(--color-ink); box-shadow: inset 0 0 0 1px var(--color-ink); }
+.cand-choice-ico { flex: 0 0 38px; height: 38px; border-radius: 12px; display: grid; place-items: center; background: var(--color-club-mist); color: var(--color-club-violet); }
+.cand-choice-ico svg { width: 20px; height: 20px; }
+.cand-choice b { display: block; font-size: 17px; font-weight: 500; }
+.cand-choice em { display: block; font-family: var(--font-serif); font-style: italic; font-size: 13.5px; color: var(--color-club-violet); margin-top: 3px; }
+.cand-choice span.desc { display: block; font-size: 13.5px; color: var(--color-graphite); line-height: 1.5; margin-top: 6px; }
+
+/* récapitulatif */
+.cand-recap { display: flex; flex-direction: column; gap: 10px; }
+.cand-recap-row {
+  display: flex; gap: 14px; align-items: flex-start;
+  background: var(--color-surface); border: 1px solid var(--color-stroke-faint);
+  border-radius: 14px; padding: 14px 16px;
+}
+.cand-recap-row .k { font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--color-taupe); font-weight: 600; }
+.cand-recap-row .v { font-size: 14px; line-height: 1.5; }
+.cand-recap-row button {
+  background: none; border: 0; color: var(--color-club-violet); font: inherit; font-size: 12.5px;
+  cursor: pointer; text-decoration: underline; padding: 0; white-space: nowrap;
+}
+
+/* uploads */
+.cand-drop {
+  display: flex; align-items: center; gap: 12px;
+  border: 1px dashed var(--color-stroke); border-radius: 14px;
+  padding: 14px 16px; cursor: pointer; background: var(--color-surface);
+  font-size: 13.5px; color: var(--color-graphite);
+}
+.cand-drop:hover { border-color: var(--color-ink); }
+.cand-drop.ok { border-style: solid; border-color: var(--color-ok); color: var(--color-ok); background: var(--color-ok-soft); }
+
+.cand-confirm { text-align: center; padding: 40px 0; }
+.cand-confirm .se-logo-big {
+  width: 64px; height: 64px; border-radius: 20px; margin: 0 auto 20px;
+  background: var(--color-button-ink); color: #fff; display: grid; place-items: center;
+  font-family: var(--font-serif); font-size: 30px;
+}
+.cand-error { color: var(--color-alert); font-size: 13px; margin-top: 10px; min-height: 18px; }

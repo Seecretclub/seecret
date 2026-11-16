@@ -1,0 +1,1553 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#faf9f7">
+  <title>Seecret — Adhésion</title>
+  <meta name="description" content="Adhésion gratuite, sur candidature. Rejoignez le cercle de l'immobilier off-market.">
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="icon" href="assets/img/icon.svg" type="image/svg+xml" sizes="any">
+  <link rel="stylesheet" href="assets/css/fonts.css">
+  <style>
+    :root {
+      --color-paper: #faf9f7;
+      --color-surface: #ffffff;
+      --color-sand: #f0ede7;
+      --color-ink: #141210;
+      --color-graphite: #5f5a54;
+      --color-taupe: rgba(95, 90, 84, 0.66);
+      --color-stroke: #e3dfd9;
+      --color-stroke-faint: #eeebe6;
+      --color-club-green: #1b3a32;
+      --color-club-violet: #3b2b4a;
+      --color-button-ink: #241c2e;
+      --color-lamp: #f2c46e;
+      --color-lamp-soft: #fff2d4;
+      --color-ok: #22603d;
+      --color-ok-soft: #e3f0e7;
+      --color-alert: #9a2d24;
+      --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+      --font-serif: 'Fraunces', ui-serif, Georgia, 'Times New Roman', serif;
+      --radius-card: 24px;
+      --radius-control: 16px;
+      --shadow-card: 0 1px 2px rgba(20,18,16,.05), 0 12px 32px rgba(20,18,16,.08);
+      --shadow-lift: 0 14px 34px rgba(20,18,16,.09);
+      --ease-club: cubic-bezier(.22, 1, .36, 1);
+    }
+
+    * { box-sizing: border-box; }
+    html { -webkit-text-size-adjust: 100%; }
+
+    body {
+      margin: 0;
+      background: var(--color-paper);
+      color: var(--color-ink);
+      font-family: var(--font-sans);
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+      line-height: 1.5;
+    }
+    button { font-family: inherit; }
+
+    .cand { display: grid; grid-template-columns: minmax(0, 1fr); min-height: 100svh; background: var(--color-paper); }
+    @media (min-width: 1024px) {
+      .cand { grid-template-columns: minmax(0, 1fr) 44%; }
+    }
+    .cand-main {
+      width: 100%; max-width: 660px; margin: 0 auto;
+      padding: 24px 24px 150px;
+      display: flex; flex-direction: column;
+    }
+
+    .cand-top { display: flex; align-items: center; gap: 16px; margin-bottom: 6px; }
+    .se-brand { display: flex; align-items: center; gap: 11px; text-decoration: none; color: var(--color-ink); flex: 0 0 auto; }
+    .se-logo {
+      width: 34px; height: 34px; border-radius: 10px;
+      background: var(--color-button-ink); color: #fff;
+      display: grid; place-items: center;
+      font-family: var(--font-serif); font-size: 19px; line-height: 1;
+    }
+    .se-brand b { font-family: var(--font-serif); font-weight: 420; font-size: 18px; letter-spacing: -.01em; }
+    .se-brand small { display: block; font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--color-taupe); }
+    .cand-progress { flex: 1; min-width: 0; }
+    .cand-progress-row {
+      display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+      font-size: 10.5px; letter-spacing: .13em; text-transform: uppercase;
+      color: var(--color-taupe); font-weight: 600;
+    }
+    .cand-progress-row b { color: var(--color-ink); font-weight: 600; letter-spacing: 0; text-transform: none; font-size: 12px; }
+    .cand-bars { display: flex; gap: 5px; margin-top: 9px; }
+    .cand-bars span { flex: 1; height: 3px; border-radius: 999px; background: var(--color-stroke); overflow: hidden; }
+    .cand-bars span i { display: block; height: 100%; background: var(--color-ink); border-radius: 999px; transform-origin: left; transform: scaleX(0); transition: transform .45s var(--ease-club); }
+    .cand-bars span.done i, .cand-bars span.current i { transform: scaleX(1); }
+
+    .cand-q {
+      font-family: var(--font-serif); font-weight: 420;
+      font-size: clamp(28px, 4.6vw, 42px); line-height: 1.05; letter-spacing: -.015em;
+      margin: 30px 0 10px; text-wrap: balance;
+    }
+    .cand-sub { margin: 0 0 28px; color: var(--color-graphite); font-size: 15.5px; line-height: 1.6; max-width: 54ch; }
+    .cand-body { flex: 1; }
+
+    .kicker { font-size: 10.5px; letter-spacing: .13em; text-transform: uppercase; color: var(--color-taupe); font-weight: 600; }
+    .se-bloc { margin-bottom: 22px; }
+    .se-bloc .kicker { margin: 0 0 10px; }
+
+    .cand-choice {
+      display: flex; gap: 18px; align-items: flex-start; width: 100%;
+      text-align: left; background: var(--color-surface);
+      border: 1px solid var(--color-stroke-faint);
+      border-radius: 22px; padding: 24px;
+      cursor: pointer; font: inherit; color: inherit;
+      margin-bottom: 14px;
+      transition: border-color .2s, box-shadow .3s var(--ease-club), transform .2s var(--ease-club), background-color .2s;
+    }
+    .cand-choice:hover { border-color: var(--color-stroke); transform: translateY(-2px); box-shadow: var(--shadow-card); }
+    .cand-choice.on {
+      border-color: var(--color-ink);
+      box-shadow: inset 0 0 0 1px var(--color-ink), var(--shadow-lift);
+      background: linear-gradient(180deg, #fff, #fbfaf6);
+    }
+    .cand-choice-num {
+      flex: 0 0 auto; font-family: var(--font-serif); font-style: italic;
+      font-size: 13px; color: var(--color-taupe); line-height: 1;
+      padding-top: 4px; font-variant-numeric: tabular-nums;
+    }
+    .cand-choice-ico {
+      flex: 0 0 46px; width: 46px; height: 46px; border-radius: 14px;
+      display: grid; place-items: center;
+      background: var(--color-sand); color: var(--color-ink);
+      transition: background-color .2s, color .2s;
+    }
+    .cand-choice-ico svg { width: 22px; height: 22px; }
+    .cand-choice.on .cand-choice-ico { background: var(--color-ink); color: var(--color-lamp); }
+    .cand-choice-txt { flex: 1; min-width: 0; }
+    .cand-choice-txt b {
+      display: block; font-family: var(--font-serif); font-weight: 420;
+      font-size: 23px; line-height: 1.1; letter-spacing: -.01em; color: var(--color-ink);
+    }
+    .cand-choice-txt em {
+      display: block; font-family: var(--font-serif); font-style: italic;
+      font-size: 15px; color: var(--color-club-green); margin-top: 4px;
+    }
+    .cand-choice-txt .desc { display: block; font-size: 14px; color: var(--color-graphite); line-height: 1.55; margin-top: 8px; max-width: 46ch; }
+    .cand-choice-mark {
+      flex: 0 0 auto; width: 26px; height: 26px; border-radius: 999px;
+      border: 1.5px solid var(--color-stroke); display: grid; place-items: center;
+      color: transparent; transition: background-color .2s, border-color .2s, color .2s;
+    }
+    .cand-choice-mark svg { width: 14px; height: 14px; }
+    .cand-choice.on .cand-choice-mark { background: var(--color-ink); border-color: var(--color-ink); color: #fff; }
+
+    .se-btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      border: 1px solid transparent; border-radius: 999px;
+      padding: 13px 22px; font: inherit; font-size: 14.5px; font-weight: 500;
+      cursor: pointer; text-decoration: none;
+      background: var(--color-button-ink); color: #fff;
+      transition: transform .15s var(--ease-club), opacity .15s, background-color .15s;
+    }
+    .se-btn:hover { opacity: .92; }
+    .se-btn:active { transform: scale(.985); }
+    .se-btn.ghost { background: transparent; border-color: var(--color-stroke); color: var(--color-ink); }
+    .se-btn.sm { padding: 7px 13px; font-size: 12.5px; }
+
+    .cand-foot {
+      position: sticky; bottom: 0; z-index: 5;
+      margin: 0 -24px -150px; padding: 14px 24px calc(14px + env(safe-area-inset-bottom));
+      background: rgba(250, 249, 247, .94); backdrop-filter: blur(10px);
+      border-top: 1px solid var(--color-stroke-faint);
+      display: flex; gap: 10px; align-items: center;
+    }
+    .cand-foot .se-btn { flex: 1; }
+    .cand-foot .se-btn.ghost { flex: 0 0 auto; }
+
+    .se-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+    .se-chip {
+      border: 1px solid var(--color-stroke); background: var(--color-surface);
+      border-radius: 999px; padding: 8px 15px; font-size: 13.5px; cursor: pointer;
+      color: var(--color-ink); transition: border-color .15s, background-color .15s, color .15s;
+    }
+    .se-chip:hover { border-color: var(--color-ink); }
+    .se-chip[aria-pressed="true"] { background: var(--color-ink); border-color: var(--color-ink); color: #fff; }
+
+    .se-field { display: flex; flex-direction: column; gap: 7px; }
+    .se-field > label { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--color-taupe); font-weight: 600; }
+    .se-input, .se-select, .se-textarea {
+      width: 100%; font: inherit; font-size: 15px; color: var(--color-ink);
+      background: var(--color-surface); border: 1px solid var(--color-stroke);
+      border-radius: 14px; padding: 12px 14px; outline: none;
+      transition: border-color .15s, box-shadow .15s;
+    }
+    .se-textarea { min-height: 110px; resize: vertical; line-height: 1.55; }
+    .se-input:focus, .se-select:focus, .se-textarea:focus { border-color: var(--color-ink); box-shadow: 0 0 0 4px rgba(20,18,16,.06); }
+    .se-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    .se-form-grid .full { grid-column: 1 / -1; }
+
+    .se-note {
+      background: #f6f2eb; border: 1px solid var(--color-stroke-faint);
+      border-radius: 16px; padding: 14px 16px; font-size: 13.5px;
+      color: var(--color-graphite); line-height: 1.55;
+    }
+    .se-note b { color: var(--color-ink); font-weight: 600; }
+
+    .cand-recap { display: flex; flex-direction: column; gap: 10px; }
+    .cand-recap-row {
+      display: flex; gap: 14px; align-items: flex-start;
+      background: var(--color-surface); border: 1px solid var(--color-stroke-faint);
+      border-radius: 16px; padding: 15px 18px;
+    }
+    .cand-recap-row .k { font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--color-taupe); font-weight: 600; }
+    .cand-recap-row .v { font-size: 14px; line-height: 1.55; color: var(--color-ink); }
+    .cand-recap-row button {
+      background: none; border: 0; color: var(--color-club-green); font: inherit;
+      font-size: 12.5px; cursor: pointer; text-decoration: underline; padding: 0; white-space: nowrap;
+    }
+
+    .cand-drop {
+      display: flex; align-items: center; gap: 12px;
+      border: 1px dashed var(--color-stroke); border-radius: 14px;
+      padding: 14px 16px; cursor: pointer; background: var(--color-surface);
+      font-size: 13.5px; color: var(--color-graphite);
+    }
+    .cand-drop:hover { border-color: var(--color-ink); }
+    .cand-drop.ok { border-style: solid; border-color: var(--color-ok); color: var(--color-ok); background: var(--color-ok-soft); }
+
+    .se-switch { display: flex; align-items: center; gap: 12px; font-size: 13.5px; cursor: pointer; line-height: 1.55; color: var(--color-graphite); }
+    .se-switch input {
+      appearance: none; -webkit-appearance: none; width: 42px; height: 24px;
+      flex: 0 0 42px; border-radius: 999px; background: var(--color-stroke);
+      position: relative; cursor: pointer; transition: background-color .2s; margin: 0;
+    }
+    .se-switch input::after {
+      content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px;
+      border-radius: 999px; background: #fff; box-shadow: 0 1px 2px rgba(20,18,16,.2);
+      transition: transform .2s var(--ease-club);
+    }
+    .se-switch input:checked { background: var(--color-ok); }
+    .se-switch input:checked::after { transform: translateX(18px); }
+    .se-switch a { color: var(--color-club-green); }
+
+    .cand-confirm { text-align: center; padding: 40px 0; }
+    .se-logo-big {
+      width: 64px; height: 64px; border-radius: 20px; margin: 0 auto 20px;
+      background: var(--color-button-ink); color: #fff; display: grid; place-items: center;
+      font-family: var(--font-serif); font-size: 30px;
+    }
+    .se-badge {
+      display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 4px 10px;
+      font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+      background: var(--color-lamp-soft); color: #7a5a12;
+    }
+    .se-divider { height: 1px; background: var(--color-stroke-faint); margin: 18px 0; }
+    .se-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .se-grid { display: grid; gap: 10px; }
+    .se-card { background: var(--color-surface); border: 1px solid var(--color-stroke-faint); border-radius: 18px; padding: 20px; }
+    .se-hint { font-size: 12px; color: var(--color-taupe); }
+
+    .cand-error { color: var(--color-alert); font-size: 13px; margin-top: 12px; min-height: 18px; }
+
+    .cand-photos { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 10px; margin: 0 0 14px; }
+    .cand-photo { position: relative; aspect-ratio: 4/3; border-radius: 12px; overflow: hidden; border: 1px solid var(--color-stroke-faint); background: var(--color-sand); }
+    .cand-photo img { width: 100%; height: 100%; object-fit: cover; }
+    .cand-photo button { position: absolute; top: 6px; right: 6px; width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--color-stroke); background: rgba(255, 255, 255, .92); color: var(--color-graphite); font-size: 13px; line-height: 1; cursor: pointer; }
+    .cand-drop-photos { min-height: 96px; justify-content: center; }
+    .cand-drop.dragover { border-color: var(--color-ink); background: var(--color-sand); }
+
+    .cand-aside { position: sticky; top: 0; height: 100svh; overflow: hidden; display: none; }
+    @media (min-width: 1024px) { .cand-aside { display: block; } }
+    .cand-carousel { position: absolute; inset: 0; }
+    .cand-carousel img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 1.2s ease; }
+    .cand-carousel img.on { opacity: 1; }
+    .cand-aside .cand-aside-grad { position: absolute; inset: 0; background: linear-gradient(to top, rgba(0,0,0,.55), rgba(0,0,0,.05) 45%, transparent); }
+    .cand-aside p { position: absolute; left: 30px; bottom: 26px; margin: 0; color: #fff; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; font-weight: 600; }
+    @keyframes cand-fade { from { opacity: 0; transform: scale(1.04); } }
+
+    @media (max-width: 640px) {
+      .cand-main { padding: 18px 18px 140px; }
+      .cand-foot { margin: 0 -18px -140px; padding: 12px 18px calc(12px + env(safe-area-inset-bottom)); }
+      .se-form-grid { grid-template-columns: 1fr; }
+      .cand-choice { padding: 20px 18px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      * { animation: none !important; transition: none !important; }
+    }
+  
+    .cand-estim { background: var(--color-surface); border: 1px solid var(--color-stroke-faint); border-radius: 18px; padding: 16px 18px; margin-bottom: 18px; }
+    .cand-estim-prix { font-family: var(--font-serif); font-weight: 420; font-size: 28px; line-height: 1.15; letter-spacing: -.015em; margin-top: 2px; }
+    .cand-estim-sub { font-size: 13.5px; color: var(--color-graphite); margin-top: 4px; }
+    .cand-estim-detail { font-size: 12.5px; color: var(--color-taupe); margin-top: 3px; font-variant-numeric: tabular-nums; }
+    .cand-estim-meta { font-size: 11.5px; color: var(--color-taupe); margin-top: 9px; line-height: 1.45; }
+    .cand-estim-meta b { color: var(--color-ink); font-weight: 500; }
+    .cand-estim-note { font-size: 12px; color: var(--color-taupe); line-height: 1.5; margin-top: 10px; }
+    .cand-estim-skeleton { font-size: 13px; color: var(--color-taupe); }
+
+    .cand-estim-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+    .cand-estim-head .kicker { margin: 0; color: var(--color-taupe); }
+    .cand-estim-tag { font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--color-club-green); font-weight: 600; white-space: nowrap; }
+    .cand-estim-adresse { display: flex; align-items: center; gap: 6px; margin: 0 0 4px; font-size: 13px; color: var(--color-graphite); }
+    .cand-estim-adresse svg { width: 13px; height: 13px; flex: 0 0 13px; color: var(--color-taupe); }
+    .cand-comps { margin-top: 12px; border-top: 1px solid var(--color-stroke-faint); padding-top: 10px; }
+    .cand-comps-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 2px; }
+    .cand-comps-head .kicker { margin: 0; color: var(--color-taupe); }
+    .cand-comp { display: flex; align-items: center; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--color-stroke-faint); }
+    .cand-comp:last-of-type { border-bottom: 0; padding-bottom: 2px; }
+    .cand-comp .adr { flex: 1; min-width: 0; }
+    .cand-comp .adr b { display: block; font-size: 13px; font-weight: 500; color: var(--color-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .cand-comp .adr span { display: block; font-size: 11.5px; color: var(--color-taupe); }
+    .cand-comp .px { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .cand-comp .px b { display: block; font-size: 13px; font-weight: 500; color: var(--color-ink); }
+    .cand-comp .px span { font-size: 11.5px; color: var(--color-taupe); }
+    .cand-comps-note { font-size: 11px; color: var(--color-taupe); line-height: 1.5; margin: 8px 0 0; }
+    .cand-comp .adr span em { font-style: normal; color: var(--color-graphite); }
+
+    .se-ac { position: relative; }
+    .se-ac-list {
+      position: absolute; z-index: 30; top: calc(100% + 6px); left: 0; right: 0;
+      background: var(--color-surface); border: 1px solid var(--color-stroke);
+      border-radius: 14px; box-shadow: var(--shadow-lift); overflow: hidden; max-height: 264px; overflow-y: auto;
+    }
+    .se-ac-list[hidden] { display: none; }
+    .se-ac-item {
+      display: block; width: 100%; text-align: left; background: none; border: 0;
+      border-bottom: 1px solid var(--color-stroke-faint); padding: 10px 14px;
+      font: inherit; font-size: 14px; color: var(--color-ink); cursor: pointer;
+    }
+    .se-ac-item:last-child { border-bottom: 0; }
+    .se-ac-item:hover, .se-ac-item.active { background: var(--color-sand); }
+    .se-ac-item b { display: block; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .se-ac-item span { display: block; font-size: 12px; color: var(--color-taupe); margin-top: 1px; }
+    .se-ac-note { padding: 12px 14px; font-size: 12.5px; color: var(--color-taupe); }
+
+    /* -------- écran d'analyse (interstitiel) -------- */
+    .cand-load { min-height: 100svh; display: flex; align-items: center; justify-content: center; padding: 96px 24px 64px; background: var(--color-paper); }
+    .cand-load-brand { position: fixed; top: 22px; left: 24px; z-index: 2; }
+    .cand-load-inner { width: 100%; max-width: 540px; }
+    .cand-load-title { font-family: var(--font-serif); font-weight: 420; font-size: clamp(28px, 4.4vw, 38px); line-height: 1.08; letter-spacing: -.015em; margin: 0 0 10px; text-wrap: balance; }
+    .cand-load-addr { display: flex; align-items: center; gap: 7px; margin: 0; font-size: 13.5px; color: var(--color-graphite); }
+    .cand-load-addr svg { width: 13px; height: 13px; flex: 0 0 13px; color: var(--color-taupe); }
+    .cand-load-sub { font-size: 14px; color: var(--color-graphite); line-height: 1.55; margin: 10px 0 26px; max-width: 44ch; }
+    .cand-load-steps { list-style: none; margin: 0 0 22px; padding: 0; }
+    .cand-load-step { display: flex; align-items: center; gap: 12px; padding: 0; max-height: 0; overflow: hidden; border-bottom: 1px solid transparent; font-size: 14px; color: var(--color-graphite); opacity: 0; transform: translateY(5px); transition: max-height .55s var(--ease-club), padding .55s var(--ease-club), opacity .4s, transform .55s var(--ease-club), color .3s, border-color .4s; }
+    .cand-load-step.in { max-height: 120px; padding: 11px 0; opacity: 1; transform: none; border-bottom-color: var(--color-stroke-faint); }
+    .cand-load-step.in:first-child { border-top: 1px solid var(--color-stroke-faint); }
+    .cand-load-step.on { color: var(--color-ink); }
+    .cand-load-step.done { color: var(--color-graphite); }
+    .cand-load-dot { width: 18px; height: 18px; flex: 0 0 18px; border-radius: 50%; border: 1px solid var(--color-stroke); display: grid; place-items: center; color: transparent; }
+    .cand-load-step.done .cand-load-dot { background: var(--color-ink); border-color: var(--color-ink); color: #fff; }
+    .cand-load-step.done .cand-load-dot svg { width: 11px; height: 11px; }
+    .cand-load-step.on .cand-load-dot { border-color: var(--color-ink); }
+    .cand-load-step.on .cand-load-dot::after { content: ''; width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid var(--color-ink); border-right-color: transparent; animation: cand-spin .8s linear infinite; }
+    @keyframes cand-spin { to { transform: rotate(360deg); } }
+    .cand-load-step .lbl { flex: 1; line-height: 1.4; }
+    .cand-load-bar { height: 2px; background: var(--color-stroke); border-radius: 999px; overflow: hidden; }
+    .cand-load-bar i { display: block; height: 100%; width: 0; background: var(--color-ink); border-radius: 999px; }
+    .cand-load-bar i.fill { animation: cand-fill linear forwards; }
+    @keyframes cand-fill { from { width: 0; } to { width: 100%; } }
+    .cand-load-foot { display: flex; justify-content: space-between; gap: 12px; margin-top: 10px; font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--color-taupe); font-weight: 600; }
+    .cand-load-foot span:first-child::before { content: ''; display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: var(--color-ink); margin-right: 7px; vertical-align: 1px; animation: cand-pulse 1.4s ease-in-out infinite; }
+    @keyframes cand-pulse { 0%, 100% { opacity: .2; } 50% { opacity: 1; } }
+    @media (max-width: 620px) {
+      .cand-load { padding: 84px 18px 48px; align-items: flex-start; }
+      .cand-load-brand { left: 18px; top: 18px; }
+      .cand-load-title { font-size: 30px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .cand-load-bar i { width: 100% !important; }
+    }
+  @media (max-width: 640px) {
+    .se-form-grid, .se-grid { grid-template-columns: 1fr !important; }
+    .cand-main { padding: 18px 16px 130px; }
+    .cand-choice { padding: 18px 16px; }
+    .cand-estim-prix { font-size: 30px; }
+    .cand-map { height: 140px; }
+  }
+  </style>
+</head>
+<body>
+  <main id="app" aria-live="polite"></main>
+  <noscript>
+    <div style="padding:40px;text-align:center;font-family:system-ui;color:#141210">
+      Le parcours d'adhésion a besoin de JavaScript. Activez-le puis rechargez la page.
+    </div>
+  </noscript>
+  <script>
+  (function () {
+    'use strict';
+
+    const $ = (s, r) => (r || document).querySelector(s);
+    const $$ = (s, r) => Array.prototype.slice.call((r || document).querySelectorAll(s));
+    const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const euro = (n) => new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(Number(n) || 0);
+    const num = (n) => new Intl.NumberFormat('fr-FR').format(Number(n) || 0);
+    const uid = (p) => (p || 'id') + Math.random().toString(36).slice(2, 8);
+    const nowISO = () => new Date().toISOString();
+
+    const KEY_MEMBRES = 'seecret.membres.v1';
+    const KEY_DEMANDES = 'seecret.demandes.v1';
+  const KEY_BIENS = 'seecret.biens.v1';
+
+    const QUARTIERS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+      .map((n) => ({ id: 'p' + n, label: 'Paris ' + n + (n === 1 ? 'ᵉʳ' : 'ᵉ') }))
+      .concat([
+        { id: 'boulogne', label: 'Boulogne' },
+        { id: 'neuilly', label: 'Neuilly' },
+        { id: 'vincennes', label: 'Vincennes' }
+      ]);
+    const qLabel = (id) => (QUARTIERS.find((q) => q.id === id) || { label: id }).label;
+
+    const TYPES = ['Appartement', 'Maison', 'Duplex', 'Loft', 'Hôtel particulier', 'Terrain'];
+    const PHOTOS = ['home-1.jpg', 'ilesaintlouis-1.jpg', 'saintgermain-1.jpg', 'home-3.jpg', 'trocadero-1.jpg', 'home-6.jpg', 'home-jardin.jpg', 'marais-1.jpg'];
+
+  /* ------------------ estimation : ventes réelles DVF (Etalab) ------------------ */
+
+  const DVF = { cache: {}, pending: {}, failed: {}, retry: {}, tries: {} };
+
+  // Médiane €/m² par arrondissement (calculée sur les ventes DVF 2024–2025).
+  // Sert de repli si le fichier détaillé ne peut pas être chargé.
+  const MEDIANES = {
+    75001: 12059,
+    75002: 11144,
+    75003: 11699,
+    75004: 12745,
+    75005: 11704,
+    75006: 14088,
+    75007: 13594,
+    75008: 12094,
+    75009: 10769,
+    75010: 9372,
+    75011: 10000,
+    75012: 9080,
+    75013: 9125,
+    75014: 9687,
+    75015: 9574,
+    75016: 10833,
+    75017: 10075,
+    75018: 8881,
+    75019: 8231,
+    75020: 8444,
+    92100: 8571,
+    92200: 10557,
+    94300: 8786
+  };
+
+
+  const normVoie = (s) => String(s || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase().replace(/[^A-Z0-9]+/g, ' ')
+    .trim();
+
+  const adresseOf = () => {
+    const brut = String(rep.bien.adresse || '').trim();
+    // Sans virgule, on détache le code postal et la ville collés à la rue.
+    const rue = brut.split(',')[0].trim()
+      .replace(/\s+\d{5}\b.*$/, '')
+      .replace(/\s+(?:paris|boulogne[-\s]?billancourt|neuilly[-\s]?sur[-\s]?seine|vincennes)\b.*$/i, '')
+      .trim();
+    const m = rue.match(/^(\d+\s*(?:bis|ter|quater)?)\s+(.+)$/i);
+    const numero = m ? m[1].replace(/\s+/g, ' ').trim() : '';
+    const voie = (m ? m[2] : rue).trim();
+    return { brut, rue, numero, voie };
+  };
+
+  const distanceM = (lat1, lon1, lat2, lon2) => {
+    const R = 6371000, rad = Math.PI / 180;
+    const dLat = (lat2 - lat1) * rad, dLon = (lon2 - lon1) * rad;
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    return 2 * R * Math.asin(Math.sqrt(a));
+  };
+
+  const jolieVoie = (v) => String(v || '').toLowerCase()
+    .replace(/(^|[\s'’\-])([a-zà-ÿ])/g, (m, sep, c) => sep + c.toUpperCase())
+    .replace(/\b(De|Du|Des|La|Le|Les|L|D|Aux|Au|Sur|Sous|Et)\b/g, (m) => m.toLowerCase());
+
+  const moisLongFR = (d) => d.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
+  const libellePieces = (n) => (Number(n) ? n + (Number(n) > 1 ? ' pièces' : ' pièce') : '');
+
+  function loadVentes(cp, force) {
+    if (!cp || DVF.cache[cp] || DVF.pending[cp]) return DVF.pending[cp] || null;
+    if (typeof fetch === 'undefined') { DVF.failed[cp] = true; return null; }
+    DVF.pending[cp] = fetch('assets/data/dvf/' + cp + '.json')
+      .then((r) => { if (!r.ok) throw new Error('http ' + r.status); return r.json(); })
+      .then((d) => { DVF.cache[cp] = d; delete DVF.failed[cp]; DVF.tries[cp] = 0; })
+      .catch((err) => {
+        DVF.failed[cp] = true;
+        if (typeof console !== 'undefined') console.warn('[Seecret] ventes DVF indisponibles pour ' + cp + ' :', err && err.message);
+        // Trois relances automatiques, pendant que la médiane de secours s'affiche.
+        const n = (DVF.tries[cp] || 0) + 1;
+        DVF.tries[cp] = n;
+        if (n <= 3) setTimeout(() => loadVentes(cp, true), 1200 * n);
+      })
+      .then(() => {
+        delete DVF.pending[cp];
+        if (current().id === 'vente') render();
+        else if (analyse !== null) majPiedAnalyse();
+      });
+    return DVF.pending[cp];
+  }
+
+  function ventesAnalyse() {
+    const d = DVF.cache[rep.bien.codePostal];
+    const surface = Number(rep.bien.surface) || 0;
+    if (!d || !d.ventes || !surface) return null;
+    const typeBien = rep.bien.type === 'Maison' ? 'M' : 'A';
+    const voie = normVoie(adresseOf().voie);
+    const lat = Number(rep.bien.lat) || 0;
+    const lon = Number(rep.bien.lon) || 0;
+    const rows = d.ventes;
+    const parDate = (a, b) => (a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0);
+    const procheSurface = (r) => Math.abs(r[2] - surface) / surface <= 0.35;
+    const memeRue = rows.filter((r) => normVoie(d.rues[r[6]]) === voie);
+    const memeRueSim = memeRue.filter(procheSurface);
+    const comps = (memeRueSim.length ? memeRueSim : memeRue).slice().sort(parDate).slice(0, 3);
+    let origine = 'rue';
+    if (comps.length < 3 && lat && lon) {
+      const proches = rows
+        .filter((r) => comps.indexOf(r) === -1 && procheSurface(r))
+        .map((r) => ({ r, dist: distanceM(lat, lon, r[8], r[7]) }))
+        .filter((x) => x.dist <= 250)
+        .sort((a, b) => a.dist - b.dist);
+      while (comps.length < 3 && proches.length) { comps.push(proches.shift().r); origine = 'proximite'; }
+      comps.sort(parDate);
+    }
+    let pool = [];
+    let rayon = 0;
+    if (lat && lon) {
+      for (const radius of [200, 400]) {
+        const near = rows.filter((r) => r[4] === typeBien && distanceM(lat, lon, r[8], r[7]) <= radius);
+        if (near.length >= 8) { pool = near; rayon = radius; break; }
+      }
+    }
+    if (!pool.length) pool = rows.filter((r) => r[4] === typeBien);
+    if (!pool.length) return null;
+    const pm2s = pool.map((r) => r[1] / r[2]).sort((a, b) => a - b);
+    return { d, median: pm2s[Math.floor(pm2s.length / 2)], n: pool.length, rayon, comps, origine, memeRue: voie };
+  }
+
+  function estim() {
+    const a = ventesAnalyse();
+    const mediane = a ? a.median : (MEDIANES[rep.bien.codePostal] || 0);
+    const surface = Number(rep.bien.surface) || 0;
+    if (!mediane || !surface) return 0;
+    let p = surface * mediane;
+    const dpe = rep.bien.dpe;
+    if (dpe === 'A' || dpe === 'B') p *= 1.04;
+    if (dpe === 'F' || dpe === 'G') p *= 0.94;
+    if (rep.bien.etat === 'Rénové') p *= 1.03;
+    if (rep.bien.etat === 'À rénover') p *= 0.9;
+    return Math.round(p / 1000) * 1000;
+  }
+
+  const estimationBlock = () => {
+    const a0 = adresseOf();
+    const cp = rep.bien.codePostal;
+    const entete = '<div class="cand-estim-head"><p class="kicker">Estimation Seecret</p>' +
+      '<span class="cand-estim-tag">' + (cp ? 'à l’adresse' : 'adresse à préciser') + '</span></div>';
+    const adresse = a0.brut
+      ? '<p class="cand-estim-adresse">' + ICONS.pin + '<span>' + esc(a0.brut) + '</span></p>'
+      : '';
+    const cadre = (contenu) => '<div class="cand-estim">' + entete + adresse + contenu + '</div>';
+    const nbsp = (v) => String(v).replace(/\u202f/g, '\u00a0');
+    const fourchette = (p) => '<div class="cand-estim-sub">Fourchette ' +
+      nbsp(euro(Math.round(p * 0.96 / 1000) * 1000)) + ' – ' + nbsp(euro(Math.round(p * 1.04 / 1000) * 1000)) + '</div>';
+
+    if (!rep.bien.adresse || !rep.bien.surface) {
+      return cadre('<div class="cand-estim-sub">Renseignez l’adresse et la surface de votre bien (étape précédente) pour voir l’estimation.</div>');
+    }
+    if (!cp) {
+      return cadre('<div class="cand-estim-sub">Choisissez votre adresse dans la liste des suggestions pour obtenir l’estimation.</div>');
+    }
+
+    const a = ventesAnalyse();
+    const secours = MEDIANES[cp] || 0;
+
+    if (!a && !secours) {
+      if (DVF.pending[cp] || !DVF.failed[cp]) {
+        loadVentes(cp);
+        return cadre('<div class="cand-estim-skeleton">Estimation à l’adresse en cours…</div>');
+      }
+      const local = (typeof location !== 'undefined' && location.protocol === 'file:');
+      return cadre('<div class="cand-estim-sub">' + (local
+        ? 'Les ventes DVF ne se chargent pas depuis un fichier ouvert directement. Ouvrez la page via <b>http://localhost:3000/candidature.html</b>.'
+        : 'Estimation indisponible pour cette adresse (commune hors zone couverte).') + '</div>');
+    }
+
+    const p = estim();
+    const detail = [
+      num(Math.round(a ? a.median : secours)) + ' € / m²',
+      num(rep.bien.surface) + ' m²',
+      libellePieces(rep.bien.pieces),
+      rep.bien.dpe ? 'DPE ' + rep.bien.dpe : ''
+    ].filter(Boolean).join(' · ');
+
+    // Repli : la médiane de l'arrondissement permet d'estimer même sans le détail des ventes.
+    if (!a) {
+      return cadre(
+        '<div class="cand-estim-prix">' + nbsp(euro(p)) + '</div>' +
+        fourchette(p) +
+        '<div class="cand-estim-detail">' + detail + '</div>' +
+        '<div class="cand-estim-meta">Médiane de l’arrondissement · ventes DVF 2024–2025</div>' +
+        '<div class="cand-estim-note">La comparaison avec les ventes de la rue se charge en arrière-plan.</div>' +
+        '<button class="se-btn ghost sm" data-act="dvf-retry" style="margin-top:10px">Réessayer la comparaison</button>'
+      );
+    }
+
+    const bas = Math.round(p * 0.96 / 1000) * 1000;
+    const haut = Math.round(p * 1.04 / 1000) * 1000;
+    const portee = a.rayon ? 'à moins de ' + a.rayon + ' m' : 'dans le secteur';
+    const comps = a.comps.map((r) => {
+      const memeRue = normVoie(a.d.rues[r[6]]) === a.memeRue;
+      const dist = (rep.bien.lat && rep.bien.lon)
+        ? Math.round(distanceM(Number(rep.bien.lat), Number(rep.bien.lon), r[8], r[7]))
+        : 0;
+      return {
+        date: new Date(r[0]), prix: r[1], surface: r[2], pieces: r[3], num: r[5],
+        voie: jolieVoie(a.d.rues[r[6]]), memeRue, dist, pm2: Math.round(r[1] / r[2])
+      };
+    });
+    const compsHtml = comps.length
+      ? '<div class="cand-comps">' +
+          '<div class="cand-comps-head"><p class="kicker">Ventes récentes</p>' +
+            '<span class="se-hint" style="max-width:55%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' +
+              esc(a.origine === 'rue' ? jolieVoie(a0.voie) : 'autour de l’adresse') + '</span></div>' +
+          comps.map((c) => '<div class="cand-comp">' +
+            '<div class="adr"><b>' + esc((c.num ? c.num + ' ' : '') + c.voie) + '</b>' +
+              '<span>' + (c.memeRue ? '' : 'à ' + num(c.dist) + ' m · ') + moisLongFR(c.date) + ' · ' + num(c.surface) + ' m²' + (c.pieces ? ' · ' + libellePieces(c.pieces) : '') + '</span></div>' +
+            '<div class="px"><b>' + nbsp(euro(c.prix)) + '</b><span>' + nbsp(euro(c.pm2)) + ' / m²</span></div>' +
+          '</div>').join('') +
+          '<p class="cand-comps-note">Ventes réelles enregistrées — DVF · Etalab, 2024–2025.</p>' +
+        '</div>'
+      : '';
+    return cadre(
+      '<div class="cand-estim-prix">' + nbsp(euro(p)) + '</div>' +
+      fourchette(p) +
+      '<div class="cand-estim-detail">' + detail + '</div>' +
+      '<div class="cand-estim-meta">Médiane sur <b>' + num(a.n) + ' ventes</b> ' + portee + ' · source <b>DVF</b></div>' +
+      compsHtml +
+      '<div class="cand-estim-note">Estimation indicative, affinée par votre agent Seecret avant la mise sur la plateforme.</div>'
+    );
+  };
+
+    const ICONS = {
+      swap: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6.5h13"/><path d="m13.5 3 2.5 2.5-2.5 2.5"/><path d="M17 13.5H4"/><path d="m6.5 11-2.5 2.5L6.5 16"/></svg>',
+      home: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 9.5 8 4.5l5.5 5"/><path d="M4.5 8v8h8V11"/><path d="M9 12.5H17"/><path d="m15 10 2 2.5-2 2.5"/></svg>',
+      search: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 9.5 8 4.5l5.5 5"/><path d="M4.5 8v7.5h3.5"/><circle cx="13.5" cy="13.5" r="2.6"/><path d="m15.4 15.4 2.1 2.1"/></svg>',
+      check: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m4 10.5 3.5 3.5L16 6"/></svg>',
+      file: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M11 3H5.5A1.5 1.5 0 0 0 4 4.5v11A1.5 1.5 0 0 0 5.5 17h9a1.5 1.5 0 0 0 1.5-1.5V7z"/><path d="M11 3v4h4"/></svg>',
+      pin: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M10 17s5-4.2 5-8a5 5 0 1 0-10 0c0 3.8 5 8 5 8z"/><circle cx="10" cy="9" r="1.8"/></svg>'
+    };
+
+    const rep = {
+      projet: null,
+      recherche: { types: [], quartiers: [], prixMax: '', piecesMin: '', surfaceMin: '', surfaceMax: '', delai: '' },
+      budget: { apport: '', financement: '', courtier: false, bienAVendre: false },
+      bien: { adresse: '', codePostal: '', ville: '', lat: null, lon: null, type: '', quartier: '', surface: '', pieces: '', chambres: '', sdb: '', etage: '', dpe: '', ges: '', etat: '', exterieur: '', surfaceExterieur: '', annexes: [], charges: '', description: '', photos: [] },
+      vente: { prix: '', delai: '', dejaEnVente: '', mandat: '', motif: '' },
+      vous: { prenom: '', nom: '', email: '', tel: '', ville: '' },
+      verifs: { identite: '', financement: '', bien: '', consent: false }
+    };
+
+    let etape = 0;
+    let envoye = false;
+    let erreur = '';
+    let acTimer = null;
+    let acAbort = null;
+    let acSeq = 0;
+    let acItems = [];
+    let acIndex = -1;
+    let analyse = null;
+    let analyseTimers = [];
+    let analysePour = '';
+
+    function steps() {
+      const s = [{ id: 'projet' }];
+      if (rep.projet !== 'vendeur') s.push({ id: 'recherche' }, { id: 'budget' });
+      if (rep.projet !== 'acheteur') s.push({ id: 'bien' }, { id: 'photos' }, { id: 'vente' });
+      s.push({ id: 'vous' }, { id: 'verifs' }, { id: 'recap' });
+      return s;
+    }
+
+    const TITRES = {
+      projet: 'Votre projet',
+      recherche: 'Votre recherche',
+      budget: 'Votre budget',
+      bien: 'Votre bien',
+      photos: 'Les photos',
+      vente: 'Votre projet de vente',
+      vous: 'Vous',
+      verifs: 'Vérifications',
+      recap: 'Récapitulatif'
+    };
+
+    const QUESTIONS = {
+      projet: 'Quel est votre projet ?',
+      recherche: 'Que cherchez-vous ?',
+      budget: 'Votre budget',
+      bien: 'Parlez-nous de votre bien',
+      photos: 'Prenez quelques photos de mon bien',
+      vente: 'Votre projet de vente',
+      vous: 'Qui êtes-vous ?',
+      verifs: 'Dernière étape',
+      recap: 'Tout est prêt'
+    };
+
+    const SOUS_TITRES = {
+      projet: 'Choisissez le parcours qui vous ressemble. Il s’adapte à votre choix.',
+      recherche: 'Ces critères nous servent à vous proposer les bons biens, en avant-première.',
+      budget: 'Pour vous présenter les biens qui vous correspondent vraiment.',
+      bien: 'Plus votre bien est précis, mieux il sera présenté au cercle.',
+      photos: 'Des photos lumineuses, c’est une estimation plus juste et une présentation qui fait la différence.',
+      vente: 'Votre bien ouvre le catalogue off-market. Sans mandat, sans engagement.',
+      vous: 'Vos coordonnées restent confidentielles.',
+      verifs: 'Elles protègent le club — le vôtre comme celui des autres membres.',
+      recap: 'Vérifiez une dernière fois, puis envoyez votre candidature.'
+    };
+
+    const current = () => steps()[Math.min(etape, steps().length - 1)];
+
+    const ANALYSE_DUREE = 12;
+    const ANALYSE_FIN = 12000;
+
+    const ANALYSE = [
+      'Géolocalisation précise du bien...',
+      'Connexion aux données DVF (DGFiP)...',
+      'Analyse des dernières ventes du secteur...',
+      'Comparaison avec les biens en vente actuellement...',
+      'Analyse des tendances du marché local...',
+      'Modélisation de l’estimation Seecret...'
+    ];
+
+    const ANALYSE_HORAIRE = [1500, 3500, 5500, 7500, 9500, 11500];
+
+    function analyseScreen() {
+      const a = ventesAnalyse();
+      const pied = a ? num(a.n) + ' ventes croisées' : '≈ ' + ANALYSE_DUREE + ' secondes';
+      return '<div class="cand-load">' +
+        '<a class="se-brand cand-load-brand" href="index.html">' +
+          '<span class="se-logo">S</span>' +
+          '<span><b>Seecret</b><small>Estimation</small></span>' +
+        '</a>' +
+        '<div class="cand-load-inner">' +
+          '<p class="kicker" style="margin:0 0 12px;color:var(--color-taupe)">Estimation Seecret</p>' +
+          '<h1 class="cand-load-title">Nous analysons votre bien…</h1>' +
+          '<p class="cand-load-addr">' + ICONS.pin + '<span>' + esc(rep.bien.adresse) + '</span></p>' +
+          '<p class="cand-load-sub">Nous croisons votre adresse avec les ventes réelles du secteur et le marché actuel.</p>' +
+          '<ul class="cand-load-steps">' + ANALYSE.map((t, k) =>
+            '<li class="cand-load-step" data-step="' + k + '">' +
+              '<span class="cand-load-dot"></span>' +
+              '<span class="lbl">' + t + '</span>' +
+            '</li>').join('') + '</ul>' +
+          '<div class="cand-load-bar"><i style="width:0%"></i></div>' +
+          '<div class="cand-load-foot"><span>Analyse en cours</span><span>' + pied + '</span></div>' +
+        '</div>' +
+      '</div>';
+    }
+
+    function majAnalyse(k) {
+      const root = document.querySelector('.cand-load');
+      if (!root) return;
+      $$('.cand-load-step', root).forEach((el, i) => {
+        el.classList.toggle('in', i <= k);
+        el.classList.toggle('done', i < k);
+        el.classList.toggle('on', i === k);
+        const dot = el.querySelector('.cand-load-dot');
+        if (dot) dot.innerHTML = i < k ? ICONS.check : '';
+      });
+    }
+
+    function finaliserAnalyse() {
+      const root = document.querySelector('.cand-load');
+      if (!root) return;
+      $$('.cand-load-step', root).forEach((el) => {
+        el.classList.add('in', 'done');
+        el.classList.remove('on');
+        const dot = el.querySelector('.cand-load-dot');
+        if (dot && !dot.firstChild) dot.innerHTML = ICONS.check;
+      });
+      const bar = root.querySelector('.cand-load-bar i');
+      if (bar) bar.style.width = '100%';
+    }
+
+    function majPiedAnalyse() {
+      if (analyse === null) return;
+      const el = document.querySelector('.cand-load-foot span:last-child');
+      if (!el) return;
+      const a = ventesAnalyse();
+      el.textContent = a ? num(a.n) + ' ventes croisées' : '≈ ' + ANALYSE_DUREE + ' secondes';
+    }
+
+    function lancerAnalyse() {
+      if (analyse !== null) return;
+      if (analysePour === rep.bien.adresse) {
+        etape++;
+        erreur = '';
+        render();
+        window.scrollTo({ top: 0 });
+        return;
+      }
+      analysePour = rep.bien.adresse;
+      analyseTimers.forEach(clearTimeout);
+      analyseTimers = [];
+      if (rep.bien.codePostal) loadVentes(rep.bien.codePostal);
+      analyse = -1;
+      render();
+      window.scrollTo({ top: 0 });
+      const bar = document.querySelector('.cand-load-bar i');
+      if (bar) {
+        bar.style.animationDuration = ((ANALYSE_FIN - 300) / 1000) + 's';
+        bar.classList.add('fill');
+      }
+      ANALYSE_HORAIRE.forEach((t, k) => {
+        analyseTimers.push(setTimeout(() => {
+          analyse = k;
+          majAnalyse(k);
+          majPiedAnalyse();
+        }, t));
+      });
+      analyseTimers.push(setTimeout(finaliserAnalyse, ANALYSE_FIN - 300));
+      analyseTimers.push(setTimeout(finirAnalyse, ANALYSE_FIN));
+    }
+
+    function finirAnalyse() {
+      analyseTimers.forEach(clearTimeout);
+      analyseTimers = [];
+      analyse = null;
+      etape++;
+      erreur = '';
+      render();
+      window.scrollTo({ top: 0 });
+    }
+
+    function render() {
+      if (analyse !== null) { $('#app').innerHTML = analyseScreen(); return; }
+      const list = steps();
+      etape = Math.min(etape, list.length - 1);
+      const step = list[etape];
+
+      if (envoye) { $('#app').innerHTML = confirmation(); return; }
+
+      $('#app').innerHTML =
+        '<div class="cand">' +
+          '<div class="cand-main">' +
+            '<div class="cand-top">' +
+              '<a class="se-brand" href="index.html">' +
+                '<span class="se-logo">S</span>' +
+                '<span><b>Seecret</b><small>Adhésion</small></span>' +
+              '</a>' +
+              '<div class="cand-progress">' +
+                '<div class="cand-progress-row"><span>' + esc(TITRES[step.id]) + '</span><b>' + (etape + 1) + ' sur ' + list.length + '</b></div>' +
+                '<div class="cand-bars">' + list.map((s, i) => '<span class="' + (i < etape ? 'done' : i === etape ? 'current' : '') + '"><i></i></span>').join('') + '</div>' +
+              '</div>' +
+            '</div>' +
+            '<h1 class="cand-q">' + QUESTIONS[step.id] + '</h1>' +
+            '<p class="cand-sub">' + SOUS_TITRES[step.id] + '</p>' +
+            '<div class="cand-body">' + corps(step.id) + '</div>' +
+            '<div class="cand-error" id="err">' + esc(erreur) + '</div>' +
+            '<div class="cand-foot">' +
+              (etape > 0 ? '<button class="se-btn ghost" data-act="retour">Retour</button>' : '') +
+              (step.id === 'projet' ? '' : '<button class="se-btn" data-act="suivant">' + (step.id === 'recap' ? 'Envoyer ma candidature' : 'Continuer') + '</button>') +
+            '</div>' +
+          '</div>' +
+          '<aside class="cand-aside">' +
+            '<div class="cand-carousel">' + PHOTOS.map((p, i) => '<img src="assets/img/' + p + '" alt="" class="' + (i === 0 ? 'on' : '') + '"/>').join('') + '</div>' +
+            '<div class="cand-aside-grad"></div>' +
+            '<p>Des biens premium, inédits.</p>' +
+          '</aside>' +
+        '</div>';
+    }
+
+    function corps(id) {
+      if (id === 'projet') {
+        return choix('mixte', '01', ICONS.swap, 'Acquéreur et Vendeur', 'Les deux',
+            'Achetez et vendez à la fois : profitez du catalogue complet tout en exposant votre bien.') +
+          choix('vendeur', '02', ICONS.home, 'Vendeur', 'Mon bien',
+            'Présentez votre bien à un cercle d’acquéreurs discrets, sans mandat et sans engagement.') +
+          choix('acheteur', '03', ICONS.search, 'Acquéreur', 'Ma recherche',
+            'Accédez à une sélection de biens visibles nulle part ailleurs, répondant à vos critères.');
+      }
+
+      if (id === 'recherche') {
+        return bloc('Type de bien', chips('typeBien', TYPES, rep.recherche.types, true)) +
+          bloc('Secteurs', chips('secteur', QUARTIERS, rep.recherche.quartiers, true)) +
+          bloc('Pièces minimum', chips('piecesMin', ['2', '3', '4', '5', '6+'], rep.recherche.piecesMin, false)) +
+          '<div class="se-form-grid" style="margin-bottom:18px">' +
+            field('Surface min (m²)', 'recherche.surfaceMin', rep.recherche.surfaceMin, { type: 'number', placeholder: '60' }) +
+            field('Surface max (m²)', 'recherche.surfaceMax', rep.recherche.surfaceMax, { type: 'number', placeholder: '120' }) +
+          '</div>' +
+          bloc('Dans quel délai ?', chips('delai', ['Dès que possible', '3 mois', '6 mois', '12 mois', 'Sans urgence'], rep.recherche.delai, false));
+      }
+
+      if (id === 'budget') {
+        return '<div class="se-form-grid">' +
+          field('Budget maximum (€)', 'recherche.prixMax', rep.recherche.prixMax, { type: 'number', placeholder: '1 800 000' }) +
+          field('Apport (€)', 'budget.apport', rep.budget.apport, { type: 'number', placeholder: '200 000' }) +
+          '</div>' +
+          bloc('Votre financement', chips('financement', ['Comptant', 'Prêt accordé', 'Prêt en cours', 'À définir'], rep.budget.financement, false)) +
+          bloc('Êtes-vous accompagné par un courtier ?', chips('courtier', ['Oui', 'Non'], rep.budget.courtier ? 'Oui' : rep.budget.courtier === false ? 'Non' : '', false)) +
+          bloc('Avez-vous un bien à vendre pour financer votre recherche ?', chips('bienAVendre', ['Oui', 'Non'], rep.budget.bienAVendre ? 'Oui' : rep.budget.bienAVendre === false ? 'Non' : '', false)) +
+          '<div class="se-note" style="margin-top:6px">Un financement validé accélère votre dossier : vous pouvez faire une offre avant les autres.</div>';
+      }
+
+      if (id === 'bien') {
+        return bloc('Adresse du bien',
+            adresseField() +
+            '<p class="se-hint" style="margin:8px 0 0">Tapez votre adresse : les suggestions apparaissent au fil de la frappe. Elle sert à estimer votre bien à partir des ventes réelles de la rue (DVF), et reste confidentielle.</p>') +
+          bloc('Type de bien', chips('bienType', TYPES, rep.bien.type, false)) +
+          '<div class="se-form-grid" style="margin-bottom:18px">' +
+            field('Surface (m²)', 'bien.surface', rep.bien.surface, { type: 'number' }) +
+            field('Pièces', 'bien.pieces', rep.bien.pieces, { type: 'number' }) +
+            field('Chambres', 'bien.chambres', rep.bien.chambres, { type: 'number' }) +
+            field('Salles de bain', 'bien.sdb', rep.bien.sdb, { type: 'number' }) +
+            field('Étage', 'bien.etage', rep.bien.etage, { placeholder: '4ᵉ', full: true }) +
+          '</div>' +
+          bloc('Extérieur', chips('exterieur', ['Aucun', 'Balcon', 'Terrasse', 'Jardin'], rep.bien.exterieur || 'Aucun', false)) +
+          (rep.bien.exterieur && rep.bien.exterieur !== 'Aucun'
+            ? '<div class="se-form-grid" style="margin-bottom:18px">' + field('Surface de l’extérieur (m²)', 'bien.surfaceExterieur', rep.bien.surfaceExterieur, { type: 'number' }) + '</div>'
+            : '') +
+          bloc('DPE', chips('dpe', ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'Non réalisé'], rep.bien.dpe, false)) +
+          bloc('GES', chips('ges', ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'Non réalisé'], rep.bien.ges, false)) +
+          bloc('État', chips('etat', ['À rénover', 'Bon état', 'Rénové'], rep.bien.etat, false)) +
+          bloc('Annexes', chips('annexe', ['Balcon', 'Terrasse', 'Jardin', 'Cave', 'Parking', 'Ascenseur'], rep.bien.annexes, true)) +
+          '<div class="se-form-grid" style="margin-bottom:18px">' +
+            field('Charges annuelles (€)', 'bien.charges', rep.bien.charges, { type: 'number', placeholder: '2 400' }) +
+          '</div>' +
+          field('Description du bien', 'bien.description', rep.bien.description, { type: 'textarea', min: '110px', placeholder: 'Décrivez votre bien en quelques mots…', full: true });
+      }
+
+      if (id === 'photos') {
+        const photos = rep.bien.photos || [];
+        return '<div class="se-note" style="margin-bottom:18px">' +
+            '<b>Pour une estimation parfaite, prenez des photos lumineuses.</b><br/>' +
+            'Placez-vous dans un angle de la pièce, utilisez le grand angle de votre téléphone, et essayez de garder un équilibre entre le plafond et le sol.' +
+          '</div>' +
+          (photos.length
+            ? '<div class="cand-photos">' + photos.map((url) => '<div class="cand-photo">' +
+                '<img src="' + esc(url) + '" alt=""/>' +
+                '<button type="button" data-act="photo-remove" data-url="' + esc(url) + '" title="Retirer">×</button>' +
+              '</div>').join('') + '</div>'
+            : '') +
+          '<label class="cand-drop cand-drop-photos" data-drop="photos">' +
+            '<span style="flex:0 0 22px">' + ICONS.file + '</span>' +
+            '<span style="flex:1"><b style="display:block;font-size:14px;color:var(--color-ink)">' + (photos.length ? 'Ajouter d’autres photos' : 'Ajouter mes photos') + '</b>' +
+            '<span style="font-size:12.5px">Glissez vos images ici ou cliquez pour choisir · JPG, PNG</span></span>' +
+            '<input type="file" accept="image/*" multiple hidden data-photos-cand/>' +
+          '</label>' +
+          '<p class="se-hint" style="margin-top:10px">' + (photos.length ? photos.length + ' photo(s) ajoutée(s)' : 'Facultatif — vous pourrez en ajouter plus tard depuis votre espace.') + '</p>';
+      }
+
+      if (id === 'vente') {
+        return estimationBlock() + '<div class="se-form-grid" style="margin-bottom:18px">' +
+            field('Prix souhaité (€)', 'vente.prix', rep.vente.prix, { type: 'number', placeholder: '1 200 000' }) +
+            field('Dans quel délai ?', 'vente.delai', rep.vente.delai, { type: 'select', options: [{ id: '', label: '— choisir —' }, { id: 'Dès que possible', label: 'Dès que possible' }, { id: '3 mois', label: '3 mois' }, { id: '6 mois', label: '6 mois' }, { id: '12 mois', label: '12 mois' }, { id: 'Quand j’aurai trouvé', label: 'Quand j’aurai trouvé' }] }) +
+          '</div>' +
+          bloc('Le bien est-il déjà en vente ailleurs ?', chips('dejaEnVente', ['Non', 'Oui'], rep.vente.dejaEnVente, false)) +
+          bloc('Un mandat est-il en cours ?', chips('mandat', ['Non', 'Oui'], rep.vente.mandat, false)) +
+          bloc('Pourquoi vendez-vous ?', field('', 'vente.motif', rep.vente.motif, { type: 'textarea', min: '90px', placeholder: 'Ce qui vous fait bouger…' }));
+      }
+
+      if (id === 'vous') {
+        return '<div class="se-form-grid">' +
+          field('Prénom', 'vous.prenom', rep.vous.prenom, { placeholder: 'Camille' }) +
+          field('Nom', 'vous.nom', rep.vous.nom, { placeholder: 'Renaud' }) +
+          field('Email', 'vous.email', rep.vous.email, { type: 'email', placeholder: 'vous@exemple.fr' }) +
+          field('Téléphone', 'vous.tel', rep.vous.tel, { type: 'tel', placeholder: '06 12 34 56 78' }) +
+          field('Ville', 'vous.ville', rep.vous.ville, { full: true, placeholder: 'Paris' }) +
+          '</div>' +
+          '<div class="se-note" style="margin-top:18px">Aucun engagement : votre candidature est étudiée avant tout accès.</div>';
+      }
+
+      if (id === 'verifs') {
+        const ach = rep.projet !== 'vendeur';
+        const ven = rep.projet !== 'acheteur';
+        return (ach ? upload('identite', 'Pièce d’identité', 'Une photo recto/verso suffit.') : '') +
+          (ach ? upload('financement', 'Justificatif de financement', 'Accord de principe, relevé ou attestation.') : '') +
+          (ven ? upload('bien', 'Titre de propriété', 'Ou un justificatif de propriété du bien.') : '') +
+          '<label class="se-switch" style="margin-top:20px;align-items:flex-start">' +
+            '<input type="checkbox" data-consent' + (rep.verifs.consent ? ' checked' : '') + '/>' +
+            '<span>J’accepte que Seecret utilise ces informations pour vérifier mon dossier, conformément aux <a href="donnees-personnelles.html">règles de confidentialité</a>.</span>' +
+          '</label>' +
+          '<div class="se-note" style="margin-top:16px">Démonstration : les fichiers restent sur votre appareil, rien n’est envoyé à un serveur.</div>';
+      }
+
+      if (id === 'recap') {
+        return '<div class="cand-recap">' +
+          recapRow('Profil', libelleProjet(rep.projet), 0) +
+          (rep.projet !== 'vendeur' ? recapRow('Recherche', resumeRecherche(), 'recherche') : '') +
+          (rep.projet !== 'vendeur' ? recapRow('Budget', resumeBudget(), 'budget') : '') +
+          (rep.projet !== 'acheteur' ? recapRow('Bien', resumeBien(), 'bien') : '') +
+          (rep.projet !== 'acheteur' ? recapRow('Vente', resumeVente(), 'vente') : '') +
+          recapRow('Vous', esc((rep.vous.prenom + ' ' + rep.vous.nom).trim()) + (rep.vous.email ? ' · ' + esc(rep.vous.email) : ''), 'vous') +
+          recapRow('Vérifications', (rep.verifs.consent ? 'Consentement donné' : 'Consentement manquant') + ' · ' + nbPieces() + ' pièce(s)', 'verifs') +
+          '</div>' +
+          '<div class="se-note" style="margin-top:18px">Votre candidature part à l’agence. Elle est étudiée sous 48 h : si elle est validée, votre espace s’ouvre automatiquement.</div>';
+      }
+
+      return '';
+    }
+
+    function choix(id, numero, icon, titre, tagline, desc) {
+      const on = rep.projet === id;
+      return '<button type="button" class="cand-choice' + (on ? ' on' : '') + '" data-projet="' + id + '" aria-pressed="' + on + '">' +
+        '<span class="cand-choice-num" aria-hidden="true">' + numero + '</span>' +
+        '<span class="cand-choice-ico">' + icon + '</span>' +
+        '<span class="cand-choice-txt"><b>' + titre + '</b><em>' + tagline + '</em><span class="desc">' + desc + '</span></span>' +
+        '<span class="cand-choice-mark" aria-hidden="true">' + ICONS.check + '</span>' +
+      '</button>';
+    }
+
+    function bloc(label, contenu) {
+      return '<div class="se-bloc"><p class="kicker">' + label + '</p>' + contenu + '</div>';
+    }
+
+    function chips(name, items, value, multi) {
+      return '<div class="se-chips">' + items.map((it) => {
+        const v = typeof it === 'string' ? it : it.id;
+        const label = typeof it === 'string' ? it : it.label;
+        const on = multi ? (value || []).indexOf(v) > -1 : value === v;
+        return '<button type="button" class="se-chip" data-pick="' + name + '" data-value="' + esc(v) + '" data-multi="' + (multi ? '1' : '') + '" aria-pressed="' + on + '">' + esc(label) + '</button>';
+      }).join('') + '</div>';
+    }
+
+    function field(label, path, value, opts) {
+      const o = opts || {};
+      return '<div class="se-field ' + (o.full ? 'full' : '') + '">' + (label ? '<label>' + label + '</label>' : '') +
+        (o.type === 'textarea'
+          ? '<textarea class="se-textarea" data-model="' + path + '" placeholder="' + esc(o.placeholder || '') + '"' + (o.min ? ' style="min-height:' + o.min + '"' : '') + '>' + esc(value) + '</textarea>'
+          : o.type === 'select'
+            ? '<select class="se-select" data-model="' + path + '">' + o.options.map((x) => '<option value="' + esc(x.id) + '"' + (x.id === value ? ' selected' : '') + '>' + esc(x.label) + '</option>').join('') + '</select>'
+            : '<input class="se-input" type="' + (o.type || 'text') + '" data-model="' + path + '" value="' + esc(value) + '" placeholder="' + esc(o.placeholder || '') + '"/>') +
+        '</div>';
+    }
+
+    /* ----------------------- adresse assistée (Base Adresse Nationale) ----------------------- */
+
+    function adresseField() {
+      return '<div class="se-ac" data-ac>' +
+        '<div class="se-field">' +
+          '<input class="se-input" type="text" name="bienAdresse" data-model="bien.adresse" data-ac-input autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="ac-list" value="' + esc(rep.bien.adresse) + '" placeholder="12 rue de Turenne, Paris 3ᵉ"/>' +
+        '</div>' +
+        '<div class="se-ac-list" id="ac-list" role="listbox" hidden></div>' +
+      '</div>';
+    }
+
+    function quartierFromPostcode(p) {
+      const cp = String((p && p.postcode) || '');
+      const m = cp.match(/^750(\d{2})$/);
+      if (m) { const n = Number(m[1]); return n >= 1 && n <= 20 ? 'p' + n : ''; }
+      if (cp === '92100') return 'boulogne';
+      if (cp === '92200') return 'neuilly';
+      if (cp === '94300') return 'vincennes';
+      return '';
+    }
+
+    const AC_URL = 'https://api-adresse.data.gouv.fr/search/?autocomplete=1&limit=6&lat=48.8566&lon=2.3522&q=';
+
+    function acList() { return $('[data-ac] .se-ac-list'); }
+
+    function acClose() {
+      const list = acList();
+      if (list) { list.hidden = true; list.innerHTML = ''; }
+      acIndex = -1;
+    }
+
+    function acInput(input) {
+      clearTimeout(acTimer);
+      const value = input.value;
+      acTimer = setTimeout(() => acQuery(value), 220);
+    }
+
+    function acQuery(term) {
+      const list = acList();
+      if (!list) return;
+      const q = String(term || '').trim();
+      if (q.length < 3) { acClose(); return; }
+      if (typeof fetch === 'undefined') return;
+      const seq = ++acSeq;
+      if (acAbort) acAbort.abort();
+      acAbort = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+      list.hidden = false;
+      list.innerHTML = '<div class="se-ac-note">Recherche…</div>';
+      fetch(AC_URL + encodeURIComponent(q), acAbort ? { signal: acAbort.signal } : {})
+        .then((r) => r.ok ? r.json() : Promise.reject(new Error('http ' + r.status)))
+        .then((data) => {
+          if (seq !== acSeq) return;
+          acItems = ((data && data.features) || [])
+            .map((f) => ({ p: f.properties, c: f.geometry && f.geometry.coordinates }))
+            .filter((x) => x.p && x.p.label);
+          acIndex = -1;
+          if (!acItems.length) { list.innerHTML = '<div class="se-ac-note">Aucune adresse trouvée</div>'; return; }
+          list.innerHTML = acItems.map((x, i) =>
+            '<button type="button" class="se-ac-item" role="option" id="ac-' + i + '" data-ac-item="' + i + '">' +
+              '<b>' + esc(x.p.name || x.p.label) + '</b>' +
+              '<span>' + esc([x.p.postcode, x.p.city].filter(Boolean).join(' ')) + '</span>' +
+            '</button>').join('');
+        })
+        .catch((err) => {
+          if (seq !== acSeq || (err && err.name === 'AbortError')) return;
+          list.innerHTML = '<div class="se-ac-note">Suggestions indisponibles, la saisie manuelle reste possible.</div>';
+        });
+    }
+
+    function setAdresse(p, coords) {
+      rep.bien.adresse = [(p.name || p.label), [p.postcode, p.city].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+      rep.bien.codePostal = p.postcode || '';
+      rep.bien.ville = p.city || '';
+      const q = quartierFromPostcode(p);
+      if (q) rep.bien.quartier = q;
+      if (coords && coords.length === 2) { rep.bien.lon = coords[0]; rep.bien.lat = coords[1]; }
+      if (rep.bien.codePostal) loadVentes(rep.bien.codePostal);
+    }
+
+    function acSelect(i) {
+      const item = acItems[i];
+      if (!item) return;
+      setAdresse(item.p, item.c);
+      erreur = '';
+      acClose();
+      render();
+    }
+
+    // Saisie libre : on vérifie l'adresse auprès de la Base Adresse Nationale.
+    function geocodeAdresse() {
+      const q = String(rep.bien.adresse || '').trim();
+      if (!q || typeof fetch === 'undefined') return Promise.resolve(false);
+      return fetch(AC_URL + encodeURIComponent(q) + '&limit=1')
+        .then((r) => r.ok ? r.json() : Promise.reject(new Error('http')))
+        .then((data) => {
+          const f = data && data.features && data.features[0];
+          if (!f || !f.properties || !f.properties.postcode) return false;
+          if (Number(f.properties.score) < 0.5) return false;
+          setAdresse(f.properties, f.geometry && f.geometry.coordinates);
+          return true;
+        })
+        .catch(() => false);
+    }
+
+    function acKey(e) {
+      const list = acList();
+      if (!list || list.hidden) return;
+      const items = $$('[data-ac-item]', list);
+      if (!items.length) return;
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        acIndex = e.key === 'ArrowDown' ? (acIndex + 1) % items.length : (acIndex - 1 + items.length) % items.length;
+        items.forEach((el, i) => el.classList.toggle('active', i === acIndex));
+        if (items[acIndex].scrollIntoView) items[acIndex].scrollIntoView({ block: 'nearest' });
+      } else if (e.key === 'Enter') {
+        if (acIndex > -1) { e.preventDefault(); acSelect(acIndex); }
+      } else if (e.key === 'Escape') {
+        acClose();
+      }
+    }
+
+    function upload(key, titre, aide) {
+      const fait = rep.verifs[key];
+      return '<label class="cand-drop ' + (fait ? 'ok' : '') + '" style="margin-bottom:12px">' +
+        '<span style="flex:0 0 20px">' + (fait ? ICONS.check : ICONS.file) + '</span>' +
+        '<span style="flex:1"><b style="display:block;font-size:14px;color:var(--color-ink)">' + titre + '</b>' +
+        '<span style="font-size:12.5px">' + (fait ? esc(fait) : aide) + '</span></span>' +
+        '<input type="file" hidden data-file="' + key + '"/>' +
+        '<span class="se-btn ghost sm">' + (fait ? 'Remplacer' : 'Choisir') + '</span>' +
+      '</label>';
+    }
+
+    function recapRow(k, v, cible) {
+      return '<div class="cand-recap-row"><div style="flex:1;min-width:0"><div class="k">' + k + '</div><div class="v">' + v + '</div></div>' +
+        (cible === 0 ? '' : '<button type="button" data-goto="' + cible + '">Modifier</button>') + '</div>';
+    }
+
+    function nbPieces() {
+      return ['identite', 'financement', 'bien'].filter((k) => rep.verifs[k]).length;
+    }
+
+    function libelleProjet(p) {
+      return { mixte: 'Acquéreur et Vendeur', vendeur: 'Vendeur', acheteur: 'Acquéreur' }[p] || '—';
+    }
+
+    function resumeRecherche() {
+      if (!rep.recherche.types.length && !rep.recherche.quartiers.length) return '<span class="se-hint">non renseigné</span>';
+      return [
+        rep.recherche.types.join(', ') || 'Tous types',
+        rep.recherche.quartiers.length ? rep.recherche.quartiers.map(qLabel).join(', ') : 'Tous secteurs',
+        rep.recherche.piecesMin ? rep.recherche.piecesMin + ' pièces et +' : '',
+        rep.recherche.surfaceMin ? rep.recherche.surfaceMin + ' m² et +' : '',
+        rep.recherche.delai ? 'délai : ' + rep.recherche.delai : ''
+      ].filter(Boolean).join(' · ');
+    }
+
+    function resumeBudget() {
+      return [
+        rep.recherche.prixMax ? 'max ' + euro(rep.recherche.prixMax) : 'budget non précisé',
+        rep.budget.apport ? 'apport ' + euro(rep.budget.apport) : '',
+        rep.budget.financement || ''
+      ].filter(Boolean).join(' · ');
+    }
+
+    function resumeBien() {
+      const b = rep.bien;
+      if (!b.type && !b.quartier && !b.adresse) return '<span class="se-hint">non renseigné</span>';
+      return [
+        b.adresse,
+        b.type,
+        b.surface ? num(b.surface) + ' m²' : '',
+        b.pieces ? b.pieces + ' pièces' : '',
+        b.dpe ? 'DPE ' + b.dpe : '',
+        b.exterieur && b.exterieur !== 'Aucun' ? b.exterieur + (b.surfaceExterieur ? ' ' + b.surfaceExterieur + ' m²' : '') : '',
+        b.etat
+      ].filter(Boolean).join(' · ');
+    }
+
+    function resumeVente() {
+      return [
+        rep.vente.prix ? euro(rep.vente.prix) : 'prix non précisé',
+        rep.vente.delai || '',
+        rep.vente.dejaEnVente ? 'déjà en vente : ' + rep.vente.dejaEnVente : ''
+      ].filter(Boolean).join(' · ');
+    }
+
+    function confirmation() {
+      return '<div class="cand"><div class="cand-main">' +
+        '<div class="cand-confirm">' +
+          '<div class="se-logo-big">✓</div>' +
+          '<h1 class="cand-q" style="margin-top:0">Candidature bien reçue</h1>' +
+          '<p class="cand-sub" style="margin:8px auto 0;text-align:left">Merci ' + esc(rep.vous.prenom || '') + '. Votre candidature a bien été prise en compte. Seecret revient vers vous sous 48 h maximum.</p>' +
+          '<div class="se-card" style="text-align:left;margin-top:24px">' +
+            '<div class="se-row" style="justify-content:space-between"><span class="kicker">Récapitulatif</span><span class="se-badge">En attente de validation</span></div>' +
+            '<div class="se-divider"></div>' +
+            '<div style="font-size:14px;line-height:1.7">' +
+              '<div><b style="font-weight:500">Profil :</b> ' + libelleProjet(rep.projet) + '</div>' +
+              (rep.projet !== 'vendeur' ? '<div><b style="font-weight:500">Recherche :</b> ' + resumeRecherche() + '</div>' : '') +
+              (rep.projet !== 'acheteur' ? '<div><b style="font-weight:500">Bien :</b> ' + resumeBien() + '</div>' : '') +
+              '<div><b style="font-weight:500">Contact :</b> ' + esc(rep.vous.email || '') + '</div>' +
+            '</div>' +
+          '</div>' +
+          '<div class="se-grid" style="margin-top:22px;gap:10px">' +
+            
+            
+            '<a class="se-btn ghost" href="index.html">Retour à l’accueil</a>' +
+          '</div>' +
+        '</div>' +
+      '</div></div>';
+    }
+
+    function valider(step) {
+      const r = rep;
+      switch (step) {
+        case 'projet': return r.projet ? '' : 'Choisissez votre profil pour continuer.';
+        case 'recherche':
+          if (!r.recherche.types.length) return 'Indiquez au moins un type de bien.';
+          if (!r.recherche.quartiers.length) return 'Indiquez au moins un secteur.';
+          if (!r.recherche.piecesMin) return 'Indiquez le nombre de pièces minimum.';
+          return '';
+        case 'budget':
+          if (!r.recherche.prixMax) return 'Indiquez votre budget maximum.';
+          if (!r.budget.financement) return 'Précisez votre financement.';
+          return '';
+        case 'bien':
+          if (!r.bien.adresse || r.bien.adresse.trim().length < 5) return 'Indiquez l’adresse exacte de votre bien.';
+          if (!r.bien.type) return 'Indiquez le type de votre bien.';
+          if (!r.bien.surface) return 'Indiquez la surface.';
+          if (!r.bien.pieces) return 'Indiquez le nombre de pièces.';
+          return '';
+        case 'photos':
+          return '';
+        case 'vente':
+          if (!r.vente.prix) return 'Indiquez le prix souhaité.';
+          if (!r.vente.delai) return 'Indiquez votre délai de vente.';
+          return '';
+        case 'vous':
+          if (!r.vous.prenom || !r.vous.nom) return 'Indiquez votre prénom et votre nom.';
+          if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(r.vous.email)) return 'Indiquez un email valide.';
+          if (/@(example\.(com|org|net)|test\.com|localhost|invalid\.com|mailinator\.com)$/i.test(r.vous.email)) return 'Utilisez une adresse email réelle (les adresses de test ne sont pas acceptées).';
+          if (!r.vous.tel || r.vous.tel.replace(/\D/g, '').length < 9) return 'Indiquez un téléphone valide.';
+          return '';
+        case 'verifs':
+          if (!rep.verifs.consent) return 'Cochez la case pour envoyer votre dossier.';
+          return '';
+        default: return '';
+      }
+    }
+
+    function envoyer() {
+      const dossier = JSON.parse(JSON.stringify(rep));
+      const nom = (rep.vous.prenom + ' ' + rep.vous.nom).trim();
+      const role = rep.projet;
+
+      const demande = {
+        id: uid('d'), type: 'candidature', nom: nom, email: rep.vous.email,
+        role: role, montant: 0, message: resumeDemande(), dossier: dossier,
+        source: 'Site', statut: 'nouvelle', cree: nowISO()
+      };
+
+      const membre = {
+        id: uid('m'), email: rep.vous.email, prenom: rep.vous.prenom, nom: rep.vous.nom,
+        tel: rep.vous.tel, ville: rep.vous.ville, role: role,
+        statut: 'en_attente', dossier: dossier, cree: nowISO()
+      };
+
+      try {
+        const demandes = JSON.parse(localStorage.getItem(KEY_DEMANDES) || '[]');
+        demandes.unshift(demande);
+        localStorage.setItem(KEY_DEMANDES, JSON.stringify(demandes.slice(0, 60)));
+
+        const membres = JSON.parse(localStorage.getItem(KEY_MEMBRES) || '[]');
+        const existant = membres.findIndex((m) => m.email === membre.email);
+        if (existant > -1) membres[existant] = membre; else membres.push(membre);
+        localStorage.setItem(KEY_MEMBRES, JSON.stringify(membres.slice(0, 200)));
+
+      // Le bien déposé dans le parcours rejoint le portefeuille partagé (espace + CRM).
+      if (rep.projet !== 'acheteur') {
+        const biens = JSON.parse(localStorage.getItem(KEY_BIENS) || '[]');
+        const mb = {
+          id: uid('mb'), email: rep.vous.email, nom: nom,
+          titre: '', adresse: rep.bien.adresse || '', codePostal: rep.bien.codePostal || '', ville: rep.bien.ville || '',
+          type: rep.bien.type || 'Appartement', quartier: rep.bien.quartier || '',
+          surface: Number(rep.bien.surface) || 0, pieces: Number(rep.bien.pieces) || 0,
+          chambres: Number(rep.bien.chambres) || 0, sdb: Number(rep.bien.sdb) || 0,
+          etage: rep.bien.etage || '', dpe: rep.bien.dpe || '', etat: rep.bien.etat || '',
+          prix: Number(rep.vente.prix) || 0, description: '', photos: (rep.bien.photos || []).slice(0, 12), atouts: [],
+          statut: 'brouillon', statutDemande: null, suiveurs: 0,
+          agent: 'Léa Marchand', cree: nowISO()
+        };
+        const i = biens.findIndex((b) => b.email === rep.vous.email);
+        if (i > -1) {
+          const prev = biens[i];
+          biens[i] = Object.assign({}, mb, { id: prev.id, adresse: mb.adresse || prev.adresse, titre: prev.titre, statut: prev.statut, statutDemande: prev.statutDemande, description: prev.description, prix: prev.prix || mb.prix, photos: prev.photos });
+        } else {
+          biens.unshift(mb);
+        }
+        localStorage.setItem(KEY_BIENS, JSON.stringify(biens.slice(0, 60)));
+      }
+      } catch (e) { /* stockage indisponible : la démo continue */ }
+
+      // Envoi au serveur : source de vérité du CRM (data.json).
+      fetch('/api/candidature', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(dossier)
+      }).then((r) => { if (!r.ok) return r.json().then((e) => { throw new Error(e.error || 'Erreur serveur'); }); })
+        .catch((e) => console.error('[candidature] envoi serveur échoué :', e.message));
+
+      envoye = true;
+      render();
+      window.scrollTo({ top: 0 });
+    }
+
+    function resumeDemande() {
+      const parts = ['Profil : ' + libelleProjet(rep.projet)];
+      if (rep.projet !== 'vendeur') parts.push(resumeRecherche());
+      if (rep.projet !== 'acheteur') parts.push(resumeBien());
+      return parts.filter(Boolean).join(' — ');
+    }
+
+    $('#app').addEventListener('click', (e) => {
+      if (!e.target.closest('[data-ac]')) acClose();
+      const projet = e.target.closest('[data-projet]');
+      if (projet) {
+        rep.projet = projet.getAttribute('data-projet'); etape++; window.scrollTo({ top: 0 });
+        erreur = '';
+        render();
+        return;
+      }
+
+      const pick = e.target.closest('[data-pick]');
+      if (pick) {
+        const name = pick.getAttribute('data-pick');
+        const value = pick.getAttribute('data-value');
+        const multi = pick.getAttribute('data-multi') === '1';
+        appliquer(name, value, multi);
+        erreur = '';
+        render();
+        return;
+      }
+
+      const acItem = e.target.closest('[data-ac-item]');
+      if (acItem) {
+        acSelect(Number(acItem.getAttribute('data-ac-item')));
+        return;
+      }
+
+      const goto = e.target.closest('[data-goto]');
+      if (goto) {
+        const id = goto.getAttribute('data-goto');
+        const idx = steps().findIndex((s) => s.id === id);
+        if (idx > -1) { etape = idx; erreur = ''; render(); window.scrollTo({ top: 0 }); }
+        return;
+      }
+
+      const act = e.target.closest('[data-act]');
+      if (!act) return;
+      const action = act.getAttribute('data-act');
+
+      if (action === 'photo-remove') {
+        const url = act.getAttribute('data-url');
+        rep.bien.photos = (rep.bien.photos || []).filter((p) => p !== url);
+        render();
+        return;
+      }
+
+      if (action === 'dvf-retry') {
+        DVF.tries[rep.bien.codePostal] = 0;
+        loadVentes(rep.bien.codePostal, true);
+        render();
+        return;
+      }
+
+      if (action === 'retour') {
+        etape = Math.max(0, etape - 1);
+        erreur = '';
+        render();
+        window.scrollTo({ top: 0 });
+        return;
+      }
+
+      if (action === 'suivant') {
+        const step = current();
+        const msg = valider(step.id);
+        if (msg) { erreur = msg; render(); return; }
+        erreur = '';
+        if (step.id === 'recap') { envoyer(); return; }
+        if (step.id === 'bien' && !rep.bien.codePostal) {
+          geocodeAdresse().then((ok) => {
+            if (!ok) {
+              erreur = 'Adresse introuvable : choisissez-la dans la liste des suggestions.';
+              render();
+              return;
+            }
+            etape++;
+            render();
+            window.scrollTo({ top: 0 });
+          });
+          return;
+        }
+        if (step.id === 'photos') {
+          lancerAnalyse();
+          return;
+        }
+        etape++;
+        render();
+        window.scrollTo({ top: 0 });
+      }
+    });
+
+    $('#app').addEventListener('keydown', (e) => {
+      if (e.target.hasAttribute('data-ac-input')) acKey(e);
+    });
+
+    $('#app').addEventListener('input', (e) => {
+      const path = e.target.getAttribute('data-model');
+      if (path) {
+        setPath(rep, path, e.target.value);
+        if (e.target.hasAttribute('data-ac-input')) acInput(e.target);
+        return;
+      }
+      if (e.target.hasAttribute('data-consent')) {
+        rep.verifs.consent = e.target.checked;
+        erreur = '';
+      }
+    });
+
+    $('#app').addEventListener('change', (e) => {
+      if (e.target.hasAttribute('data-photos-cand')) {
+        envoyerPhotos(e.target.files);
+        e.target.value = '';
+        return;
+      }
+      const file = e.target.getAttribute('data-file');
+      if (file) {
+        const f = e.target.files && e.target.files[0];
+        rep.verifs[file] = f ? f.name : '';
+        render();
+      }
+    });
+
+    $('#app').addEventListener('dragover', (e) => {
+      const zone = e.target.closest('[data-drop="photos"]');
+      if (!zone) return;
+      e.preventDefault();
+      zone.classList.add('dragover');
+    });
+
+    $('#app').addEventListener('dragleave', (e) => {
+      const zone = e.target.closest('[data-drop="photos"]');
+      if (zone) zone.classList.remove('dragover');
+    });
+
+    $('#app').addEventListener('drop', (e) => {
+      const zone = e.target.closest('[data-drop="photos"]');
+      if (!zone) return;
+      e.preventDefault();
+      zone.classList.remove('dragover');
+      envoyerPhotos(e.dataTransfer && e.dataTransfer.files);
+    });
+
+    async function envoyerPhotos(files) {
+      const list = Array.prototype.slice.call(files || []).slice(0, 8);
+      if (!list.length) return;
+      const fd = new FormData();
+      list.forEach((f) => fd.append('photos', f));
+      try {
+        const r = await fetch('/api/candidature/photos', { method: 'POST', body: fd });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || 'envoi impossible');
+        rep.bien.photos = (rep.bien.photos || []).concat(d.photos || []).slice(0, 12);
+        erreur = '';
+      } catch (err) {
+        erreur = 'Photos non envoyées : ' + err.message;
+      }
+      render();
+    }
+
+    function appliquer(name, value, multi) {
+      const r = rep;
+      if (name === 'typeBien') toggle(r.recherche.types, value, true);
+      else if (name === 'secteur') toggle(r.recherche.quartiers, value, true);
+      else if (name === 'piecesMin') r.recherche.piecesMin = value;
+      else if (name === 'surfaceMin') r.recherche.surfaceMin = value;
+      else if (name === 'delai') r.recherche.delai = value;
+      else if (name === 'financement') r.budget.financement = value;
+      else if (name === 'courtier') r.budget.courtier = value === 'Oui';
+      else if (name === 'bienType') r.bien.type = value;
+      else if (name === 'exterieur') {
+        r.bien.exterieur = value;
+        if (value === 'Aucun') r.bien.surfaceExterieur = '';
+      }
+      else if (name === 'dpe') r.bien.dpe = value;
+      else if (name === 'etat') r.bien.etat = value;
+      else if (name === 'dejaEnVente') r.vente.dejaEnVente = value;
+      else if (name === 'mandat') r.vente.mandat = value;
+      else if (name === 'ges') r.bien.ges = value;
+      else if (name === 'annexe') toggle(r.bien.annexes, value);
+      else if (name === 'bienAVendre') r.budget.bienAVendre = value === 'Oui';
+    }
+
+    function toggle(list, value) {
+      const i = list.indexOf(value);
+      if (i > -1) list.splice(i, 1);
+      else list.push(value);
+    }
+
+    function setPath(obj, path, value) {
+      const parts = path.split('.');
+      let cur = obj;
+      for (let i = 0; i < parts.length - 1; i++) cur = cur[parts[i]];
+      cur[parts[parts.length - 1]] = value;
+    }
+
+    render();
+  })();
+
+setInterval(() => {
+  const wrap = document.querySelector('.cand-carousel');
+  if (!wrap) return;
+  const imgs = Array.prototype.slice.call(wrap.querySelectorAll('img'));
+  if (!imgs.length) return;
+  const cur = imgs.findIndex((im) => im.classList.contains('on'));
+  imgs.forEach((im) => im.classList.remove('on'));
+  imgs[(cur + 1) % imgs.length].classList.add('on');
+}, 4000);
+  </script>
+</body>
+</html>
