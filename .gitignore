@@ -15,3 +15,4 @@ node_modules/
 # Données de test temporaires
 /tmp/
 *.local
+uploads/
