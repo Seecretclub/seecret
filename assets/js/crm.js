@@ -2923,9 +2923,48 @@
     }
   }
 
+  // Cadence de relance programmée : J+0 (premier contact) → J+15 → J+45, formalisée à partir du
+  // mass-relance existant. Chaque étape ne progresse que sur un clic humain explicite sur
+  // « Envoyer par WhatsApp » (jamais d'envoi automatique) ; elle sert seulement à calculer la
+  // prochaine échéance et à adapter le ton du message pré-rempli, pas à envoyer quoi que ce soit.
+  function cadenceMessage(c) {
+    const etape = c.cadence ? c.cadence.etape : 0;
+    if (etape === 1) {
+      return 'Bonjour ' + (c.prenom || '') + ', je me permets de revenir vers vous' + (c.adresseBien ? ' au sujet de ' + c.adresseBien : '') + '. Avez-vous eu l’occasion d’avancer sur votre projet ? Je reste à votre disposition pour en discuter.\n\nBien cordialement,\nGabriel Taieb\nSeecret';
+    }
+    if (etape >= 2) {
+      return 'Bonjour ' + (c.prenom || '') + ', je ne voudrais pas être insistant — ceci sera mon dernier message pour le moment' + (c.adresseBien ? ' au sujet de ' + c.adresseBien : '') + '. N’hésitez pas à revenir vers moi quand votre projet sera plus avancé.\n\nBien cordialement,\nGabriel Taieb\nSeecret';
+    }
+    return reseauMessage(c);
+  }
+
+  function avancerCadence(c) {
+    const etapeEnvoyee = c.cadence ? c.cadence.etape : 0;
+    const historique = (c.cadence && c.cadence.historique) ? c.cadence.historique.slice() : [];
+    historique.push({ etape: etapeEnvoyee, date: new Date().toISOString() });
+    let prochaine = null;
+    if (etapeEnvoyee === 0) prochaine = new Date(Date.now() + 15 * 86400000).toISOString();
+    else if (etapeEnvoyee === 1) prochaine = new Date(Date.now() + 30 * 86400000).toISOString();
+    // Après l'étape 2 (J+45), la cadence s'arrête : pas de 4e relance automatique programmée.
+    c.cadence = { etape: etapeEnvoyee + 1, prochaine: prochaine, historique: historique };
+  }
+
+  function cadenceDue(c) {
+    return !!(c.cadence && c.cadence.prochaine && new Date(c.cadence.prochaine).getTime() <= Date.now());
+  }
+
+  function cadenceLabel(c) {
+    if (!c.cadence || !c.cadence.historique || !c.cadence.historique.length) return '';
+    const e = c.cadence.etape;
+    if (e === 1) return cadenceDue(c) ? 'Relance J+15 due' : 'Relance J+15 prévue le ' + dFR(c.cadence.prochaine);
+    if (e === 2) return cadenceDue(c) ? 'Dernière relance J+45 due' : 'Dernière relance J+45 prévue le ' + dFR(c.cadence.prochaine);
+    if (e >= 3) return 'Cadence terminée (3 messages sans réponse)';
+    return '';
+  }
+
   function reseauHref(c) {
     const tel = String(c.tel || '').replace(/[^0-9]/g, '');
-    return tel ? 'https://wa.me/' + tel + '?text=' + encodeURIComponent(reseauMessage(c)) : '';
+    return tel ? 'https://wa.me/' + tel + '?text=' + encodeURIComponent(cadenceMessage(c)) : '';
   }
 
   function viewReseau() {
@@ -2939,18 +2978,22 @@
     let list = parStatut(tab);
     if (typeF) list = list.filter((c) => c.type === typeF);
     if (q) list = list.filter((c) => (nomClient(c) + ' ' + (c.adresseBien || '') + ' ' + (c.ville || '')).toLowerCase().indexOf(q) > -1);
+    const dueSeulement = !!state.filtres.reseauCadenceDue;
+    if (dueSeulement) list = list.filter((c) => cadenceDue(c));
     list = list.slice().sort((a, b) => ordre === 'alpha'
       ? nomClient(a).localeCompare(nomClient(b))
       : new Date(a.cree || 0) - new Date(b.cree || 0));
+    const nbDues = parStatut(tab).filter((c) => cadenceDue(c)).length;
 
     const ligne = (c) => {
       const tel = String(c.tel || '').replace(/[^0-9]/g, '');
-      const msg = reseauMessage(c);
+      const msg = cadenceMessage(c);
+      const cLabel = cadenceLabel(c);
       return '<div class="se-reseau-row">' +
         '<label class="se-reseau-check"><input type="checkbox" class="sel-reseau" data-id="' + c.id + '"/></label>' +
         '<div class="se-reseau-info">' +
           '<a href="#/client/' + c.id + '"><b>' + esc(nomClient(c)) + '</b></a>' +
-          '<div class="se-hint">' + esc(c.source || 'Lead') + (c.adresseBien ? ' · ' + esc(c.adresseBien) : (c.ville ? ' · ' + esc(c.ville) : '')) + '</div>' +
+          '<div class="se-hint">' + esc(c.source || 'Lead') + (c.adresseBien ? ' · ' + esc(c.adresseBien) : (c.ville ? ' · ' + esc(c.ville) : '')) + (cLabel ? ' · <span style="color:' + (cadenceDue(c) ? 'var(--color-alert)' : 'var(--color-taupe)') + '">' + esc(cLabel) + '</span>' : '') + '</div>' +
           '<p class="se-reseau-msg">' + esc(msg.replace(/\n+/g, ' ')) + '</p>' +
         '</div>' +
         '<div class="se-reseau-actions">' +
@@ -2964,6 +3007,13 @@
     return head('Prospection', 'Réseau',
         tous.length + ' lead(s) dans le fichier agence · ' + parStatut(tab).length + ' dans cet onglet.',
         '<a class="se-btn ghost sm" href="#/pipeline">Vue pipeline</a>') +
+      (nbDues
+        ? '<div class="se-row" style="margin-bottom:10px">' +
+            '<a href="#" data-act="filtre" data-id="reseauCadenceDue:' + (dueSeulement ? '' : '1') + '" class="se-btn sm' + (dueSeulement ? '' : ' ghost') + '" style="border-color:var(--color-alert);color:' + (dueSeulement ? '#fff' : 'var(--color-alert)') + ';background:' + (dueSeulement ? 'var(--color-alert)' : 'transparent') + '">' +
+              (dueSeulement ? 'Afficher tout l’onglet' : nbDues + ' relance(s) de cadence due(s) dans cet onglet') +
+            '</a>' +
+          '</div>'
+        : '') +
       '<div class="se-tabs se-reseau-tabs">' +
         PIPELINE_COLS.map(([k, l]) => '<a href="#" data-act="filtre" data-id="reseauTab:' + k + '" class="' + (tab === k ? 'active' : '') + '">' + l + '<span>' + parStatut(k).length + '</span></a>').join('') +
       '</div>' +
@@ -4147,8 +4197,14 @@
       if (!href) { toast('Numéro indisponible.', 'warn'); return; }
       window.open(href, '_blank');
       // Jamais d'envoi automatique : on ouvre WhatsApp, l'humain clique "Envoyer" lui-même.
-      // On avance juste le statut du lead de "à contacter" vers "contacté" pour suivre la relance.
-      if ((c.pipeline || 'a_contacter') === 'a_contacter') marquerPipeline(c, 'contacte');
+      // On avance juste le statut du lead de "à contacter" vers "contacté", et on fait progresser
+      // la cadence programmée (J+0 → J+15 → J+45) pour calculer la prochaine échéance de relance.
+      // skipCommit=true : window.open() retire le focus du champ de recherche, ce qui peut
+      // déclencher un re-rendu concurrent (sur blur) ; on ne committe/rend qu'une seule fois,
+      // à la fin, une fois toutes les mutations appliquées, pour éviter une collision de rendu.
+      if ((c.pipeline || 'a_contacter') === 'a_contacter') marquerPipeline(c, 'contacte', true);
+      avancerCadence(c);
+      commit();
       toast('WhatsApp ouvert pour ' + nomClient(c) + '.', 'info');
     },
     'reseau-marquer-masse': (el) => {
