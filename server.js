@@ -2532,6 +2532,29 @@ async function envoyerInvitationCandidatureEmail(req, lead, messagePersonnalise)
   }
 }
 
+// Décrit en français, AVANT de l'exécuter, l'action qu'un outil est en train
+// de proposer — affiché à l'agent pour qu'il valide ou refuse (voir plus bas,
+// le modèle ne déclenche plus jamais une action directement).
+function decrireActionProposee(nomOutil, input) {
+  input = input || {};
+  if (nomOutil === 'creer_ou_maj_lead') {
+    const nom = ((input.prenom || '') + ' ' + (input.nom || '')).trim() || '(nom non précisé)';
+    return 'Créer ou mettre à jour le lead ' + nom + (input.intentionVendeur ? ' (intention de vendre)' : '') +
+      (input.notes ? ' — note : « ' + input.notes + ' »' : '');
+  }
+  if (nomOutil === 'changer_pipeline') {
+    return 'Changer le statut de ' + (input.nomComplet || '(lead non précisé)') + ' → ' + (input.statut || '?');
+  }
+  if (nomOutil === 'programmer_rappel') {
+    return 'Programmer le rappel « ' + (input.titre || 'Rappel') + ' » pour ' + (input.nomComplet || '(lead non précisé)') +
+      (input.dateEcheance ? ', le ' + input.dateEcheance : '');
+  }
+  if (nomOutil === 'envoyer_invitation_candidature') {
+    return 'Envoyer une invitation à candidater à ' + (input.nomComplet || '(lead non précisé)');
+  }
+  return 'Exécuter l’action « ' + nomOutil + ' »';
+}
+
 // Exécute un appel d'outil décidé par le modèle. Toujours { resultat, resume?, lien? } :
 // `resultat` est renvoyé au modèle (tool_result), `resume`/`lien` alimentent le journal
 // d'actions affiché à l'agent dans le panneau de chat.
@@ -2612,24 +2635,35 @@ async function dispatchOutilAssistant(db, req, nomOutil, input) {
   return { resultat: { ok: false, erreur: 'Outil inconnu : ' + nomOutil } };
 }
 
-// Délai maximal avant d'abandonner un appel à l'IA et de renvoyer une erreur
-// claire au lieu de laisser le client « mouliner » indéfiniment sans jamais
-// savoir si ça a planté ou si c'est juste lent.
+// Délai maximal avant d'abandonner UNE tentative d'appel à l'IA et de passer
+// à la suivante, au lieu de laisser le client « mouliner » indéfiniment sans
+// jamais savoir si ça a planté ou si c'est juste lent.
 const DELAI_IA_MS = 30000;
 
 function erreurDelaiDepasse(fournisseur) {
-  return Object.assign(new Error(fournisseur + ' n’a pas répondu à temps (plus de 30s) — réessayez.'), { code: 'TIMEOUT' });
+  return Object.assign(new Error(fournisseur + ' n’a pas répondu à temps (' + (3 * DELAI_IA_MS / 1000) + 's au total, malgré plusieurs tentatives) — réessayez.'), { code: 'TIMEOUT' });
 }
 
 const attendre = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Un modèle « surchargé » (503, pic de demande côté Google/Anthropic) est en
-// général rétabli en quelques secondes — on réessaie automatiquement une ou
-// deux fois avant de renvoyer l'erreur à l'utilisateur, pour lui éviter de
-// retaper lui-même dans ce cas très courant sur un modèle récent.
+// général rétabli en quelques secondes, et une tentative trop lente (délai
+// dépassé) est souvent juste un aléa réseau ponctuel (ex. sur Railway) plutôt
+// qu'une vraie panne — dans les deux cas on réessaie automatiquement avant de
+// renvoyer l'erreur à l'utilisateur, pour lui éviter de retaper lui-même.
+// Le signal d'abandon est recréé à chaque tentative (un AbortSignal.timeout
+// ne se réarme pas).
 async function fetchAvecRetry(url, options, tentatives) {
   for (let i = 0; ; i++) {
-    const resp = await fetch(url, options);
+    let resp;
+    try {
+      resp = await fetch(url, Object.assign({}, options, { signal: AbortSignal.timeout(DELAI_IA_MS) }));
+    } catch (e) {
+      const estTimeout = e && (e.name === 'TimeoutError' || e.name === 'AbortError');
+      if (!estTimeout || i >= (tentatives - 1)) throw e;
+      await attendre(800 * (i + 1));
+      continue;
+    }
     if (resp.status !== 503 || i >= (tentatives - 1)) return resp;
     await attendre(1500 * (i + 1));
   }
@@ -2642,10 +2676,9 @@ async function callAnthropic(messages) {
     resp = await fetchAvecRetry(ANTHROPIC_API_BASE + '/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: ANTHROPIC_MODEL, max_tokens: 1024, system: ASSISTANT_SYSTEM, tools: ASSISTANT_TOOLS_ANTHROPIC, messages: messages }),
-      signal: AbortSignal.timeout(DELAI_IA_MS)
+      body: JSON.stringify({ model: ANTHROPIC_MODEL, max_tokens: 1024, system: ASSISTANT_SYSTEM, tools: ASSISTANT_TOOLS_ANTHROPIC, messages: messages })
     }, 3);
-  } catch (e) { if (e && e.name === 'TimeoutError') throw erreurDelaiDepasse('Anthropic'); throw e; }
+  } catch (e) { if (e && (e.name === 'TimeoutError' || e.name === 'AbortError')) throw erreurDelaiDepasse('Anthropic'); throw e; }
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) throw Object.assign(new Error((data && data.error && data.error.message) || ('Anthropic ' + resp.status)), { code: 'API_ERROR' });
   return data;
@@ -2658,10 +2691,9 @@ async function callGemini(contents) {
     resp = await fetchAvecRetry(GEMINI_API_BASE + '/v1beta/models/' + encodeURIComponent(GEMINI_MODEL) + ':generateContent', {
       method: 'POST',
       headers: { 'x-goog-api-key': GEMINI_API_KEY, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ system_instruction: { parts: [{ text: ASSISTANT_SYSTEM }] }, contents: contents, tools: ASSISTANT_TOOLS_GEMINI }),
-      signal: AbortSignal.timeout(DELAI_IA_MS)
+      body: JSON.stringify({ system_instruction: { parts: [{ text: ASSISTANT_SYSTEM }] }, contents: contents, tools: ASSISTANT_TOOLS_GEMINI })
     }, 3);
-  } catch (e) { if (e && e.name === 'TimeoutError') throw erreurDelaiDepasse('Gemini'); throw e; }
+  } catch (e) { if (e && (e.name === 'TimeoutError' || e.name === 'AbortError')) throw erreurDelaiDepasse('Gemini'); throw e; }
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) throw Object.assign(new Error((data && data.error && data.error.message) || ('Gemini ' + resp.status)), { code: 'API_ERROR' });
   return data;
@@ -2690,82 +2722,131 @@ async function transcrireAudioGemini(base64Audio, mimeType) {
             { text: 'Transcris fidèlement cet enregistrement audio en français, mot pour mot. Réponds uniquement avec le texte transcrit, sans guillemets, sans commentaire, sans rien ajouter. Si rien d’intelligible n’est dit, réponds avec une chaîne vide.' }
           ]
         }]
-      }),
-      signal: AbortSignal.timeout(DELAI_IA_MS)
+      })
     }, 3);
-  } catch (e) { if (e && e.name === 'TimeoutError') throw erreurDelaiDepasse('Gemini'); throw e; }
+  } catch (e) { if (e && (e.name === 'TimeoutError' || e.name === 'AbortError')) throw erreurDelaiDepasse('Gemini'); throw e; }
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) throw Object.assign(new Error((data && data.error && data.error.message) || ('Gemini ' + resp.status)), { code: 'API_ERROR' });
   const parts = (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) || [];
   return parts.filter((p) => p.text).map((p) => p.text).join(' ').trim();
 }
 
+// Garde-fou contre une boucle infinie : au-delà de ce nombre de tours
+// outil → validation/refus → outil, on arrête et on répond en texte plutôt
+// que de redemander une nouvelle validation indéfiniment.
+const TOURS_OUTIL_MAX = 8;
+
 async function conversationAnthropic(db, req, historique, message) {
   const messages = historique.concat([{ role: 'user', content: message }]);
-  const actions = [];
-  let tours = 0;
-  let data = await callAnthropic(messages);
-  while (data.stop_reason === 'tool_use' && tours < 6) {
-    tours++;
-    messages.push({ role: 'assistant', content: data.content });
-    const toolResults = [];
-    for (const bloc of data.content) {
-      if (bloc.type !== 'tool_use') continue;
-      const r = await dispatchOutilAssistant(db, req, bloc.name, bloc.input);
-      if (r && r.resume) actions.push({ outil: bloc.name, resume: r.resume, lien: r.lien || null });
-      toolResults.push({ type: 'tool_result', tool_use_id: bloc.id, content: JSON.stringify((r && r.resultat) || r) });
-    }
-    writeDb(db);
-    messages.push({ role: 'user', content: toolResults });
-    data = await callAnthropic(messages);
+  return etapeAnthropic(db, req, messages, []);
+}
+
+// Appelle le modèle puis s'arrête : si le modèle veut utiliser un ou plusieurs
+// outils, on NE les exécute PAS — on renvoie la proposition d'action au client
+// pour que l'agent la valide ou la refuse (voir poursuivreApresDecisionAnthropic).
+async function etapeAnthropic(db, req, messages, actions) {
+  const toursDeja = messages.filter((m) => m.role === 'assistant' && Array.isArray(m.content) && m.content.some((b) => b.type === 'tool_use')).length;
+  if (toursDeja >= TOURS_OUTIL_MAX) {
+    return { texte: 'Trop d’étapes pour cette demande — reformulez-la de façon plus simple.', actions: actions, historique: messages };
   }
+  const data = await callAnthropic(messages);
   messages.push({ role: 'assistant', content: data.content });
+  const blocs = (data.content || []).filter((b) => b.type === 'tool_use');
+  if (data.stop_reason === 'tool_use' && blocs.length) {
+    return {
+      enAttente: blocs.map((b) => ({ id: b.id, outil: b.name, input: b.input, resume: decrireActionProposee(b.name, b.input) })),
+      actions: actions,
+      historique: messages
+    };
+  }
   const texte = (data.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim() || 'Fait.';
   return { texte: texte, actions: actions, historique: messages };
 }
 
-async function conversationGemini(db, req, historique, message) {
-  let contents = historique.concat([{ role: 'user', parts: [{ text: message }] }]);
-  const actions = [];
-  let tours = 0;
-  let data = await callGemini(contents);
-  let parts = (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) || [];
-  let appels = parts.filter((p) => p.functionCall);
-  while (appels.length && tours < 6) {
-    tours++;
-    contents.push({ role: 'model', parts: parts });
-    const reponses = [];
-    for (const p of appels) {
-      const fc = p.functionCall;
-      const r = await dispatchOutilAssistant(db, req, fc.name, fc.args);
-      if (r && r.resume) actions.push({ outil: fc.name, resume: r.resume, lien: r.lien || null });
-      reponses.push({ functionResponse: { name: fc.name, id: fc.id, response: { result: (r && r.resultat) || r } } });
+// Exécute (ou refuse) les actions que l'agent vient de valider/refuser, renvoie
+// le résultat au modèle comme tool_result, puis laisse la conversation continuer.
+async function poursuivreApresDecisionAnthropic(db, req, messages, decisions, actions) {
+  const toolResults = [];
+  for (const d of decisions) {
+    if (d.accepter) {
+      const r = await dispatchOutilAssistant(db, req, d.outil, d.input);
+      if (r && r.resume) actions.push({ outil: d.outil, resume: r.resume, lien: r.lien || null });
+      toolResults.push({ type: 'tool_result', tool_use_id: d.id, content: JSON.stringify((r && r.resultat) || r) });
+    } else {
+      toolResults.push({ type: 'tool_result', tool_use_id: d.id, content: JSON.stringify({ ok: false, erreur: 'Action refusée par l’agent — ne pas la retenter sans nouvelle demande explicite.' }) });
     }
-    writeDb(db);
-    contents.push({ role: 'user', parts: reponses });
-    data = await callGemini(contents);
-    parts = (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) || [];
-    appels = parts.filter((p) => p.functionCall);
   }
+  writeDb(db);
+  messages.push({ role: 'user', content: toolResults });
+  return etapeAnthropic(db, req, messages, actions);
+}
+
+async function conversationGemini(db, req, historique, message) {
+  const contents = historique.concat([{ role: 'user', parts: [{ text: message }] }]);
+  return etapeGemini(db, req, contents, []);
+}
+
+async function etapeGemini(db, req, contents, actions) {
+  const toursDeja = contents.filter((c) => c.role === 'model' && Array.isArray(c.parts) && c.parts.some((p) => p.functionCall)).length;
+  if (toursDeja >= TOURS_OUTIL_MAX) {
+    return { texte: 'Trop d’étapes pour cette demande — reformulez-la de façon plus simple.', actions: actions, historique: contents };
+  }
+  const data = await callGemini(contents);
+  const parts = (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) || [];
   contents.push({ role: 'model', parts: parts });
+  const appels = parts.filter((p) => p.functionCall);
+  if (appels.length) {
+    return {
+      enAttente: appels.map((p) => ({ id: p.functionCall.id, outil: p.functionCall.name, input: p.functionCall.args, resume: decrireActionProposee(p.functionCall.name, p.functionCall.args) })),
+      actions: actions,
+      historique: contents
+    };
+  }
   const texte = parts.filter((p) => p.text).map((p) => p.text).join('\n').trim() || 'Fait.';
   return { texte: texte, actions: actions, historique: contents };
 }
 
-// Boucle de conversation avec tool use : tant que le modèle demande des outils,
-// on les exécute et on lui renvoie le résultat, jusqu'à ce qu'il réponde en texte
-// (ou 6 tours maximum, garde-fou contre une boucle infinie). Le format de
-// `historique` dépend du fournisseur actif (AI_PROVIDER) — le client le traite
-// comme une donnée opaque, à retourner telle quelle au tour suivant.
+async function poursuivreApresDecisionGemini(db, req, contents, decisions, actions) {
+  const reponses = [];
+  for (const d of decisions) {
+    if (d.accepter) {
+      const r = await dispatchOutilAssistant(db, req, d.outil, d.input);
+      if (r && r.resume) actions.push({ outil: d.outil, resume: r.resume, lien: r.lien || null });
+      reponses.push({ functionResponse: { name: d.outil, id: d.id, response: { result: (r && r.resultat) || r } } });
+    } else {
+      reponses.push({ functionResponse: { name: d.outil, id: d.id, response: { result: { ok: false, erreur: 'Action refusée par l’agent — ne pas la retenter sans nouvelle demande explicite.' } } } });
+    }
+  }
+  writeDb(db);
+  contents.push({ role: 'user', parts: reponses });
+  return etapeGemini(db, req, contents, actions);
+}
+
+// Conversation avec tool use : le modèle propose une action (il ne l'exécute
+// jamais lui-même), le client l'affiche à l'agent et renvoie sa décision via
+// `decisions` ; on continue alors la conversation jusqu'à une réponse en
+// texte (ou jusqu'à TOURS_OUTIL_MAX, garde-fou contre une boucle infinie). Le
+// format de `historique` dépend du fournisseur actif (AI_PROVIDER) — le
+// client le traite comme une donnée opaque, à retourner telle quelle.
 app.post('/api/assistant/chat', requireAdmin, async (req, res) => {
-  const message = String((req.body && req.body.message) || '').trim();
-  if (!message) return res.status(400).json({ error: 'Message vide.' });
   const historique = Array.isArray(req.body && req.body.historique) ? req.body.historique : [];
   const db = readDb();
   try {
-    const resultat = AI_PROVIDER === 'gemini'
-      ? await conversationGemini(db, req, historique, message)
-      : await conversationAnthropic(db, req, historique, message);
+    let resultat;
+    if (req.body && Array.isArray(req.body.decisions) && req.body.decisions.length) {
+      resultat = AI_PROVIDER === 'gemini'
+        ? await poursuivreApresDecisionGemini(db, req, historique, req.body.decisions, [])
+        : await poursuivreApresDecisionAnthropic(db, req, historique, req.body.decisions, []);
+    } else {
+      const message = String((req.body && req.body.message) || '').trim();
+      if (!message) return res.status(400).json({ error: 'Message vide.' });
+      resultat = AI_PROVIDER === 'gemini'
+        ? await conversationGemini(db, req, historique, message)
+        : await conversationAnthropic(db, req, historique, message);
+    }
+    if (resultat.enAttente) {
+      return res.json({ ok: true, enAttente: resultat.enAttente, actions: resultat.actions, historique: resultat.historique });
+    }
     res.json({ ok: true, reponse: resultat.texte, actions: resultat.actions, historique: resultat.historique });
   } catch (err) {
     if (err && err.code === 'NO_KEY') return res.status(503).json({ error: err.message });

@@ -213,6 +213,10 @@
   // depuis les anciens noms de clés (panneau "Assistant" avant Célia).
   state.celiaMessages = state.celiaMessages || state.assistantMessages || [];
   state.celiaHistorique = state.celiaHistorique || state.assistantHistorique || [];
+  // Action(s) proposée(s) par Célia en attente de validation/refus par l'agent
+  // (tableau de { id, outil, input, resume }, jamais exécutées tant que
+  // l'agent n'a pas tapé sur « Valider »). Purement local, comme le reste.
+  state.celiaAttente = state.celiaAttente || null;
   delete state.assistantMessages;
   delete state.assistantHistorique;
 
@@ -3730,9 +3734,31 @@
   // appelée directement par le code, jamais via un événement `submit` simulé :
   // un `render()` peut avoir lieu entre-temps (ex. à la fin de l'écoute vocale)
   // et détacherait le formulaire du DOM, empêchant l'événement de remonter.
+  // Traite la réponse commune aux deux points d'entrée (nouveau message /
+  // décision sur une proposition) : soit une nouvelle proposition d'action
+  // à valider, soit une réponse finale en texte.
+  function traiterReponseCelia(res) {
+    if (res.enAttente && res.enAttente.length) {
+      state.celiaAttente = res.enAttente;
+      // Historique gardé intact (jamais tronqué) tant qu'une action est en
+      // attente : il contient l'appel d'outil du modèle, qu'il faut pouvoir
+      // lui renvoyer exactement tel quel une fois la décision connue.
+      state.celiaHistorique = res.historique || state.celiaHistorique;
+      state.celiaMessages.push({ role: 'proposition', texte: res.enAttente.map((a) => a.resume).join('\n'), at: nowISO() });
+      return '';
+    }
+    state.celiaAttente = null;
+    const reponseTexte = res.reponse || '…';
+    state.celiaMessages.push({ role: 'assistant', texte: reponseTexte, actions: res.actions || [], at: nowISO() });
+    // On ne garde que les 30 derniers messages envoyés à l'API, pour que
+    // l'historique ne grossisse pas indéfiniment au fil d'une longue session.
+    state.celiaHistorique = (res.historique || []).slice(-30);
+    return reponseTexte;
+  }
+
   async function envoyerMessageCelia(texte) {
     texte = String(texte || '').trim();
-    if (!texte || state.celiaEnCours) return;
+    if (!texte || state.celiaEnCours || (state.celiaAttente && state.celiaAttente.length)) return;
     state.celiaMessages.push({ role: 'user', texte: texte, at: nowISO() });
     state.celiaEnCours = true;
     commit();
@@ -3744,18 +3770,46 @@
       });
       const res = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(res.error || 'Erreur serveur');
-      reponseTexte = res.reponse || '…';
-      state.celiaMessages.push({ role: 'assistant', texte: reponseTexte, actions: res.actions || [], at: nowISO() });
-      // On ne garde que les 30 derniers messages envoyés à l'API, pour que
-      // l'historique ne grossisse pas indéfiniment au fil d'une longue session.
-      state.celiaHistorique = (res.historique || []).slice(-30);
+      reponseTexte = traiterReponseCelia(res);
     } catch (e) {
       reponseTexte = 'Désolé, une erreur est survenue : ' + (e.message || 'inconnue') + '.';
       state.celiaMessages.push({ role: 'assistant', texte: reponseTexte, actions: [] });
     }
     state.celiaEnCours = false;
     commit();
-    direAVoixHaute(reponseTexte);
+    if (reponseTexte) direAVoixHaute(reponseTexte);
+    setTimeout(() => {
+      const box = document.querySelector('[data-celia-scroll]');
+      if (box) box.scrollTop = box.scrollHeight;
+    }, 30);
+  }
+
+  // Appelée quand l'agent tape sur « Valider » ou « Annuler » sous une
+  // proposition d'action de Célia — jamais exécutée automatiquement avant ça.
+  async function repondreActionCelia(accepter) {
+    const attente = state.celiaAttente;
+    if (!attente || !attente.length || state.celiaEnCours) return;
+    const decisions = attente.map((a) => ({ id: a.id, outil: a.outil, input: a.input, accepter: accepter }));
+    state.celiaAttente = null;
+    state.celiaEnCours = true;
+    state.celiaMessages.push({ role: 'user', texte: accepter ? '✓ Validé' : '✕ Annulé', at: nowISO() });
+    commit();
+    let reponseTexte = '';
+    try {
+      const r = await fetch('/api/assistant/chat', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+        body: JSON.stringify({ decisions: decisions, historique: state.celiaHistorique })
+      });
+      const res = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(res.error || 'Erreur serveur');
+      reponseTexte = traiterReponseCelia(res);
+    } catch (e) {
+      reponseTexte = 'Désolé, une erreur est survenue : ' + (e.message || 'inconnue') + '.';
+      state.celiaMessages.push({ role: 'assistant', texte: reponseTexte, actions: [] });
+    }
+    state.celiaEnCours = false;
+    commit();
+    if (reponseTexte) direAVoixHaute(reponseTexte);
     setTimeout(() => {
       const box = document.querySelector('[data-celia-scroll]');
       if (box) box.scrollTop = box.scrollHeight;
@@ -3867,6 +3921,13 @@
       '</div>' +
       '<div class="se-celia-body se-chat" data-celia-scroll>' +
         (msgs.length ? msgs.map((m) => (
+          m.role === 'proposition' ?
+            // Action que Célia propose, pas encore exécutée — ne s'affiche
+            // jamais comme un fait accompli.
+            '<div class="se-bubble agent se-celia-proposition">' +
+              '<strong>Célia souhaite :</strong><br>' + esc(m.texte).replace(/\n/g, '<br>') +
+            '</div>'
+          :
           '<div class="se-bubble ' + (m.role === 'user' ? 'me' : 'agent') + '">' +
             esc(m.texte).replace(/\n/g, '<br>') +
             ((m.actions && m.actions.length) ? '<div class="se-row" style="flex-wrap:wrap;gap:6px;margin-top:8px">' +
@@ -3874,7 +3935,14 @@
             '</div>' : '') +
           '</div>'
         )).join('') : '<p class="se-muted">Dites-lui par exemple : « Je sors de chez Mme Intel, 12 rue de Seine, elle veut vendre. Envoie-lui la candidature et programme un rappel pour le 28. »' + (reconnaissanceDisponible() ? ' — au micro ou au clavier.' : '') + '</p>') +
-        (state.celiaEnCours ? '<div class="se-bubble agent"><span class="se-muted">…</span></div>' : '') +
+        ((state.celiaAttente && state.celiaAttente.length) ?
+          // L'action proposée reste affichée (bulle ci-dessus) jusqu'à ce
+          // que l'agent valide ou refuse explicitement — jamais automatique.
+          '<div class="se-row se-celia-confirm" style="gap:8px;margin:2px 0 6px">' +
+            '<button type="button" class="se-btn sm" data-act="celia-valider" ' + (state.celiaEnCours ? 'disabled' : '') + '>Valider</button>' +
+            '<button type="button" class="se-btn sm ghost" data-act="celia-refuser" ' + (state.celiaEnCours ? 'disabled' : '') + '>Annuler</button>' +
+          '</div>'
+        : state.celiaEnCours ? '<div class="se-bubble agent"><span class="se-muted">…</span></div>' : '') +
       '</div>' +
       '<div class="se-celia-foot">' +
         (celiaEcoute ?
@@ -3891,11 +3959,17 @@
             '<span>Transcription en cours…</span>' +
           '</div>'
         :
-          '<form data-form="celia">' +
-            (reconnaissanceDisponible() ? '<button type="button" class="se-celia-mic" data-act="celia-micro" title="Parler à Célia" ' + (state.celiaEnCours ? 'disabled' : '') + '>' + ICONS.mic + '</button>' : '') +
-            '<input class="se-input" name="texte" placeholder="Écrivez ou parlez…" value="' + esc(celiaBrouillon) + '" autocomplete="off" ' + (state.celiaEnCours ? 'disabled' : '') + '/>' +
-            '<button class="se-btn sm" type="submit" ' + (state.celiaEnCours ? 'disabled' : '') + '>Envoyer</button>' +
-          '</form>'
+          (function () {
+            // Le clavier/micro restent désactivés tant qu'une action proposée
+            // par Célia attend d'être validée ou refusée (voir ci-dessus) :
+            // pas de nouveau message tant que celle-ci n'est pas tranchée.
+            const bloque = state.celiaEnCours || !!(state.celiaAttente && state.celiaAttente.length);
+            return '<form data-form="celia">' +
+              (reconnaissanceDisponible() ? '<button type="button" class="se-celia-mic" data-act="celia-micro" title="Parler à Célia" ' + (bloque ? 'disabled' : '') + '>' + ICONS.mic + '</button>' : '') +
+              '<input class="se-input" name="texte" placeholder="Écrivez ou parlez…" value="' + esc(celiaBrouillon) + '" autocomplete="off" ' + (bloque ? 'disabled' : '') + '/>' +
+              '<button class="se-btn sm" type="submit" ' + (bloque ? 'disabled' : '') + '>Envoyer</button>' +
+            '</form>';
+          })()
         ) +
       '</div>' +
     '</div>';
@@ -4627,9 +4701,11 @@
       }
       setTimeout(() => { const box = document.querySelector('[data-celia-scroll]'); if (box) box.scrollTop = box.scrollHeight; }, 30);
     },
-    'celia-reset': () => { state.celiaMessages = []; state.celiaHistorique = []; commit(); },
+    'celia-reset': () => { state.celiaMessages = []; state.celiaHistorique = []; state.celiaAttente = null; commit(); },
     'celia-micro': () => basculerEcoute(),
     'celia-vocal-toggle': () => basculerVocal(),
+    'celia-valider': () => repondreActionCelia(true),
+    'celia-refuser': () => repondreActionCelia(false),
     'robot-valorisation': async (el) => { await estimerValorisation(el.getAttribute('data-id')); },
     'robot-tache': (el) => {
       const b = robotBien(el.getAttribute('data-id'));
