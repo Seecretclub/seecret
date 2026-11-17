@@ -51,6 +51,7 @@ function readDb() {
   db.offres = Array.isArray(db.offres) ? db.offres : [];
   db.offMarket = (db.offMarket && !Array.isArray(db.offMarket) && typeof db.offMarket === 'object') ? db.offMarket : {};
   db.activites = Array.isArray(db.activites) ? db.activites : [];
+  db.rappels = Array.isArray(db.rappels) ? db.rappels : [];
   // Migration : relie chaque bien/recherche à son lead (leadId) via l'email si manquant.
   db.biens.forEach((b) => {
     if (!b.leadId && b.email) {
@@ -2371,6 +2372,270 @@ app.use((err, req, res, next) => {
     return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'Fichier trop lourd (10 Mo max)' : err.message });
   }
   next(err);
+});
+
+// ====================================================================
+// Assistant CRM conversationnel — un agent qui sort de rendez-vous parle en
+// langage naturel à l'IA (Claude, via l'API Anthropic, avec tool use) et elle
+// exécute les actions correspondantes directement dans le CRM : créer/mettre
+// à jour un lead, changer son statut pipeline, programmer un rappel daté,
+// envoyer l'invitation au parcours de candidature. Nécessite ANTHROPIC_API_KEY
+// en variable d'environnement — sans elle, l'endpoint répond une erreur claire
+// plutôt que de planter.
+// ====================================================================
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-5-20250929';
+// Configurable pour les tests (pointé vers un faux serveur qui imite l'API
+// Anthropic) — en production, reste toujours l'API officielle par défaut.
+const ANTHROPIC_API_BASE = process.env.ANTHROPIC_API_BASE || 'https://api.anthropic.com';
+
+function escHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+const ASSISTANT_TOOLS = [
+  {
+    name: 'creer_ou_maj_lead',
+    description: "Crée un nouveau lead (prospect/contact) dans le CRM, ou met à jour un lead existant si un lead avec le même email, téléphone ou nom complet existe déjà. À utiliser dès qu'un agent rapporte un échange ou un rendez-vous avec un propriétaire ou un contact à suivre.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        prenom: { type: 'string', description: 'Prénom du contact, si connu' },
+        nom: { type: 'string', description: 'Nom de famille du contact (obligatoire)' },
+        email: { type: 'string', description: 'Email, si connu' },
+        tel: { type: 'string', description: 'Téléphone, si connu' },
+        adresseBien: { type: 'string', description: 'Adresse du bien concerné, si mentionnée (ex. le logement visité)' },
+        ville: { type: 'string', description: 'Ville' },
+        notes: { type: 'string', description: "Résumé libre de ce qui a été dit/fait lors de l'échange (contexte, intention, détails utiles)" },
+        intentionVendeur: { type: 'boolean', description: 'true si le contact souhaite vendre son bien' }
+      },
+      required: ['nom']
+    }
+  },
+  {
+    name: 'changer_pipeline',
+    description: "Change le statut de suivi commercial (pipeline) d'un lead déjà identifié par son nom complet.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        nomComplet: { type: 'string', description: 'Nom complet (prénom + nom) du lead concerné' },
+        statut: { type: 'string', enum: ['a_contacter', 'contacte', 'a_relancer', 'converti', 'ecarte', 'hors_cible', 'a_completer'], description: 'Nouveau statut pipeline' }
+      },
+      required: ['nomComplet', 'statut']
+    }
+  },
+  {
+    name: 'programmer_rappel',
+    description: "Programme un rappel daté (ex. un rendez-vous, une relance à faire) lié à un lead déjà identifié par son nom complet.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        nomComplet: { type: 'string', description: 'Nom complet (prénom + nom) du lead concerné' },
+        titre: { type: 'string', description: 'Ex. "Rendez-vous de visite", "Rappeler pour la décision"' },
+        dateEcheance: { type: 'string', description: "Date au format AAAA-MM-JJ, ou AAAA-MM-JJTHH:MM si une heure est précisée" },
+        notes: { type: 'string', description: 'Détails complémentaires, si utiles' }
+      },
+      required: ['nomComplet', 'titre', 'dateEcheance']
+    }
+  },
+  {
+    name: 'envoyer_invitation_candidature',
+    description: "Envoie par email le lien vers le parcours de candidature/adhésion Seecret à un lead déjà identifié par son nom complet et qui a un email connu.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        nomComplet: { type: 'string', description: 'Nom complet (prénom + nom) du lead concerné' },
+        messagePersonnalise: { type: 'string', description: "Courte phrase personnalisée à inclure dans l'email, en fonction du contexte de l'échange" }
+      },
+      required: ['nomComplet']
+    }
+  }
+];
+
+const ASSISTANT_SYSTEM = "Tu es l'assistant interne du CRM Seecret, une agence immobilière. Un agent te parle en langage naturel, en général juste après un rendez-vous ou une visite, pour te raconter ce qui s'est passé. Comprends ce qu'il raconte et exécute toi-même les actions correspondantes dans le CRM via les outils fournis — ne te contente jamais de répondre en texte si une action est possible. Si plusieurs actions sont nécessaires (ex. créer le lead ET programmer un rappel ET envoyer l'invitation), appelle plusieurs outils, dans un ordre logique (toujours créer/identifier le lead avant d'agir sur lui). Si une information nécessaire manque (ex. aucune date pour un rappel), pose la question à l'agent au lieu d'inventer une valeur. Réponds toujours en français, de façon brève et concrète, en confirmant ce que tu as fait.";
+
+function trouverLeadParNom(db, texte) {
+  const q = String(texte || '').trim().toLowerCase();
+  if (!q) return null;
+  let lead = db.leads.find((l) => ((l.prenom || '') + ' ' + (l.nom || '')).trim().toLowerCase() === q);
+  if (lead) return lead;
+  const candidats = db.leads.filter((l) => (l.nom || '').length > 1 && q.indexOf((l.nom || '').toLowerCase()) > -1);
+  candidats.sort((a, b) => new Date(b.cree) - new Date(a.cree));
+  return candidats[0] || null;
+}
+
+function dFRServer(iso) {
+  try { return new Date(iso).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' }); } catch (e) { return iso; }
+}
+
+async function envoyerInvitationCandidatureEmail(req, lead, messagePersonnalise) {
+  if (!lead.email) return { ok: false, erreur: "Ce lead n'a pas d'email connu." };
+  if (!mailer) return { ok: false, erreur: "Aucun service d'email configuré sur ce serveur (RESEND_API_KEY ou EMAIL_USER/EMAIL_PASS manquants)." };
+  const lien = originOf(req) + '/candidature.html';
+  const intro = messagePersonnalise ? '<p style="font-size:15px;line-height:1.6;color:#5f5a54;margin:0 0 20px;">' + escHtml(messagePersonnalise) + '</p>' : '';
+  const html = [
+    '<!doctype html><html><body style="margin:0;padding:0;background:#faf9f7;font-family:Georgia,\'Times New Roman\',serif;">',
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:48px 16px;">',
+    '<div style="max-width:460px;width:100%;background:#ffffff;border:1px solid #eeebe6;border-radius:24px;padding:44px 36px;text-align:left;">',
+    '<div style="font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:#5f5a54;font-weight:600;">Seecret</div>',
+    '<h1 style="font-family:Georgia,serif;font-weight:400;font-size:28px;line-height:1.15;color:#141210;margin:14px 0 8px;">' + (lead.prenom ? 'Bonjour ' + escHtml(lead.prenom) : 'Bonjour') + ',</h1>',
+    intro,
+    '<p style="font-size:15px;line-height:1.6;color:#5f5a54;margin:0 0 20px;">Voici le lien pour déposer votre candidature au club Seecret — une dizaine de minutes suffisent.</p>',
+    '<div style="text-align:center;"><a href="' + lien + '" style="display:inline-block;background:#141210;color:#ffffff;text-decoration:none;padding:14px 32px;border-radius:999px;font-size:15px;font-weight:500;">Déposer ma candidature</a></div>',
+    '</div></td></tr></table></body></html>'
+  ].join('');
+  try {
+    await mailer.sendMail({ from: '"' + DEFAULT_AGENT_NOM + ' · Seecret" <' + FROM_EMAIL + '>', to: lead.email, subject: 'Votre invitation à rejoindre Seecret', html: html });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, erreur: (err && err.message) || 'Erreur d’envoi' };
+  }
+}
+
+// Exécute un appel d'outil décidé par le modèle. Toujours { resultat, resume?, lien? } :
+// `resultat` est renvoyé au modèle (tool_result), `resume`/`lien` alimentent le journal
+// d'actions affiché à l'agent dans le panneau de chat.
+async function dispatchOutilAssistant(db, req, nomOutil, input) {
+  input = input || {};
+  const auteur = 'Assistant · ' + nomComplet(req.lead);
+
+  if (nomOutil === 'creer_ou_maj_lead') {
+    const nom = String(input.nom || '').trim();
+    if (!nom) return { resultat: { ok: false, erreur: 'Le nom du contact est obligatoire.' } };
+    const email = String(input.email || '').trim().toLowerCase();
+    const telBrut = String(input.tel || '').trim();
+    const telDigits = telBrut.replace(/\D/g, '');
+    let lead = (email && db.leads.find((l) => (l.email || '').toLowerCase() === email)) ||
+      (telDigits && db.leads.find((l) => (l.tel || '').replace(/\D/g, '') === telDigits)) ||
+      trouverLeadParNom(db, ((input.prenom || '') + ' ' + nom).trim());
+    let cree = false;
+    if (!lead) {
+      lead = {
+        id: uid('l'), prenom: String(input.prenom || ''), nom: nom, email: email, tel: telBrut,
+        ville: String(input.ville || ''), projet: input.intentionVendeur ? 'vendeur' : 'prospect',
+        role: 'membre', type: 'personne', source: 'Assistant CRM', statut: 'prospect', pipeline: 'a_contacter',
+        budgetMax: 0, quartiers: [], piecesMin: 0, surfaceMin: 0,
+        notes: String(input.notes || ''), adresseBien: String(input.adresseBien || ''), cree: nowISO()
+      };
+      db.leads.push(lead);
+      cree = true;
+    } else {
+      if (input.prenom) lead.prenom = String(input.prenom);
+      if (email) lead.email = email;
+      if (telBrut) lead.tel = telBrut;
+      if (input.ville) lead.ville = String(input.ville);
+      if (input.adresseBien) lead.adresseBien = String(input.adresseBien);
+      if (input.notes) lead.notes = (lead.notes ? lead.notes + '\n\n' : '') + String(input.notes);
+      if (input.intentionVendeur) lead.projet = 'vendeur';
+    }
+    logActivite(db, { leadId: lead.id, type: cree ? 'lead_cree_assistant' : 'lead_maj_assistant', auteur: auteur });
+    return {
+      resultat: { ok: true, leadId: lead.id, cree: cree },
+      resume: (cree ? 'Lead créé : ' : 'Lead mis à jour : ') + nomComplet(lead),
+      lien: '/crm.html#/client/' + lead.id
+    };
+  }
+
+  if (nomOutil === 'changer_pipeline') {
+    const lead = trouverLeadParNom(db, input.nomComplet);
+    if (!lead) return { resultat: { ok: false, erreur: 'Lead introuvable : ' + input.nomComplet } };
+    const avant = lead.pipeline;
+    lead.pipeline = String(input.statut || '').slice(0, 40);
+    if (avant !== lead.pipeline && (lead.pipeline === 'a_relancer' || lead.pipeline === 'converti')) {
+      logActivite(db, { leadId: lead.id, type: lead.pipeline === 'converti' ? 'converti' : 'retour_silence', auteur: auteur });
+    }
+    return { resultat: { ok: true }, resume: 'Statut mis à jour (' + lead.pipeline + ') : ' + nomComplet(lead), lien: '/crm.html#/client/' + lead.id };
+  }
+
+  if (nomOutil === 'programmer_rappel') {
+    const lead = trouverLeadParNom(db, input.nomComplet);
+    if (!lead) return { resultat: { ok: false, erreur: 'Lead introuvable : ' + input.nomComplet } };
+    const titre = String(input.titre || 'Rappel').trim();
+    const dateEcheance = String(input.dateEcheance || '').trim();
+    const dateValide = dateEcheance && !isNaN(new Date(dateEcheance).getTime());
+    if (!dateValide) return { resultat: { ok: false, erreur: 'Date invalide : ' + input.dateEcheance } };
+    const rappel = { id: uid('rap'), leadId: lead.id, titre: titre, dateEcheance: new Date(dateEcheance).toISOString(), notes: String(input.notes || ''), statut: 'ouvert', cree: nowISO() };
+    db.rappels.push(rappel);
+    logActivite(db, { leadId: lead.id, type: 'rappel_programme', auteur: auteur });
+    return { resultat: { ok: true, rappelId: rappel.id }, resume: 'Rappel programmé (' + dFRServer(rappel.dateEcheance) + ') : ' + titre + ' — ' + nomComplet(lead), lien: '/crm.html#/client/' + lead.id };
+  }
+
+  if (nomOutil === 'envoyer_invitation_candidature') {
+    const lead = trouverLeadParNom(db, input.nomComplet);
+    if (!lead) return { resultat: { ok: false, erreur: 'Lead introuvable : ' + input.nomComplet } };
+    const r = await envoyerInvitationCandidatureEmail(req, lead, input.messagePersonnalise);
+    if (!r.ok) return { resultat: { ok: false, erreur: r.erreur } };
+    logActivite(db, { leadId: lead.id, type: 'candidature_envoyee', auteur: auteur });
+    return { resultat: { ok: true }, resume: 'Invitation à candidater envoyée à ' + nomComplet(lead) + ' (' + lead.email + ')', lien: '/crm.html#/client/' + lead.id };
+  }
+
+  return { resultat: { ok: false, erreur: 'Outil inconnu : ' + nomOutil } };
+}
+
+async function callAnthropic(messages) {
+  if (!ANTHROPIC_API_KEY) throw Object.assign(new Error('ANTHROPIC_API_KEY non configurée sur ce serveur.'), { code: 'NO_KEY' });
+  const resp = await fetch(ANTHROPIC_API_BASE + '/v1/messages', {
+    method: 'POST',
+    headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: ANTHROPIC_MODEL, max_tokens: 1024, system: ASSISTANT_SYSTEM, tools: ASSISTANT_TOOLS, messages: messages })
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw Object.assign(new Error((data && data.error && data.error.message) || ('Anthropic ' + resp.status)), { code: 'API_ERROR' });
+  return data;
+}
+
+// Boucle de conversation avec tool use : tant que le modèle demande des outils,
+// on les exécute et on lui renvoie le résultat, jusqu'à ce qu'il réponde en texte
+// (ou 6 tours maximum, garde-fou contre une boucle infinie).
+app.post('/api/assistant/chat', requireAdmin, async (req, res) => {
+  const message = String((req.body && req.body.message) || '').trim();
+  if (!message) return res.status(400).json({ error: 'Message vide.' });
+  const historique = Array.isArray(req.body && req.body.historique) ? req.body.historique : [];
+  const db = readDb();
+  const messages = historique.concat([{ role: 'user', content: message }]);
+  const actions = [];
+  let tours = 0;
+  try {
+    let data = await callAnthropic(messages);
+    while (data.stop_reason === 'tool_use' && tours < 6) {
+      tours++;
+      messages.push({ role: 'assistant', content: data.content });
+      const toolResults = [];
+      for (const bloc of data.content) {
+        if (bloc.type !== 'tool_use') continue;
+        const r = await dispatchOutilAssistant(db, req, bloc.name, bloc.input);
+        if (r && r.resume) actions.push({ outil: bloc.name, resume: r.resume, lien: r.lien || null });
+        toolResults.push({ type: 'tool_result', tool_use_id: bloc.id, content: JSON.stringify((r && r.resultat) || r) });
+      }
+      writeDb(db);
+      messages.push({ role: 'user', content: toolResults });
+      data = await callAnthropic(messages);
+    }
+    messages.push({ role: 'assistant', content: data.content });
+    const texte = (data.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim() || 'Fait.';
+    res.json({ ok: true, reponse: texte, actions: actions, historique: messages });
+  } catch (err) {
+    if (err && err.code === 'NO_KEY') return res.status(503).json({ error: err.message });
+    res.status(502).json({ error: (err && err.message) || "Impossible de contacter l'assistant." });
+  }
+});
+
+app.get('/api/rappels', requireAdmin, (req, res) => {
+  const db = readDb();
+  const rappels = db.rappels.map((r) => {
+    const lead = db.leads.find((l) => l.id === r.leadId);
+    return Object.assign({}, r, { leadNom: lead ? nomComplet(lead) : '' });
+  }).sort((a, b) => new Date(a.dateEcheance) - new Date(b.dateEcheance));
+  res.json({ ok: true, rappels: rappels });
+});
+
+app.patch('/api/rappels/:id', requireAdmin, (req, res) => {
+  const db = readDb();
+  const rappel = db.rappels.find((r) => r.id === req.params.id);
+  if (!rappel) return res.status(404).json({ error: 'Rappel introuvable' });
+  if (typeof (req.body && req.body.statut) === 'string') rappel.statut = req.body.statut === 'fait' ? 'fait' : 'ouvert';
+  writeDb(db);
+  res.json({ ok: true, rappel: rappel });
 });
 
 // Accès au CRM : réservé aux administrateurs. Les autres sont renvoyés à la connexion.
