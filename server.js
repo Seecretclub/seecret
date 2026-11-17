@@ -27,7 +27,9 @@ const DATA_FILE = path.join(DATA_DIR, 'data.json');
 const COMPARABLES_FILE = path.join(__dirname, 'data-comparables.json');
 
 app.use(cors());
-app.use(express.json({ limit: '1mb' }));
+// Relevé à 8 Mo (au lieu de 1 Mo) pour laisser passer l'audio dicté à Célia
+// (quelques dizaines de secondes de voix encodées en base64).
+app.use(express.json({ limit: '8mb' }));
 
 const uid = (p) => (p || 'id') + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const nowISO = () => new Date().toISOString();
@@ -2617,6 +2619,35 @@ async function callGemini(contents) {
   return data;
 }
 
+// Transcription audio → texte, via Gemini (seul des deux fournisseurs à
+// accepter l'audio en entrée). Utilisée en secours quand la reconnaissance
+// vocale native du navigateur (Web Speech API) n'est pas fiable ou pas
+// disponible — notamment sur iPhone, où Safari ET Chrome (contraints par
+// iOS à utiliser le même moteur WebKit) ont un support de SpeechRecognition
+// connu pour être cassé (bug WebKit ouvert depuis des années, jamais
+// corrigé par Apple). On enregistre l'audio côté client avec MediaRecorder
+// (largement supporté, y compris sur iOS) et on le transcrit ici.
+async function transcrireAudioGemini(base64Audio, mimeType) {
+  if (!GEMINI_API_KEY) throw Object.assign(new Error('La dictée audio nécessite une clé Gemini configurée sur le serveur (GEMINI_API_KEY).'), { code: 'NO_KEY' });
+  const resp = await fetch(GEMINI_API_BASE + '/v1beta/models/' + encodeURIComponent(GEMINI_MODEL) + ':generateContent', {
+    method: 'POST',
+    headers: { 'x-goog-api-key': GEMINI_API_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{
+        role: 'user',
+        parts: [
+          { inline_data: { mime_type: mimeType || 'audio/webm', data: base64Audio } },
+          { text: 'Transcris fidèlement cet enregistrement audio en français, mot pour mot. Réponds uniquement avec le texte transcrit, sans guillemets, sans commentaire, sans rien ajouter. Si rien d’intelligible n’est dit, réponds avec une chaîne vide.' }
+        ]
+      }]
+    })
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw Object.assign(new Error((data && data.error && data.error.message) || ('Gemini ' + resp.status)), { code: 'API_ERROR' });
+  const parts = (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) || [];
+  return parts.filter((p) => p.text).map((p) => p.text).join(' ').trim();
+}
+
 async function conversationAnthropic(db, req, historique, message) {
   const messages = historique.concat([{ role: 'user', content: message }]);
   const actions = [];
@@ -2687,6 +2718,22 @@ app.post('/api/assistant/chat', requireAdmin, async (req, res) => {
   } catch (err) {
     if (err && err.code === 'NO_KEY') return res.status(503).json({ error: err.message });
     res.status(502).json({ error: (err && err.message) || "Impossible de contacter l'assistant." });
+  }
+});
+
+// Dictée vocale de Célia : le client enregistre l'audio (MediaRecorder) et
+// l'envoie ici en base64 pour transcription, plutôt que de s'appuyer sur la
+// reconnaissance vocale native du navigateur (peu fiable sur iOS — voir le
+// commentaire sur transcrireAudioGemini ci-dessus).
+app.post('/api/assistant/transcrire', requireAdmin, async (req, res) => {
+  const audio = (req.body && req.body.audio) || '';
+  if (!audio) return res.status(400).json({ error: 'Audio manquant.' });
+  try {
+    const texte = await transcrireAudioGemini(audio, req.body && req.body.mimeType);
+    res.json({ ok: true, texte: texte });
+  } catch (err) {
+    if (err && err.code === 'NO_KEY') return res.status(503).json({ error: err.message });
+    res.status(502).json({ error: (err && err.message) || 'Transcription impossible.' });
   }
 });
 
