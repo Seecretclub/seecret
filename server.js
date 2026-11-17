@@ -50,6 +50,7 @@ function readDb() {
   db.tasks = Array.isArray(db.tasks) ? db.tasks : [];
   db.offres = Array.isArray(db.offres) ? db.offres : [];
   db.offMarket = (db.offMarket && !Array.isArray(db.offMarket) && typeof db.offMarket === 'object') ? db.offMarket : {};
+  db.activites = Array.isArray(db.activites) ? db.activites : [];
   // Migration : relie chaque bien/recherche à son lead (leadId) via l'email si manquant.
   db.biens.forEach((b) => {
     if (!b.leadId && b.email) {
@@ -68,6 +69,15 @@ function readDb() {
 }
 
 function writeDb(db) { fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2)); }
+
+// Journal d'activité unifié : une seule source de vérité pour tout ce qui arrive
+// à un lead/bien (candidature, admission, mise au catalogue, offres, relances
+// Réseau…), consommée par le CRM (fiche contact → bloc "Activité"). N'écrit
+// jamais dans data.json elle-même : appelant responsable de writeDb(db) après.
+function logActivite(db, { leadId, bienId, type, auteur }) {
+  db.activites = Array.isArray(db.activites) ? db.activites : [];
+  db.activites.push({ id: uid('act'), leadId: leadId || null, bienId: bienId || null, type: type, auteur: auteur || 'Système', at: nowISO() });
+}
 
 function titreRecherche(r) {
   const type = (Array.isArray(r.types) && r.types[0]) || '';
@@ -179,6 +189,8 @@ app.post('/api/candidature', async (req, res) => {
     db.demandes.unshift(result.demande);
     creerTacheDemande(db, result.demande, 'Valider la candidature de ' + (result.demande.nom || 'nouveau membre'));
   }
+
+  logActivite(db, { leadId: lead.id, bienId: result.bien ? result.bien.id : null, type: 'dossier_transmis', auteur: 'Plateforme' });
 
   if (result.bien) {
     try { await normaliserAdresse(result.bien); } catch (e) { /* BAN indisponible */ }
@@ -978,6 +990,9 @@ async function lancerScanExclusivite(bienId) {
     ex.statut = liens.length ? 'alerte_doublon' : 'verifie_exclusif';
     ex.liens = liens;
     ex.scanneAt = nowISO();
+    if (ex.statut === 'verifie_exclusif') {
+      logActivite(db, { leadId: bien.leadId, bienId: bien.id, type: 'admissible', auteur: 'Système' });
+    }
   } catch (e) {
     ex.statut = 'scan_en_cours';
     ex.erreur = (e && e.message) || 'Scan impossible';
@@ -1025,7 +1040,16 @@ app.patch('/api/mon-bien', requireAuth, (req, res) => {
     .forEach((k) => { if (body[k] !== undefined) b[k] = Math.max(0, Number(body[k]) || 0); });
   if (typeof body.ascenseur === 'boolean') b.ascenseur = body.ascenseur;
   if (Array.isArray(body.annexes)) b.annexes = body.annexes.map(String).slice(0, 20);
-  if (['brouillon', 'ouvert', 'mandat', 'avant-premiere'].indexOf(body.statut) > -1) b.statut = body.statut;
+  if (['brouillon', 'ouvert', 'mandat', 'avant-premiere'].indexOf(body.statut) > -1) {
+    const avant = b.statut;
+    b.statut = body.statut;
+    if (avant === 'brouillon' && (b.statut === 'avant-premiere' || b.statut === 'ouvert' || b.statut === 'mandat')) {
+      logActivite(req.db, { leadId: req.lead.id, bienId: b.id, type: 'mise_au_catalogue', auteur: nomComplet(req.lead) });
+    }
+    if (avant !== 'ouvert' && b.statut === 'ouvert') {
+      logActivite(req.db, { leadId: req.lead.id, bienId: b.id, type: 'ouverture_visites', auteur: nomComplet(req.lead) });
+    }
+  }
   writeDb(req.db);
   res.json({ ok: true, bien: bienPublic(b) });
 });
@@ -1272,6 +1296,20 @@ app.patch('/api/leads/:id', requireAdmin, (req, res) => {
   if (Array.isArray(body.quartiers)) lead.quartiers = body.quartiers.map(String);
   if (typeof body.courtier === 'boolean') lead.courtier = body.courtier;
   if (typeof body.bienAVendre === 'boolean') lead.bienAVendre = body.bienAVendre;
+  // Pipeline Réseau (relance de masse — vue Réseau du CRM) : à_contacter / contacte /
+  // a_relancer / converti / ecarte / hors_cible / a_completer. Avant ce correctif, ce
+  // champ n'était en réalité jamais persisté côté serveur (une 2e route dupliquée plus
+  // bas gérait ce champ mais n'était jamais atteinte — Express ne garde que la 1ère
+  // route déclarée pour un même verbe+chemin) : les mouvements de pipeline restaient
+  // coincés dans le localStorage du navigateur de l'agent, jamais partagés ni journalisés.
+  if (typeof body.pipeline === 'string') {
+    const avant = lead.pipeline;
+    lead.pipeline = body.pipeline.slice(0, 40);
+    if (avant !== lead.pipeline && (lead.pipeline === 'a_relancer' || lead.pipeline === 'converti')) {
+      logActivite(db, { leadId: lead.id, type: lead.pipeline === 'converti' ? 'converti' : 'retour_silence', auteur: 'Agent' });
+    }
+  }
+  if (typeof body.statut === 'string') lead.statut = body.statut.slice(0, 20);
   writeDb(db);
   res.json({ ok: true, lead: lead });
 });
@@ -1374,6 +1412,7 @@ app.post('/api/offres', requireAuth, (req, res) => {
   };
   req.db.demandes.unshift(demande);
   creerTacheDemande(req.db, demande, 'Traiter l’offre de ' + nomComplet(req.lead));
+  logActivite(req.db, { leadId: bien ? bien.leadId : null, bienId: bienId, type: 'offre_faite', auteur: nomComplet(req.lead) + ' (acquéreur)' });
   writeDb(req.db);
   res.json({ ok: true, id: offre.id });
 });
@@ -1391,6 +1430,7 @@ app.post('/api/offres/:id/accepter', requireAdmin, (req, res) => {
   offre.traiteeAt = nowISO();
   const bien = db.biens.find((b) => b.id === offre.bienId);
   if (bien) bien.statut = 'sous-compromis';
+  logActivite(db, { leadId: bien ? bien.leadId : null, bienId: offre.bienId, type: 'offre_acceptee', auteur: 'Agent' });
   db.offres.forEach((o) => { if (o.id !== offre.id && o.bienId === offre.bienId && o.statut === 'en_attente') { o.statut = 'refusee'; o.traiteeAt = nowISO(); } });
   const demande = db.demandes.find((d) => d.offreId === offre.id);
   if (demande) { demande.statut = 'traitee'; demande.traiteeAt = nowISO(); }
@@ -1873,19 +1913,10 @@ app.post('/api/robot/prospecting/:id/enrich', requireAdmin, async (req, res) => 
   }
 });
 
-// Mettre à jour un Lead (pipeline, statut, notes) — persistance réelle
-app.patch('/api/leads/:id', requireAdmin, (req, res) => {
+// Journal d'activité unifié — lu par le CRM (fiche contact)
+app.get('/api/activites', requireAdmin, (req, res) => {
   const db = readDb();
-  const lead = db.leads.find((l) => l.id === req.params.id);
-  if (!lead) return res.status(404).json({ error: 'Lead introuvable.' });
-  const body = req.body || {};
-  if (typeof body.pipeline === 'string') lead.pipeline = body.pipeline.slice(0, 40);
-  if (typeof body.statut === 'string') lead.statut = body.statut.slice(0, 20);
-  if (typeof body.notes === 'string') lead.notes = body.notes;
-  if (typeof body.tel === 'string') lead.tel = body.tel;
-  if (typeof body.email === 'string') lead.email = body.email;
-  writeDb(db);
-  res.json({ ok: true, lead: lead });
+  res.json({ ok: true, activites: db.activites || [] });
 });
 
 // Notifications : persistance des éléments traités
@@ -2022,6 +2053,7 @@ app.post('/api/tasks/:id/valider', requireAdmin, (req, res) => {
   if (lead) {
     lead.statut = 'accepte';
     (lead.documents || []).forEach((d) => { d.statut = 'valide'; d.valideAt = nowISO(); });
+    logActivite(db, { leadId: lead.id, type: 'admission', auteur: 'Agent' });
   }
   tache.statut = 'validee';
   tache.traiteeAt = nowISO();
@@ -2104,6 +2136,7 @@ app.post('/api/demandes/:id/decision', requireAdmin, async (req, res) => {
     db.magicLinks.push({ id: sha256(token), codeHash: sha256(crypto.randomBytes(16).toString('hex')), leadId: lead ? lead.id : null, email: d.email, cree: nowISO(), expire: Date.now() + MAGIC_TTL, utilise: false, codeUtilise: false });
     if (lead) {
       lead.statut = 'accepte';
+      logActivite(db, { leadId: lead.id, type: 'admission', auteur: 'Agent' });
       if (!db.biens.some((x) => x.leadId === lead.id || (x.email || '').toLowerCase() === (lead.email || '').toLowerCase())) {
         const nb = { id: uid('mb'), leadId: lead.id, email: lead.email, nom: ((lead.prenom || '') + ' ' + (lead.nom || '')).trim(), titre: '', adresse: '', codePostal: '', ville: '', type: 'Appartement', quartier: '', transaction: 'Vente', surface: 0, pieces: 0, chambres: 0, sdb: 0, etage: '', ascenseur: false, anneeConstruction: 0, etat: '', dpe: '', ges: '', exterieur: '', surfaceExterieur: 0, annexes: [], prix: 0, charges: 0, description: '', photos: [], atouts: [], exclusivite: { statut: 'scan_en_cours', liens: [] }, statut: 'brouillon', statutDemande: null, suiveurs: 0, agent: DEFAULT_AGENT_NOM, cree: nowISO() };
         db.biens.push(nb);
