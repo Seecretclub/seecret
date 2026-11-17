@@ -33,6 +33,11 @@ const uid = (p) => (p || 'id') + Date.now().toString(36) + Math.random().toStrin
 const nowISO = () => new Date().toISOString();
 const LIBELLE = { acheteur: 'Acquéreur', vendeur: 'Vendeur', mixte: 'Acquéreur et Vendeur' };
 
+// Agent par défaut auquel sont attribuées toutes les nouvelles demandes (biens/leads)
+// tant qu'aucun agent ne les a reprises manuellement dans le CRM. Modifiable sans
+// redéploiement de code via la variable d'environnement DEFAULT_AGENT_NOM.
+const DEFAULT_AGENT_NOM = process.env.DEFAULT_AGENT_NOM || 'Gabriel Taieb';
+
 function readDb() {
   let db = {};
   try { db = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); } catch (e) { db = {}; }
@@ -104,7 +109,7 @@ function decoupe(dossier) {
 
   const recherche = projet !== 'vendeur' ? { id: uid('r'), clientId: lead.id, leadId: lead.id, titre: titreRecherche(r), types: Array.isArray(r.types) ? r.types : [], type: (Array.isArray(r.types) && r.types[0]) || '', quartiers: Array.isArray(r.quartiers) ? r.quartiers : [], prixMax: Number(r.prixMax) || 0, piecesMin: Number(r.piecesMin) || 0, surfaceMin: Number(r.surfaceMin) || 0, surfaceMax: Number(r.surfaceMax) || 0, delai: r.delai || '', apport: Number(budget.apport) || 0, financement: budget.financement || '', courtier: !!budget.courtier, bienAVendre: !!budget.bienAVendre, etageMin: Number(r.etageMin) || 0, etageMax: Number(r.etageMax) || 0, etat: r.etat || '', dpe: r.dpe || '', annexes: Array.isArray(r.annexes) ? r.annexes : [], prixVenteEstime: Number(budget.prixVenteEstime) || 0, statut: 'active', alertes: true, cree: nowISO() } : null;
 
-  const bien = projet !== 'acheteur' ? { id: uid('mb'), leadId: lead.id, email: email, nom: nom, titre: '', adresse: b.adresse || '', codePostal: b.codePostal || '', ville: b.ville || '', type: b.type || 'Appartement', quartier: b.quartier || '', surface: Number(b.surface) || 0, pieces: Number(b.pieces) || 0, chambres: Number(b.chambres) || 0, sdb: Number(b.sdb) || 0, etage: b.etage || '', dpe: b.dpe || '', etat: b.etat || '', exterieur: b.exterieur || '', surfaceExterieur: Number(b.surfaceExterieur) || 0, prix: Number(vente.prix) || 0, delai: vente.delai || '', dejaEnVente: vente.dejaEnVente || '', mandat: vente.mandat || '', motif: vente.motif || '', description: b.description || '', photos: Array.isArray(b.photos) ? b.photos.slice(0, 12) : [], atouts: Array.isArray(b.atouts) ? b.atouts : [], annexes: Array.isArray(b.annexes) ? b.annexes : [], ges: b.ges || '', charges: Number(b.charges) || 0, ascenseur: !!b.ascenseur, lat: b.lat || null, lon: b.lon || null, exclusivite: { statut: 'scan_en_cours', liens: [] }, validation: 'en_attente', statut: 'brouillon', statutDemande: null, suiveurs: 0, agent: 'Léa Marchand', cree: nowISO() } : null;
+  const bien = projet !== 'acheteur' ? { id: uid('mb'), leadId: lead.id, email: email, nom: nom, titre: '', adresse: b.adresse || '', codePostal: b.codePostal || '', ville: b.ville || '', type: b.type || 'Appartement', quartier: b.quartier || '', surface: Number(b.surface) || 0, pieces: Number(b.pieces) || 0, chambres: Number(b.chambres) || 0, sdb: Number(b.sdb) || 0, etage: b.etage || '', dpe: b.dpe || '', etat: b.etat || '', exterieur: b.exterieur || '', surfaceExterieur: Number(b.surfaceExterieur) || 0, prix: Number(vente.prix) || 0, delai: vente.delai || '', dejaEnVente: vente.dejaEnVente || '', mandat: vente.mandat || '', motif: vente.motif || '', description: b.description || '', photos: Array.isArray(b.photos) ? b.photos.slice(0, 12) : [], atouts: Array.isArray(b.atouts) ? b.atouts : [], annexes: Array.isArray(b.annexes) ? b.annexes : [], ges: b.ges || '', charges: Number(b.charges) || 0, ascenseur: !!b.ascenseur, lat: b.lat || null, lon: b.lon || null, exclusivite: { statut: 'scan_en_cours', liens: [] }, validation: 'en_attente', statut: 'brouillon', statutDemande: null, suiveurs: 0, agent: DEFAULT_AGENT_NOM, cree: nowISO() } : null;
 
   const demande = { id: uid('d'), type: 'candidature', nom: nom || 'Candidat', email: email, leadId: lead.id, clientId: lead.id, role: projet, montant: 0, message: resumeDemande(dossier), source: 'Site', statut: 'nouvelle', cree: nowISO() };
 
@@ -810,7 +815,7 @@ function bienDuMembre(db, lead) {
       anneeConstruction: 0, etat: '', dpe: '', ges: '',
       exterieur: '', surfaceExterieur: 0, annexes: [], prix: 0, charges: 0, description: '',
       photos: [], atouts: [], exclusivite: { statut: 'scan_en_cours', liens: [] }, validation: 'en_attente', statut: 'brouillon', statutDemande: null,
-      agent: 'Léa Marchand', cree: nowISO()
+      agent: DEFAULT_AGENT_NOM, cree: nowISO()
     };
     db.biens.push(b);
     writeDb(db);
@@ -2100,7 +2105,7 @@ app.post('/api/demandes/:id/decision', requireAdmin, async (req, res) => {
     if (lead) {
       lead.statut = 'accepte';
       if (!db.biens.some((x) => x.leadId === lead.id || (x.email || '').toLowerCase() === (lead.email || '').toLowerCase())) {
-        const nb = { id: uid('mb'), leadId: lead.id, email: lead.email, nom: ((lead.prenom || '') + ' ' + (lead.nom || '')).trim(), titre: '', adresse: '', codePostal: '', ville: '', type: 'Appartement', quartier: '', transaction: 'Vente', surface: 0, pieces: 0, chambres: 0, sdb: 0, etage: '', ascenseur: false, anneeConstruction: 0, etat: '', dpe: '', ges: '', exterieur: '', surfaceExterieur: 0, annexes: [], prix: 0, charges: 0, description: '', photos: [], atouts: [], exclusivite: { statut: 'scan_en_cours', liens: [] }, statut: 'brouillon', statutDemande: null, suiveurs: 0, agent: 'Léa Marchand', cree: nowISO() };
+        const nb = { id: uid('mb'), leadId: lead.id, email: lead.email, nom: ((lead.prenom || '') + ' ' + (lead.nom || '')).trim(), titre: '', adresse: '', codePostal: '', ville: '', type: 'Appartement', quartier: '', transaction: 'Vente', surface: 0, pieces: 0, chambres: 0, sdb: 0, etage: '', ascenseur: false, anneeConstruction: 0, etat: '', dpe: '', ges: '', exterieur: '', surfaceExterieur: 0, annexes: [], prix: 0, charges: 0, description: '', photos: [], atouts: [], exclusivite: { statut: 'scan_en_cours', liens: [] }, statut: 'brouillon', statutDemande: null, suiveurs: 0, agent: DEFAULT_AGENT_NOM, cree: nowISO() };
         db.biens.push(nb);
         lancerScanExclusivite(nb.id).catch(() => {});
       }
