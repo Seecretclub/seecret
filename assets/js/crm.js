@@ -803,6 +803,19 @@
     const r = parseRoute();
     $$('.se-modal-back').forEach((m) => m.remove());
 
+    // Un render() peut être déclenché pendant que l'agent tape un message à
+    // Célia — notamment par la synchronisation serveur automatique toutes les
+    // 15s (voir plus bas), qui ignore le panneau Célia car ce n'est pas un
+    // `modal`. Comme le champ n'est pas resynchronisé en continu avec l'état
+    // (sa valeur ne vit que dans le DOM pendant la frappe), reconstruire tout
+    // le HTML effaçait ce qui était tapé et fermait le clavier mobile. On
+    // capture donc sa valeur et sa position de curseur avant de reconstruire,
+    // puis on les restaure sur le nouveau champ.
+    const champCelia = document.querySelector('.se-celia-panel input[name="texte"]');
+    const celiaAvaitFocus = !!champCelia && document.activeElement === champCelia;
+    const celiaValeurVive = champCelia ? champCelia.value : null;
+    const celiaSelection = champCelia ? [champCelia.selectionStart, champCelia.selectionEnd] : null;
+
     const views = {
       tableau: viewTableau,
       demandes: viewDemandes,
@@ -848,6 +861,17 @@
       back.setAttribute('data-act', 'modal-close');
       back.innerHTML = '<div class="' + (modalLarge ? 'se-modal se-modal-xl' : 'se-modal') + '" data-stop="1">' + modal + '</div>';
       document.body.appendChild(back);
+    }
+
+    if (celiaValeurVive !== null) {
+      const nouveauChampCelia = document.querySelector('.se-celia-panel input[name="texte"]');
+      if (nouveauChampCelia) {
+        nouveauChampCelia.value = celiaValeurVive;
+        if (celiaAvaitFocus) {
+          nouveauChampCelia.focus();
+          try { nouveauChampCelia.setSelectionRange(celiaSelection[0], celiaSelection[1]); } catch (e) {}
+        }
+      }
     }
 
     if (r.name !== lastRoute) { window.scrollTo({ top: 0 }); lastRoute = r.name; }
