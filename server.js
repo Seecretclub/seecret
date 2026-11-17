@@ -1324,6 +1324,11 @@ app.patch('/api/biens/:id', requireAdmin, (req, res) => {
   if (Array.isArray(body.annexes)) bien.annexes = body.annexes.map(String);
   if (Array.isArray(body.atouts)) bien.atouts = body.atouts.map(String);
   if (Array.isArray(body.photos)) bien.photos = body.photos.map(String).slice(0, 12);
+  // Pipeline Propositions → Offres (étape 4 du plan de fusion) : étape avant
+  // l'offre écrite, post-visite — à_présenter / présentée / réponse_reçue.
+  if (['a_presenter', 'presentee', 'reponse_recue', ''].indexOf(body.etapeProposition) > -1) {
+    bien.etapeProposition = body.etapeProposition || null;
+  }
   writeDb(db);
   res.json({ ok: true, bien: bien });
 });
@@ -1433,9 +1438,29 @@ app.post('/api/offres/:id/accepter', requireAdmin, (req, res) => {
   logActivite(db, { leadId: bien ? bien.leadId : null, bienId: offre.bienId, type: 'offre_acceptee', auteur: 'Agent' });
   db.offres.forEach((o) => { if (o.id !== offre.id && o.bienId === offre.bienId && o.statut === 'en_attente') { o.statut = 'refusee'; o.traiteeAt = nowISO(); } });
   const demande = db.demandes.find((d) => d.offreId === offre.id);
-  if (demande) { demande.statut = 'traitee'; demande.traiteeAt = nowISO(); }
-  const tache = db.tasks.find((t) => t.demandeId === demande.id && t.statut === 'en_attente');
-  if (tache) { tache.statut = 'terminee'; tache.traiteeAt = nowISO(); }
+  if (demande) {
+    demande.statut = 'traitee';
+    demande.traiteeAt = nowISO();
+    const tache = db.tasks.find((t) => t.demandeId === demande.id && t.statut === 'en_attente');
+    if (tache) { tache.statut = 'terminee'; tache.traiteeAt = nowISO(); }
+  }
+  writeDb(db);
+  res.json({ ok: true });
+});
+
+app.post('/api/offres/:id/refuser', requireAdmin, (req, res) => {
+  const db = readDb();
+  const offre = db.offres.find((o) => o.id === req.params.id);
+  if (!offre) return res.status(404).json({ error: 'Offre introuvable' });
+  offre.statut = 'refusee';
+  offre.traiteeAt = nowISO();
+  const demande = db.demandes.find((d) => d.offreId === offre.id);
+  if (demande) {
+    demande.statut = 'traitee';
+    demande.traiteeAt = nowISO();
+    const tache = db.tasks.find((t) => t.demandeId === demande.id && t.statut === 'en_attente');
+    if (tache) { tache.statut = 'terminee'; tache.traiteeAt = nowISO(); }
+  }
   writeDb(db);
   res.json({ ok: true });
 });
