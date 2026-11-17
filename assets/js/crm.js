@@ -15,7 +15,15 @@
   const num = (n) => new Intl.NumberFormat('fr-FR').format(Number(n) || 0);
   const uid = (p) => (p || 'id') + Math.random().toString(36).slice(2, 8);
   const nowISO = () => new Date().toISOString();
-  const dFR = (iso) => new Date(iso).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  // '—' plutôt que la chaîne "Invalid Date" quand iso est vide/absent (ex. un
+  // mandat sans échéance renseignée) — ça arrivait notamment sur chaque bien
+  // synchronisé depuis le serveur, dont mapBienServeur() pose mandat.fin à ''
+  // par défaut, faute de ce champ côté serveur.
+  const dFR = (iso) => {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    return isNaN(d.getTime()) ? '—' : d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  };
   const dCourt = (iso) => new Date(iso).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
   const tFR = (iso) => new Date(iso).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
   const ilYa = (iso) => {
