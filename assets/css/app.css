@@ -371,6 +371,7 @@ body.se-body {
 .se-list { display: flex; flex-direction: column; }
 .se-list-item { display: flex; gap: 14px; align-items: center; padding: 13px 0; border-bottom: 1px solid var(--color-stroke-faint); }
 .se-list-item:last-child { border-bottom: 0; }
+.se-list-item svg { width: 19px; height: 19px; flex: 0 0 19px; opacity: 0.85; }
 .se-thumb { width: 52px; height: 52px; border-radius: 12px; object-fit: cover; flex: 0 0 52px; background: var(--color-sand); }
 .se-mono { font-variant-numeric: tabular-nums; }
 .se-note { background: var(--color-club-mist); border-radius: 16px; padding: 14px 16px; font-size: 13.5px; color: var(--color-club-violet); }
@@ -383,21 +384,43 @@ body.se-body {
   .se-split { grid-template-columns: 1fr; }
 }
 
+/* Hauteur fixe et prévisible de la barre d'onglets mobile (une seule rangée) —
+   utilisée aussi par .se-main (padding) et par la bulle Célia pour se
+   positionner sans jamais la chevaucher. */
+:root { --se-tabbar-h: 58px; }
+
+.se-tabbar { display: none; }
+
 @media (max-width: 860px) {
   .se-app { flex-direction: column; }
-  .se-side {
-    position: fixed; inset: auto 0 0 0; top: auto;
-    width: 100%; height: auto; flex-direction: row;
-    padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
-    border-right: 0; border-top: 1px solid var(--color-stroke-faint);
-    gap: 2px; overflow-x: auto; justify-content: space-between;
+  /* L'ancienne sidebar détaillée (sections, labels) ne convient pas au
+     mobile : trop d'items empilés sur plusieurs rangées rendaient la nav
+     imprévisible en hauteur et « fouillis ». Sur téléphone, on la masque
+     entièrement et on affiche à sa place .se-tabbar : une barre d'onglets
+     compacte à une seule rangée (façon appli), le reste du CRM restant
+     accessible via « Plus ». */
+  .se-side { display: none; }
+  .se-tabbar {
+    display: flex; position: fixed; inset: auto 0 0 0; z-index: 30;
+    height: calc(var(--se-tabbar-h) + env(safe-area-inset-bottom, 0px));
+    padding: 0 4px env(safe-area-inset-bottom, 0px);
+    background: var(--color-surface); border-top: 1px solid var(--color-stroke-faint);
   }
-  .se-brand, .se-nav-label, .se-side-foot { display: none; }
-  .se-nav { flex-direction: row; gap: 2px; width: 100%; justify-content: space-between; }
-  .se-nav a { flex-direction: column; gap: 4px; padding: 7px 6px; font-size: 10px; flex: 1; text-align: center; }
-  .se-nav svg { width: 20px; height: 20px; }
-  .se-nav .se-count { position: absolute; margin: 0 0 22px 16px; }
-  .se-main { padding-bottom: 74px; }
+  .se-tab {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 3px; flex: 1 1 0; min-width: 0; padding: 6px 2px;
+    color: var(--color-graphite); text-decoration: none; font-size: 10.5px;
+    position: relative;
+  }
+  .se-tab svg { width: 21px; height: 21px; opacity: 0.8; }
+  .se-tab span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .se-tab.active { color: var(--color-club-violet); }
+  .se-tab.active svg { opacity: 1; }
+  .se-tab .se-count {
+    position: absolute; top: 2px; right: calc(50% - 20px); font-size: 10px; font-weight: 600;
+    background: var(--color-club-violet); color: #fff; border-radius: 999px; padding: 0 5px; line-height: 1.5;
+  }
+  .se-main { padding-bottom: calc(var(--se-tabbar-h) + env(safe-area-inset-bottom, 0px)); }
   .se-topbar { padding: 12px 18px; }
   .se-view { padding: 20px 18px 40px; }
   .se-view-head h1 { font-size: 27px; }
