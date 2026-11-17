@@ -3766,7 +3766,25 @@
       render();
       if (e.results[e.results.length - 1].isFinal) reco.stop();
     };
-    reco.onerror = () => { celiaEcoute = false; celiaReco = null; render(); };
+    reco.onerror = (e) => {
+      celiaEcoute = false;
+      celiaReco = null;
+      celiaTranscript = '';
+      render();
+      // On affiche la vraie cause (le navigateur la donne dans e.error) au lieu
+      // de laisser l'écoute s'arrêter silencieusement sans explication.
+      const code = e && e.error;
+      const messages = {
+        'not-allowed': 'Micro refusé — autorisez l’accès au micro pour ce site dans les réglages de votre navigateur.',
+        'service-not-allowed': 'Micro refusé — autorisez l’accès au micro pour ce site dans les réglages de votre navigateur.',
+        'no-speech': 'Rien n’a été entendu — réessayez en parlant juste après avoir appuyé.',
+        'audio-capture': 'Aucun micro détecté sur cet appareil.',
+        'network': 'Problème réseau pendant l’écoute — réessayez.',
+        'aborted': null // l'utilisateur a lui-même coupé l'écoute, rien à signaler
+      };
+      const msg = code && Object.prototype.hasOwnProperty.call(messages, code) ? messages[code] : 'Erreur du micro (' + (code || 'inconnue') + ') — réessayez ou utilisez le clavier.';
+      if (msg) toast(msg, 'warn');
+    };
     reco.onend = () => {
       // On capture le texte dicté AVANT de remettre celiaTranscript à vide,
       // car render() (appelé juste après) détache du DOM tout ce qui existait
@@ -4547,11 +4565,15 @@
       const ouverture = !celiaOuvert; // true si on passe de fermé à ouvert
       celiaOuvert = !celiaOuvert;
       if (!ouverture && celiaReco) celiaReco.stop(); // fermer pendant l'écoute arrête proprement
+      const doitEcouter = ouverture && reconnaissanceDisponible() && !celiaEcoute;
       render();
-      if (ouverture) {
-        // Un seul tap sur la bulle doit suffire à parler : on lance l'écoute
-        // directement à l'ouverture (si disponible), sans étape intermédiaire.
-        if (reconnaissanceDisponible() && !celiaEcoute) setTimeout(() => basculerEcoute(), 60);
+      if (doitEcouter) {
+        // Important : on appelle basculerEcoute() ICI, de façon synchrone dans le
+        // gestionnaire de clic (pas via setTimeout). Chrome exige que le
+        // démarrage du micro soit directement rattaché au geste de l'utilisateur
+        // ("user activation") ; décalé dans un setTimeout, même de quelques
+        // dizaines de ms, Chrome refuse silencieusement la demande.
+        basculerEcoute();
       }
       setTimeout(() => { const box = document.querySelector('[data-celia-scroll]'); if (box) box.scrollTop = box.scrollHeight; }, 30);
     },
