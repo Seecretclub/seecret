@@ -2415,10 +2415,13 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 // Modèle gratuit (sans carte bancaire) sur Google AI Studio au moment de
 // l'écriture — vérifiable/ajustable sur aistudio.google.com si Google change
 // l'offre gratuite. gemini-2.5-flash a été retiré pour les nouvelles clés API
-// (erreur « no longer available to new users ») ; gemini-3.8-flash est son
-// remplaçant recommandé par Google, compatible avec le même endpoint
-// generateContent (function calling et audio compris).
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+// (erreur « no longer available to new users »). On utilise l'alias
+// "gemini-flash-latest", maintenu par Google et automatiquement « basculé »
+// vers le dernier modèle Flash recommandé à chaque nouvelle sortie — ce qui
+// évite de revivre ce genre de retrait à chaque fois que Google change de
+// modèle. Compatible avec le même endpoint generateContent (function
+// calling et audio compris).
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-flash-latest';
 const GEMINI_API_BASE = process.env.GEMINI_API_BASE || 'https://generativelanguage.googleapis.com';
 
 function escHtml(s) {
