@@ -110,7 +110,11 @@
     offre_faite: { label: 'Offre faite', icon: 'tag' },
     offre_acceptee: { label: 'Offre acceptée', icon: 'check' },
     retour_silence: { label: 'Contacté, puis silence — à relancer', icon: 'chat' },
-    converti: { label: 'Converti en membre', icon: 'check' }
+    converti: { label: 'Converti en membre', icon: 'check' },
+    lead_cree_assistant: { label: 'Lead créé par l’Assistant', icon: 'chat' },
+    lead_maj_assistant: { label: 'Lead mis à jour par l’Assistant', icon: 'chat' },
+    rappel_programme: { label: 'Rappel programmé par l’Assistant', icon: 'calendar' },
+    candidature_envoyee: { label: 'Invitation à candidater envoyée', icon: 'inbox' }
   };
 
   function seed() {
@@ -188,6 +192,12 @@
   state.tachesVerif = state.tachesVerif || [];
   state.biensServeur = state.biensServeur || [];
   state.recherchesServeur = state.recherchesServeur || [];
+  // Assistant CRM conversationnel : messages affichés à l'écran (avec le résumé
+  // des actions exécutées) + l'historique brut envoyé à l'API pour que l'IA se
+  // souvienne du fil de la conversation. Purement local (jamais resynchronisé
+  // depuis le serveur), comme la cadence de relance.
+  state.assistantMessages = state.assistantMessages || [];
+  state.assistantHistorique = state.assistantHistorique || [];
 
   function load() {
     try {
@@ -804,6 +814,7 @@
       verifications: viewVerifications,
       taches: viewTaches,
       messages: viewMessages,
+      assistant: viewAssistant,
       reglages: viewReglages
     };
 
@@ -835,6 +846,7 @@
         '<div class="se-nav-scroll">' +
         '<nav class="se-nav">' +
           nav('tableau', r.name, 'home', 'Tableau de bord') +
+          nav('assistant', r.name, 'chat', 'Assistant') +
         '</nav>' +
         '<div class="se-nav-label">Prospection</div>' +
         '<nav class="se-nav">' +
@@ -889,7 +901,7 @@
   }
 
   function titre(r) {
-    const map = { tableau: 'Tableau de bord', demandes: 'Candidatures', demande: 'Fiche demande', clients: 'Leads', reseau: 'Réseau', pipeline: 'Pipeline de relance', notifications: 'À prévenir', client: 'Fiche lead', biens: 'Produits', bien: 'Fiche produit', recherches: 'Recherches', recherche: 'Recherche', robot: 'Immo Data Robot', 'robot-radar': 'Radar — Biens détectés', 'robot-opportunites': 'Opportunités Clients', 'robot-bien': 'Fiche bien Radar', 'robot-dpe': 'Recherche DPE', 'robot-proprietaires': 'Propriétaires', 'robot-proprietaire': 'Fiche propriétaire', 'portefeuille-foncier': 'Portefeuille foncier', 'societe-fonciere': 'Fiche société', bodacc: 'Signaux BODACC', membres: 'Membres', 'biens-club': 'Biens du club', rapprochements: 'Rapprochements', tracking: 'Tracking', visites: 'Visites', offres: 'Propositions → Offres', verifications: 'Vérifications', taches: 'Tâches', messages: 'Messages', reglages: 'Réglages' };
+    const map = { tableau: 'Tableau de bord', demandes: 'Candidatures', demande: 'Fiche demande', clients: 'Leads', reseau: 'Réseau', pipeline: 'Pipeline de relance', notifications: 'À prévenir', client: 'Fiche lead', biens: 'Produits', bien: 'Fiche produit', recherches: 'Recherches', recherche: 'Recherche', robot: 'Immo Data Robot', 'robot-radar': 'Radar — Biens détectés', 'robot-opportunites': 'Opportunités Clients', 'robot-bien': 'Fiche bien Radar', 'robot-dpe': 'Recherche DPE', 'robot-proprietaires': 'Propriétaires', 'robot-proprietaire': 'Fiche propriétaire', 'portefeuille-foncier': 'Portefeuille foncier', 'societe-fonciere': 'Fiche société', bodacc: 'Signaux BODACC', membres: 'Membres', 'biens-club': 'Biens du club', rapprochements: 'Rapprochements', tracking: 'Tracking', visites: 'Visites', offres: 'Propositions → Offres', verifications: 'Vérifications', taches: 'Tâches', messages: 'Messages', assistant: 'Assistant', reglages: 'Réglages' };
     return map[r.name] || 'CRM';
   }
 
@@ -3629,6 +3641,31 @@
       '</div>';
   }
 
+  /* --------------------------------- assistant ----------------------------- */
+
+  function viewAssistant() {
+    const msgs = state.assistantMessages || [];
+    return head('CRM', 'Assistant', 'Racontez un rendez-vous ou une visite en langage naturel — il crée ou met à jour le lead, programme un rappel, change le pipeline ou envoie l’invitation à candidater, directement dans le CRM.') +
+      '<div class="se-card" style="max-width:720px">' +
+        '<div class="se-chat" data-assistant-scroll style="max-height:50vh;overflow-y:auto">' +
+          (msgs.length ? msgs.map((m) => (
+            '<div class="se-bubble ' + (m.role === 'user' ? 'me' : 'agent') + '">' +
+              esc(m.texte).replace(/\n/g, '<br>') +
+              ((m.actions && m.actions.length) ? '<div class="se-row" style="flex-wrap:wrap;gap:6px;margin-top:8px">' +
+                m.actions.map((a) => (a.lien ? '<a class="se-badge open" href="' + a.lien + '">' + esc(a.resume) + '</a>' : '<span class="se-badge open">' + esc(a.resume) + '</span>')).join('') +
+              '</div>' : '') +
+            '</div>'
+          )).join('') : '<p class="se-muted">Exemple : « Je sors de chez Mme Intel, 12 rue de Seine, elle veut vendre. Envoie-lui la candidature et programme un rappel pour le 28. »</p>') +
+          (state.assistantEnCours ? '<div class="se-bubble agent"><span class="se-muted">…</span></div>' : '') +
+        '</div>' +
+        '<form class="se-composer" data-form="assistant">' +
+          '<input class="se-input" name="texte" placeholder="Racontez votre rendez-vous…" autocomplete="off" autofocus ' + (state.assistantEnCours ? 'disabled' : '') + '/>' +
+          '<button class="se-btn" type="submit" ' + (state.assistantEnCours ? 'disabled' : '') + '>Envoyer</button>' +
+        '</form>' +
+      '</div>' +
+      (msgs.length ? '<button class="se-btn ghost sm" style="margin-top:10px" data-act="assistant-reset">Nouvelle conversation</button>' : '');
+  }
+
   /* --------------------------------- réglages ----------------------------- */
 
   function viewReglages() {
@@ -4328,6 +4365,7 @@
     },
     'bodacc-verifier': () => { verifierBodacc(); },
     'robot-cascade': async (el) => { await enrichirCascade(el.getAttribute('data-id')); },
+    'assistant-reset': () => { state.assistantMessages = []; state.assistantHistorique = []; commit(); },
     'robot-valorisation': async (el) => { await estimerValorisation(el.getAttribute('data-id')); },
     'robot-tache': (el) => {
       const b = robotBien(el.getAttribute('data-id'));
@@ -4697,6 +4735,36 @@
       commit();
       toast('Client enregistré.', 'ok');
       location.hash = '#/client/' + obj.id;
+      return;
+    }
+
+    if (kind === 'assistant') {
+      const texte = String(data.get('texte') || '').trim();
+      if (!texte || state.assistantEnCours) return;
+      form.reset();
+      state.assistantMessages.push({ role: 'user', texte: texte, at: nowISO() });
+      state.assistantEnCours = true;
+      commit();
+      try {
+        const r = await fetch('/api/assistant/chat', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+          body: JSON.stringify({ message: texte, historique: state.assistantHistorique })
+        });
+        const res = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(res.error || 'Erreur serveur');
+        state.assistantMessages.push({ role: 'assistant', texte: res.reponse || '…', actions: res.actions || [], at: nowISO() });
+        // On ne garde que les 30 derniers messages envoyés à l'API, pour que
+        // l'historique ne grossisse pas indéfiniment au fil d'une longue session.
+        state.assistantHistorique = (res.historique || []).slice(-30);
+      } catch (e) {
+        state.assistantMessages.push({ role: 'assistant', texte: 'Désolé, une erreur est survenue : ' + (e.message || 'inconnue') + '.', actions: [] });
+      }
+      state.assistantEnCours = false;
+      commit();
+      setTimeout(() => {
+        const box = document.querySelector('[data-assistant-scroll]');
+        if (box) box.scrollTop = box.scrollHeight;
+      }, 30);
       return;
     }
 
