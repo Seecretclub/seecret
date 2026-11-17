@@ -4921,6 +4921,13 @@
     if (e.target.closest('button[type="submit"], input[type="submit"]')) return;
     const el = e.target.closest('[data-act]');
     if (!el) return;
+    // Un élément interne sans data-act (ex: un lien <a href="#/..."> dans le
+    // menu "Plus") ne doit jamais remonter jusqu'à l'action du fond de modale
+    // (data-act="modal-close") simplement parce qu'il est affiché dedans :
+    // ça annulait sa navigation native sans rien faire d'autre. On ignore un
+    // data-act trouvé hors de la zone "data-stop" qui contient le clic.
+    const zoneProtegee = e.target.closest('[data-stop]');
+    if (zoneProtegee && !zoneProtegee.contains(el)) return;
     const fn = actions[el.getAttribute('data-act')];
     if (!fn) return;
     e.preventDefault();
