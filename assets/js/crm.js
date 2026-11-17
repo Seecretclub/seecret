@@ -730,9 +730,11 @@
         const rbtj = await rbt.json().catch(() => ({}));
         if (rbtj.ok && Array.isArray(rbtj.biens) && rbtj.biens.length) {
           state.robotBiens = rbtj.biens.map(normalizeRobotBien);
-          fetch('/api/portefeuille-foncier', { credentials: 'same-origin' }).then((x) => x.json()).then((pf) => { if (pf.ok && pf.societes) { state.portefeuilleFoncier = pf.societes; } }).catch(() => {});
         }
       } catch (e) { /* pas de biens radar persistés */ }
+      // Indépendant des biens Radar : le Portefeuille foncier (sociétés FPMU × permis) peut exister
+      // même sans aucun bien détecté — ne pas conditionner son chargement à rbtj.biens.length.
+      fetch('/api/portefeuille-foncier', { credentials: 'same-origin' }).then((x) => x.json()).then((pf) => { if (pf.ok && pf.societes) { state.portefeuilleFoncier = pf.societes; } }).catch(() => {});
       try {
         const rn = await fetch('/api/notifications', { headers: { accept: 'application/json' } });
         const rnj = await rn.json().catch(() => ({}));
@@ -1440,7 +1442,33 @@
     return { texte: 'DPE il y a ' + jours + ' jour' + (jours > 1 ? 's' : ''), alerte: jours > 15 };
   }
 
-  function tagsRobot(b) {
+  // Tag de structure de détention — 4 cas du plan de fusion (immeuble détenu par une société /
+  // SCI mono-actif / immeuble en mouvement / portefeuille institutionnel), déduits des champs déjà
+  // collectés (type de propriétaire, type de bâti, taille du portefeuille par SIREN/nom, fraîcheur du DPE).
+  // Calculé à l'affichage (comme prioriteRobot/typeRobot) plutôt que stocké, pour ne jamais diverger
+  // entre deux copies de la même règle.
+  const TAG_STRUCTURE_LABEL = {
+    immeuble_societe: 'Immeuble détenu par une société',
+    sci_un_bien: 'SCI mono-actif',
+    immeuble_mouvement: 'Immeuble en mouvement',
+    institutionnel: 'Portefeuille institutionnel'
+  };
+  function tagStructure(b, allBiens) {
+    const prop = b.proprietaire || {};
+    if (!prop.nom) return null;
+    const cle = prop.siren || prop.nom;
+    const portefeuille = (allBiens || []).filter((x) => (((x.proprietaire || {}).siren) || ((x.proprietaire || {}).nom)) === cle);
+    const estImmeuble = String(b.type || '').toLowerCase().indexOf('immeuble') > -1;
+    const dixHuitMois = 18 * 30 * 24 * 3600 * 1000;
+    const dpeRecent = !!(b.dpeDate && (Date.now() - new Date(b.dpeDate).getTime()) < dixHuitMois);
+    if (prop.type === 'societe' && portefeuille.length >= 3) return 'institutionnel';
+    if (prop.type === 'societe' && estImmeuble) return 'immeuble_societe';
+    if (prop.type === 'sci' && portefeuille.length === 1) return 'sci_un_bien';
+    if (estImmeuble && dpeRecent) return 'immeuble_mouvement';
+    return null;
+  }
+
+  function tagsRobot(b, allBiens) {
     const prop = b.proprietaire || {};
     const tags = [];
     if (b.type) tags.push(b.type.toUpperCase());
@@ -1450,6 +1478,8 @@
     if (prop.nom) tags.push('PROPRIÉTAIRE IDENTIFIÉ');
     if ((b.contacts || []).some((c) => c.verification === 'VERIFIED')) tags.push('CONTACT VÉRIFIÉ');
     if (b.dpe === 'F' || b.dpe === 'G') tags.push('DPE ' + b.dpe);
+    const struct = tagStructure(b, allBiens || robotBiens());
+    if (struct) tags.push(TAG_STRUCTURE_LABEL[struct].toUpperCase());
     return tags;
   }
 
@@ -1476,8 +1506,15 @@
     return { label: 'Propriétaire identifié', cls: 'open' };
   }
 
+  function lienCarteRobot(b) {
+    if (!b.coords || b.coords.length < 2) return '';
+    const lat = Number(b.coords[0]), lon = Number(b.coords[1]);
+    return '<a class="se-btn ghost sm" target="_blank" rel="noopener" href="https://www.openstreetmap.org/?mlat=' + lat + '&mlon=' + lon + '#map=17/' + lat + '/' + lon + '">Carte</a>';
+  }
+
   function robotBiensList() {
     const all = robotBiensFiltres().filter((b) => !b.ignore);
+    const toutesLesFiches = robotBiens();
     const ms = matchings();
     const perPage = 20;
     const totalPages = Math.max(1, Math.ceil(all.length / perPage));
@@ -1494,7 +1531,7 @@
       const prop = b.proprietaire || {};
       const sc = scorePriorite(b);
       const dpeAge = ancienneteDpe(b);
-      const tags = tagsRobot(b);
+      const tags = tagsRobot(b, toutesLesFiches);
       const etat = etatRobot(b);
       const msBien = ms.filter((m) => m.bienId === b.id);
       const club = msBien.filter((m) => { const c = client(m.clientId); return c && (c.statut === 'actif' || c.statut === 'client'); }).length;
@@ -1539,6 +1576,7 @@
           (aReconfirmer > 0 ? '<div class="se-hint">dont ' + aReconfirmer + ' à reconfirmer</div>' : '') +
           '<div class="se-match-actions">' +
             '<a class="se-btn ghost sm" href="#/robot-bien/' + b.id + '">Ouvrir la fiche</a>' +
+            lienCarteRobot(b) +
             (prop.nom ? '<button class="se-btn ghost sm" data-act="robot-ajouter" data-json="' + addJson + '">Ajouter aux prospects</button>' : '') +
             (tel ? '<button class="se-btn ghost sm" data-act="copier-contact" data-value="' + esc(tel.valeur) + '">Copier tél</button>' : '') +
             (eml ? '<button class="se-btn ghost sm" data-act="copier-contact" data-value="' + esc(eml.valeur) + '">Copier email</button>' : '') +
@@ -1549,11 +1587,32 @@
     }).join('') + pagination;
   }
 
+  function secteurBarsHtml(list) {
+    if (!list.length) return '<p class="se-muted" style="margin-top:8px">Aucun secteur détecté pour l’instant.</p>';
+    const maxBiens = Math.max.apply(null, list.map((s) => s.biens).concat([1]));
+    return '<div class="se-list" style="margin-top:8px">' + list.map((s) => {
+      const pctBiens = Math.max(4, Math.round((s.biens / maxBiens) * 100));
+      const pctProp = s.biens ? Math.round((s.proprietaires / s.biens) * 100) : 0;
+      return '<a class="se-rowlink" href="#/robot-radar" data-act="robot-filtre-secteur" data-sec="' + esc(s.secteur) + '" style="flex-direction:column;align-items:stretch;gap:6px">' +
+        '<div style="display:flex;justify-content:space-between"><b style="font-size:13.5px">' + esc(s.secteur.toUpperCase()) + '</b><span class="se-hint">' + s.matchs + ' match(s) · ' + s.verifies + ' contact(s) vérifié(s)</span></div>' +
+        '<div><div class="se-hint" style="margin-bottom:2px">Logements repérés · <b>' + s.biens + '</b></div><div class="se-bar"><div class="se-bar-fill" style="width:' + pctBiens + '%"></div></div></div>' +
+        '<div><div class="se-hint" style="margin-bottom:2px">Propriétaires identifiés · <b>' + s.proprietaires + '</b> (' + pctProp + ' %)</div><div class="se-bar"><div class="se-bar-fill" style="width:' + pctProp + '%;background:#1A3C34"></div></div></div>' +
+      '</a>';
+    }).join('') + '</div>';
+  }
+
+  function secteurDashboardHtml() {
+    return '<div class="se-card" style="margin-bottom:14px"><h3>Tableau de bord par secteur</h3>' +
+      '<p class="se-hint" style="margin-top:4px">Logements repérés vs propriétaires identifiés, par secteur — cliquer un secteur pour filtrer la liste ci-dessous.</p>' +
+      secteurBarsHtml(secteursPrioritaires()) + '</div>';
+  }
+
   function viewRobot() {
     const res = state.robot || null;
     const stats = robotStatsDetectes();
-    return head('Prospection', 'Radar — Biens détectés', 'Prospection immobilière · parcelles, propriétaires, SCI, DPE.', '') +
+    return head('Prospection', 'Radar', 'Intelligence de prospection · tableau sectoriel, parcelles, propriétaires, SCI, DPE.', '') +
       tabsRobot('robot') +
+      secteurDashboardHtml() +
       '<div class="se-card" style="margin-bottom:14px">' +
         '<h3>Recherche de biens</h3>' +
         '<form data-form="dpe-search" style="margin-top:12px">' +
@@ -1635,7 +1694,7 @@
   function tabsRobot(active) {
     const t = (route, label) => '<a href="#/' + route + '" class="' + (active === route ? 'active' : '') + '">' + label + '</a>';
     return '<div class="se-tabs" style="margin-bottom:14px">' +
-      t('robot', 'Radar') + t('robot-proprietaires', 'Propriétaires') + t('robot-opportunites', 'Signaux vendeurs') +
+      t('robot', 'Radar') + t('robot-proprietaires', 'Propriétaires') + t('robot-opportunites', 'Signaux vendeurs') + t('portefeuille-foncier', 'Portefeuille foncier') +
     '</div>';
   }
 
@@ -1939,16 +1998,16 @@
         }).join('') + '</div>'
       : '<p class="se-muted" style="margin-top:10px">Aucune société enregistrée. Lancez le croisement FPMU × permis.</p>';
     return head('Prospection', 'Portefeuille foncier', 'Sociétés cumulant patrimoine immobilier (FPMU) et activité urbanistique (permis).', '') +
-      tabsRobot('robot') +
+      tabsRobot('portefeuille-foncier') +
       '<div class="se-card"><h3>' + list.length + ' société(s) à patrimoine et activité urbanistique</h3>' + rows + '</div>';
   }
 
   function viewSocieteFonciere(r) {
     const siren = decodeURIComponent(r.param || '');
     const s = (state.portefeuilleFoncier || []).find((x) => x.siren === siren);
-    if (!s) return head('Prospection', 'Société', '', '') + tabsRobot('robot') + '<div class="se-card"><p class="se-muted">Société introuvable.</p></div>';
+    if (!s) return head('Prospection', 'Société', '', '') + tabsRobot('portefeuille-foncier') + '<div class="se-card"><p class="se-muted">Société introuvable.</p></div>';
     return head('Prospection', 'Société foncière', 'Dossier société.', '') +
-      tabsRobot('robot') +
+      tabsRobot('portefeuille-foncier') +
       '<div class="se-card">' +
         '<div style="font-size:20px;font-weight:700">' + esc(s.denomination || '—') + '</div>' +
         '<div class="se-hint" style="margin-top:4px">SIREN ' + esc(s.siren) + ' · source Aucadastre × FPMU (DGFiP)</div>' +
@@ -2040,7 +2099,7 @@
       body = '<div class="se-card"><h3>Cadastre & géolocalisation</h3><div class="se-kv" style="margin-top:12px">' +
         kv('Parcelle cadastrale', esc(b.parcelle || '—')) + kv('Coordonnées', b.coords ? b.coords[0].toFixed(5) + ', ' + b.coords[1].toFixed(5) : '—') +
         kv('Date de détection', dFR(b.dateDetection)) + kv('Statut prospection', esc(b.statutProspection || 'nouveau')) + kv('Confiance géocodage', (b.confidence_geocoding != null ? b.confidence_geocoding + ' %' : '—')) + kv('Confiance propriétaire', (b.confidence_owner != null ? b.confidence_owner + ' %' : '—')) +
-        '</div></div>';
+        '</div>' + (b.coords ? '<div style="margin-top:12px">' + lienCarteRobot(b) + '</div>' : '') + '</div>';
     } else if (tab === 'proprietaire') {
       body = '<div class="se-card"><h3>Propriétaire</h3><div class="se-kv" style="margin-top:12px">' +
         kv('Nom', esc(prop.nom || 'Non identifié')) + kv('Type', typeProp) +
@@ -3924,7 +3983,12 @@
     'robot-filtre-secteur': (el) => {
       state.robotFiltres = state.robotFiltres || {};
       state.robotFiltres.secteur = el.getAttribute('data-sec');
+      // Le tableau de bord par secteur vit désormais sur /robot-radar lui-même : si on y est déjà,
+      // changer location.hash ne déclenche pas de hashchange (même valeur) donc rien ne se
+      // réaffiche. On force le rendu explicitement, et on met aussi à jour le hash pour les cas où
+      // ce lien est cliqué depuis une autre vue.
       location.hash = '#/robot-radar';
+      render();
     },
     'robot-reset-filtres': () => { state.robotFiltres = {}; render(); },
     'matching-statut': (el) => {
