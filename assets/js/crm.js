@@ -198,6 +198,10 @@
   let celiaEcoute = false;
   let celiaRecorder = null; // MediaRecorder en cours, le temps de l'enregistrement
   let celiaTranscription = false; // true pendant l'appel serveur qui transcrit l'audio
+  // Texte transcrit, posé dans le champ pour relecture/modification avant
+  // envoi (jamais envoyé automatiquement) — vidé juste après avoir servi à
+  // un render(), pour ne pas écraser ce que l'utilisateur tape ensuite.
+  let celiaBrouillon = '';
   state.docsParLead = state.docsParLead || {};
   state.tachesVerif = state.tachesVerif || [];
   state.biensServeur = state.biensServeur || [];
@@ -3800,9 +3804,20 @@
           if (!r.ok) throw new Error(res.error || 'Erreur de transcription');
           const texte = String(res.texte || '').trim();
           celiaTranscription = false;
-          render();
-          if (texte) envoyerMessageCelia(texte);
-          else toast('Rien n’a été compris — réessayez en parlant juste après avoir appuyé.', 'warn');
+          if (texte) {
+            // On pose le texte dicté dans le champ pour relecture — l'utilisateur
+            // peut le corriger avant de valider, il n'est jamais envoyé seul.
+            celiaBrouillon = texte;
+            render();
+            celiaBrouillon = ''; // consommé par le render() qui précède, on vide pour ne pas écraser une future saisie
+            setTimeout(() => {
+              const input = document.querySelector('.se-celia-panel input[name="texte"]');
+              if (input) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); }
+            }, 30);
+          } else {
+            render();
+            toast('Rien n’a été compris — réessayez en parlant juste après avoir appuyé.', 'warn');
+          }
         } catch (e) {
           celiaTranscription = false;
           render();
@@ -3873,7 +3888,7 @@
         :
           '<form data-form="celia">' +
             (reconnaissanceDisponible() ? '<button type="button" class="se-celia-mic" data-act="celia-micro" title="Parler à Célia" ' + (state.celiaEnCours ? 'disabled' : '') + '>' + ICONS.mic + '</button>' : '') +
-            '<input class="se-input" name="texte" placeholder="Écrivez ou parlez…" autocomplete="off" ' + (state.celiaEnCours ? 'disabled' : '') + '/>' +
+            '<input class="se-input" name="texte" placeholder="Écrivez ou parlez…" value="' + esc(celiaBrouillon) + '" autocomplete="off" ' + (state.celiaEnCours ? 'disabled' : '') + '/>' +
             '<button class="se-btn sm" type="submit" ' + (state.celiaEnCours ? 'disabled' : '') + '>Envoyer</button>' +
           '</form>'
         ) +
