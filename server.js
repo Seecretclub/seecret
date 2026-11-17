@@ -2495,12 +2495,62 @@ const OUTILS_ASSISTANT = [
       },
       required: ['nomComplet']
     }
+  },
+  {
+    name: 'creer_bien',
+    description: "Crée une fiche bien immobilier (brouillon) dans le portefeuille, à partir d'une visite ou d'un mandat rapporté par l'agent. Si le bien appartient à un lead déjà identifié, le lier via nomComplet.",
+    parameters: {
+      type: 'object',
+      properties: {
+        adresse: { type: 'string', description: 'Adresse du bien (obligatoire)' },
+        ville: { type: 'string', description: 'Ville' },
+        codePostal: { type: 'string', description: 'Code postal, si connu' },
+        type: { type: 'string', enum: ['Appartement', 'Maison', 'Terrain', 'Local', 'Parking', 'Autre'], description: 'Type de bien' },
+        transaction: { type: 'string', enum: ['Vente', 'Location'], description: 'Vente ou location' },
+        surface: { type: 'number', description: 'Surface en m², si connue' },
+        pieces: { type: 'number', description: 'Nombre de pièces, si connu' },
+        prix: { type: 'number', description: 'Prix (ou loyer) en euros, si connu' },
+        description: { type: 'string', description: "Résumé libre de ce qui a été vu/dit lors de la visite (état, atouts, points d'attention)" },
+        nomComplet: { type: 'string', description: 'Nom complet du propriétaire/lead déjà identifié à qui lier ce bien, si applicable' }
+      },
+      required: ['adresse']
+    }
+  },
+  {
+    name: 'creer_recherche',
+    description: "Crée ou met à jour les critères de recherche (budget, secteur, type de bien souhaité) d'un lead acquéreur déjà identifié par son nom complet.",
+    parameters: {
+      type: 'object',
+      properties: {
+        nomComplet: { type: 'string', description: 'Nom complet (prénom + nom) du lead concerné' },
+        type: { type: 'string', description: 'Type de bien recherché (ex. Appartement, Maison)' },
+        quartiers: { type: 'array', items: { type: 'string' }, description: 'Quartiers/secteurs souhaités, si mentionnés' },
+        prixMax: { type: 'number', description: 'Budget maximum en euros' },
+        piecesMin: { type: 'number', description: 'Nombre de pièces minimum souhaité' },
+        surfaceMin: { type: 'number', description: 'Surface minimum souhaitée en m²' },
+        delai: { type: 'string', description: 'Délai/urgence du projet, si mentionné (ex. "sous 3 mois")' }
+      },
+      required: ['nomComplet']
+    }
+  },
+  {
+    name: 'envoyer_email',
+    description: "Envoie un email libre et personnalisé à un lead déjà identifié par son nom complet et qui a un email connu — pour un message qui ne correspond pas à l'invitation de candidature standard (ex. compte-rendu de visite, relance personnalisée, information demandée).",
+    parameters: {
+      type: 'object',
+      properties: {
+        nomComplet: { type: 'string', description: 'Nom complet (prénom + nom) du lead destinataire' },
+        sujet: { type: 'string', description: "Sujet de l'email" },
+        message: { type: 'string', description: "Corps du message, en français, ton professionnel et chaleureux" }
+      },
+      required: ['nomComplet', 'sujet', 'message']
+    }
   }
 ];
 const ASSISTANT_TOOLS_ANTHROPIC = OUTILS_ASSISTANT.map((o) => ({ name: o.name, description: o.description, input_schema: o.parameters }));
 const ASSISTANT_TOOLS_GEMINI = [{ functionDeclarations: OUTILS_ASSISTANT.map((o) => ({ name: o.name, description: o.description, parameters: o.parameters })) }];
 
-const ASSISTANT_SYSTEM = "Tu es Célia, l'assistante interne vocale du CRM Seecret, une agence immobilière. Un agent te parle à l'oral ou à l'écrit, en général juste après un rendez-vous ou une visite, pour te raconter ce qui s'est passé. Comprends ce qu'il raconte et exécute toi-même les actions correspondantes dans le CRM via les outils fournis — ne te contente jamais de répondre en texte si une action est possible. Si plusieurs actions sont nécessaires (ex. créer le lead ET programmer un rappel ET envoyer l'invitation), appelle plusieurs outils, dans un ordre logique (toujours créer/identifier le lead avant d'agir sur lui). Si une information nécessaire manque (ex. aucune date pour un rappel), pose la question à l'agent au lieu d'inventer une valeur. Réponds toujours en français, de façon brève, orale et naturelle (ta réponse peut être lue à voix haute), en confirmant ce que tu as fait.";
+const ASSISTANT_SYSTEM = "Tu es Célia, l'assistante interne vocale du CRM Seecret, une agence immobilière. Un agent te parle à l'oral ou à l'écrit, en général juste après un rendez-vous ou une visite, pour te raconter ce qui s'est passé. Comprends ce qu'il raconte et appelle toi-même les outils correspondants dans le CRM — ne te contente jamais de répondre en texte si une action est possible. Tu peux : créer/mettre à jour un lead, changer son statut pipeline, programmer un rappel daté (qui sert aussi pour un rendez-vous/rdv ou une relance à faire — mets-le simplement dans le titre, ex. \"RDV de visite\", \"Relancer sur l'offre\"), envoyer l'invitation de candidature standard, créer la fiche d'un bien visité, enregistrer les critères de recherche d'un acquéreur, et envoyer un email libre personnalisé. Si plusieurs actions sont nécessaires (ex. créer le lead ET créer le bien ET programmer un rappel), appelle plusieurs outils, dans un ordre logique (toujours créer/identifier le lead avant d'agir sur lui ou de créer un bien qui lui est lié). Si une information nécessaire manque (ex. aucune date pour un rappel, aucune adresse pour un bien), pose la question à l'agent au lieu d'inventer une valeur. Réponds toujours en français, de façon brève, orale et naturelle (ta réponse peut être lue à voix haute), en confirmant ce que tu as fait.";
 
 function trouverLeadParNom(db, texte) {
   const q = String(texte || '').trim().toLowerCase();
@@ -2559,6 +2609,17 @@ function decrireActionProposee(nomOutil, input) {
   }
   if (nomOutil === 'envoyer_invitation_candidature') {
     return 'Envoyer une invitation à candidater à ' + (input.nomComplet || '(lead non précisé)');
+  }
+  if (nomOutil === 'creer_bien') {
+    return 'Créer le bien ' + (input.adresse || '(adresse non précisée)') +
+      (input.nomComplet ? ', lié à ' + input.nomComplet : '') + (input.prix ? ' — ' + input.prix + ' €' : '');
+  }
+  if (nomOutil === 'creer_recherche') {
+    return 'Enregistrer les critères de recherche de ' + (input.nomComplet || '(lead non précisé)') +
+      (input.prixMax ? ' (budget ' + input.prixMax + ' €)' : '');
+  }
+  if (nomOutil === 'envoyer_email') {
+    return 'Envoyer un email à ' + (input.nomComplet || '(lead non précisé)') + ' — sujet : « ' + (input.sujet || '') + ' »';
   }
   return 'Exécuter l’action « ' + nomOutil + ' »';
 }
@@ -2638,6 +2699,72 @@ async function dispatchOutilAssistant(db, req, nomOutil, input) {
     if (!r.ok) return { resultat: { ok: false, erreur: r.erreur } };
     logActivite(db, { leadId: lead.id, type: 'candidature_envoyee', auteur: auteur });
     return { resultat: { ok: true }, resume: 'Invitation à candidater envoyée à ' + nomComplet(lead) + ' (' + lead.email + ')', lien: '/crm.html#/client/' + lead.id };
+  }
+
+  if (nomOutil === 'creer_bien') {
+    const adresse = String(input.adresse || '').trim();
+    if (!adresse) return { resultat: { ok: false, erreur: "L'adresse du bien est obligatoire." } };
+    const leadLie = input.nomComplet ? trouverLeadParNom(db, input.nomComplet) : null;
+    const bien = {
+      id: uid('b'), leadId: leadLie ? leadLie.id : null, nom: leadLie ? nomComplet(leadLie) : '',
+      titre: '', adresse: adresse, codePostal: String(input.codePostal || ''), ville: String(input.ville || ''),
+      type: input.type || 'Appartement', quartier: '', transaction: input.transaction || 'Vente',
+      surface: Number(input.surface) || 0, pieces: Number(input.pieces) || 0, chambres: 0, sdb: 0, etage: '', ascenseur: false,
+      anneeConstruction: 0, etat: '', dpe: '', ges: '',
+      exterieur: '', surfaceExterieur: 0, annexes: [], prix: Number(input.prix) || 0, charges: 0, description: String(input.description || ''),
+      photos: [], atouts: [], exclusivite: { statut: 'scan_en_cours', liens: [] }, validation: 'en_attente', statut: 'brouillon', statutDemande: null,
+      agent: nomComplet(req.lead) || DEFAULT_AGENT_NOM, cree: nowISO()
+    };
+    db.biens.push(bien);
+    if (leadLie) logActivite(db, { leadId: leadLie.id, type: 'bien_cree_assistant', auteur: auteur });
+    return { resultat: { ok: true, bienId: bien.id }, resume: 'Bien créé : ' + adresse, lien: '/crm.html#/bien/' + bien.id };
+  }
+
+  if (nomOutil === 'creer_recherche') {
+    const lead = trouverLeadParNom(db, input.nomComplet);
+    if (!lead) return { resultat: { ok: false, erreur: 'Lead introuvable : ' + input.nomComplet } };
+    let recherche = db.recherches.find((x) => x.clientId === lead.id || x.leadId === lead.id);
+    if (!recherche) {
+      recherche = {
+        id: uid('r'), clientId: lead.id, leadId: lead.id, titre: 'Recherche de ' + nomComplet(lead),
+        types: [], type: '', quartiers: [], prixMax: 0, piecesMin: 0, surfaceMin: 0, surfaceMax: 0,
+        delai: '', apport: 0, financement: '', courtier: false, bienAVendre: false, etageMin: 0, etageMax: 0,
+        etat: '', dpe: '', annexes: [], prixVenteEstime: 0, statut: 'active', alertes: true, cree: nowISO()
+      };
+      db.recherches.push(recherche);
+    }
+    if (input.type) { recherche.type = String(input.type); recherche.types = [String(input.type)]; }
+    if (Array.isArray(input.quartiers) && input.quartiers.length) recherche.quartiers = input.quartiers.map(String);
+    if (input.prixMax) recherche.prixMax = Number(input.prixMax) || recherche.prixMax;
+    if (input.piecesMin) recherche.piecesMin = Number(input.piecesMin) || recherche.piecesMin;
+    if (input.surfaceMin) recherche.surfaceMin = Number(input.surfaceMin) || recherche.surfaceMin;
+    if (input.delai) recherche.delai = String(input.delai);
+    logActivite(db, { leadId: lead.id, type: 'recherche_maj_assistant', auteur: auteur });
+    return { resultat: { ok: true, rechercheId: recherche.id }, resume: 'Critères de recherche enregistrés pour ' + nomComplet(lead), lien: '/crm.html#/client/' + lead.id };
+  }
+
+  if (nomOutil === 'envoyer_email') {
+    const lead = trouverLeadParNom(db, input.nomComplet);
+    if (!lead) return { resultat: { ok: false, erreur: 'Lead introuvable : ' + input.nomComplet } };
+    if (!lead.email) return { resultat: { ok: false, erreur: "Ce lead n'a pas d'email connu." } };
+    if (!mailer) return { resultat: { ok: false, erreur: "Aucun service d'email configuré sur ce serveur." } };
+    const sujet = String(input.sujet || 'Message de ' + (nomComplet(req.lead) || DEFAULT_AGENT_NOM));
+    const corps = String(input.message || '').trim();
+    if (!corps) return { resultat: { ok: false, erreur: 'Le message est vide.' } };
+    try {
+      const html = '<!doctype html><html><body style="margin:0;padding:0;background:#faf9f7;font-family:Georgia,\'Times New Roman\',serif;">' +
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:48px 16px;">' +
+        '<div style="max-width:460px;width:100%;background:#ffffff;border:1px solid #eeebe6;border-radius:24px;padding:44px 36px;text-align:left;">' +
+        '<div style="font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:#5f5a54;font-weight:600;">Seecret</div>' +
+        '<h1 style="font-family:Georgia,serif;font-weight:400;font-size:24px;line-height:1.2;color:#141210;margin:14px 0 18px;">' + (lead.prenom ? 'Bonjour ' + escHtml(lead.prenom) : 'Bonjour') + ',</h1>' +
+        '<p style="font-size:15px;line-height:1.6;color:#5f5a54;margin:0;white-space:pre-wrap;">' + escHtml(corps) + '</p>' +
+        '</div></td></tr></table></body></html>';
+      await mailer.sendMail({ from: '"' + (nomComplet(req.lead) || DEFAULT_AGENT_NOM) + ' · Seecret" <' + FROM_EMAIL + '>', to: lead.email, subject: sujet, html: html });
+    } catch (err) {
+      return { resultat: { ok: false, erreur: (err && err.message) || "Erreur d'envoi" } };
+    }
+    logActivite(db, { leadId: lead.id, type: 'email_envoye_assistant', auteur: auteur });
+    return { resultat: { ok: true }, resume: 'Email envoyé à ' + nomComplet(lead) + ' (' + lead.email + ') : « ' + sujet + ' »', lien: '/crm.html#/client/' + lead.id };
   }
 
   return { resultat: { ok: false, erreur: 'Outil inconnu : ' + nomOutil } };
