@@ -1821,6 +1821,108 @@
     toast(procedures ? procedures + ' annonce(s) BODACC trouvée(s) sur les sociétés suivies.' : 'Aucune procédure trouvée sur les sociétés suivies.', procedures ? 'warn' : 'ok');
   }
 
+  // Enrichissement en cascade (waterfall) : formalise la chaîne ad-hoc SIRENE → Aucadastre → Exa
+  // en une séquence explicite, étape par étape, qui s'arrête dès qu'un contact exploitable est
+  // trouvé, et garde la provenance de chaque résultat visible (à la Clay/Apollo).
+  const CASCADE_LABELS = { sirene: 'SIRENE (dirigeants)', aucadastre: 'Aucadastre (personnes morales)', exa: 'Exa Search (coordonnées publiées)' };
+  const CASCADE_BADGE = { succes: ['open', 'Trouvé'], vide: ['muted', 'Vide'], ignore: ['muted', 'Ignoré'], erreur: ['alert', 'Erreur'] };
+
+  function cascadeStepsHtml(b) {
+    const casc = b.cascadeEnrichissement;
+    if (!casc || !casc.etapes || !casc.etapes.length) {
+      return '<p class="se-muted" style="margin-top:10px">Lance la cascade pour voir le détail des sources interrogées, dans l’ordre, avec le résultat de chacune.</p>';
+    }
+    const resumeFinal = { trouve: 'contact exploitable trouvé.', partiel: 'propriétaire identifié, mais pas de contact direct — à rechercher manuellement.', introuvable: 'aucune information nouvelle.' };
+    return '<div class="se-list" style="margin-top:10px">' + casc.etapes.map((e) => {
+      const b2 = CASCADE_BADGE[e.statut] || ['muted', e.statut];
+      return '<div class="se-list-item" style="align-items:flex-start">' +
+        '<div style="flex:1;min-width:0"><div style="font-size:13.5px;font-weight:500">' + esc(CASCADE_LABELS[e.cle] || e.cle) + '</div>' +
+        '<div class="se-hint">' + esc(e.detail || '') + '</div></div>' +
+        '<span class="se-badge ' + b2[0] + '">' + b2[1] + '</span></div>';
+    }).join('') + '</div>' +
+    (casc.statutFinal && casc.statutFinal !== 'en_cours' ? '<p class="se-hint" style="margin-top:10px">Résultat : ' + (resumeFinal[casc.statutFinal] || '') + '</p>' : '');
+  }
+
+  async function enrichirCascade(bienId) {
+    const b = robotBien(bienId);
+    if (!b) return;
+    const prop = b.proprietaire || (b.proprietaire = { nom: '', type: 'inconnu', siren: '', dirigeants: [] });
+    const etapes = [];
+    const maj = (cle, statut, detail) => {
+      etapes.push({ cle: cle, statut: statut, detail: detail });
+      b.cascadeEnrichissement = { etapes: etapes.slice(), statutFinal: 'en_cours', misAJour: new Date().toISOString() };
+      commit();
+    };
+    toast('Cascade d’enrichissement lancée — SIRENE → Aucadastre → Exa…');
+
+    // Étape 1 — SIRENE : dirigeants de la société/SCI déjà identifiée
+    if (!prop.siren) {
+      maj('sirene', 'ignore', 'Pas de SIREN connu pour ce propriétaire.');
+    } else if (prop.dirigeants && prop.dirigeants.length) {
+      maj('sirene', 'ignore', 'Dirigeants déjà connus (' + prop.dirigeants.length + ').');
+    } else {
+      try {
+        const r = await fetch('/api/robot/dirigeants?siren=' + encodeURIComponent(prop.siren), { credentials: 'same-origin' }).then((x) => x.json());
+        if (r.ok && r.dirigeants && r.dirigeants.length) { prop.dirigeants = r.dirigeants.map((d) => d.nom).filter(Boolean); maj('sirene', 'succes', r.dirigeants.length + ' dirigeant(s) trouvé(s).'); }
+        else if (r.ok) maj('sirene', 'vide', 'Aucun dirigeant publié pour ce SIREN.');
+        else maj('sirene', 'erreur', r.error || 'SIRENE injoignable.');
+      } catch (e) { maj('sirene', 'erreur', 'SIRENE injoignable.'); }
+    }
+
+    // Étape 2 — Aucadastre : propriétaires personnes morales de la voie, en repli si le
+    // propriétaire n'est toujours pas identifié (l'étape SIRENE suppose qu'on a déjà un SIREN).
+    if (prop.nom) {
+      maj('aucadastre', 'ignore', 'Propriétaire déjà identifié (' + prop.nom + ').');
+    } else if (!b.adresse) {
+      maj('aucadastre', 'ignore', 'Pas d’adresse exploitable pour interroger la voie.');
+    } else {
+      try {
+        const r = await fetch('/api/robot/aucadastre-owners?adresse=' + encodeURIComponent(b.adresse), { credentials: 'same-origin' }).then((x) => x.json());
+        if (r.ok && r.owners && r.owners.length) {
+          const o = r.owners[0];
+          prop.nom = o.nom; if (!prop.type || prop.type === 'inconnu') prop.type = 'societe'; prop.siren = prop.siren || o.siren || '';
+          maj('aucadastre', 'succes', 'Propriétaire retrouvé : ' + o.nom + (r.owners.length > 1 ? ' (+' + (r.owners.length - 1) + ' autre(s) sur la voie).' : '.'));
+        } else if (r.ok) maj('aucadastre', 'vide', 'Aucun propriétaire personne morale recensé sur cette voie.');
+        else maj('aucadastre', 'erreur', r.error || 'Aucadastre injoignable.');
+      } catch (e) { maj('aucadastre', 'erreur', 'Aucadastre injoignable.'); }
+    }
+
+    // Étape 3 — Exa : coordonnées publiées (téléphone). On cherche sur le nom du propriétaire
+    // (société/SCI/personne), ou à défaut sur le premier dirigeant trouvé à l'étape SIRENE —
+    // sinon une société identifiée sans nom encore connu bloquerait cette étape pour rien.
+    const contacts = b.contacts || (b.contacts = []);
+    const sujetExa = prop.nom || (prop.dirigeants && prop.dirigeants[0]) || '';
+    if (!sujetExa) {
+      maj('exa', 'ignore', 'Aucun nom de propriétaire ni dirigeant à rechercher.');
+    } else if (contacts.some((c) => c.type === 'tel')) {
+      maj('exa', 'ignore', 'Un contact téléphonique est déjà enregistré.');
+    } else {
+      try {
+        const requetes = ['"' + sujetExa + '" téléphone contact', '"' + sujetExa + '" coordonnées siège'];
+        const telTrouves = new Set();
+        let erreurExa = null;
+        for (const q of requetes) {
+          const r = await fetch('/api/robot/exa-search', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ query: q }) }).then((x) => x.json());
+          if (r.ok && r.results) r.results.forEach((res) => { ((res.text || '').match(/0[1-9](?:[ .-]?\d{2}){4}/g) || []).forEach((n) => telTrouves.add(n.replace(/[ .-]/g, ''))); });
+          else if (r.error) erreurExa = r.error;
+        }
+        if (telTrouves.size) {
+          telTrouves.forEach((n) => contacts.push({ type: 'tel', valeur: n, source: 'Exa (publication web)', verification: 'FOUND_UNVERIFIED' }));
+          maj('exa', 'succes', telTrouves.size + ' numéro(s) trouvé(s) — à vérifier.');
+        } else if (erreurExa && /EXA_API_KEY/i.test(erreurExa)) {
+          maj('exa', 'ignore', 'Clé Exa non configurée côté serveur.');
+        } else {
+          maj('exa', 'vide', 'Aucun numéro public trouvé.');
+        }
+      } catch (e) { maj('exa', 'erreur', 'Exa injoignable.'); }
+    }
+
+    const contactTrouve = contacts.some((c) => c.type === 'tel' || c.type === 'email');
+    b.cascadeEnrichissement.statutFinal = contactTrouve ? 'trouve' : (prop.nom ? 'partiel' : 'introuvable');
+    commit();
+    toast(contactTrouve ? 'Cascade terminée — contact trouvé.' : prop.nom ? 'Cascade terminée — propriétaire identifié, pas de contact direct.' : 'Cascade terminée — rien trouvé.', contactTrouve ? 'ok' : 'warn');
+  }
+
   function viewBodacc() {
     const cibles = sirensAVerifier();
     const alertes = state.bodaccAlertes || {};
@@ -2292,6 +2394,11 @@
       const statutBtns = '<div class="se-row" style="gap:6px;flex-wrap:wrap;margin-top:10px">' + STATUTS_PROSPECTION.map(([k, label]) =>
         '<button class="se-btn ghost sm' + (b.statutProspection === k ? ' is-on' : '') + '" data-act="robot-statut" data-id="' + b.id + '" data-statut="' + k + '">' + label + '</button>').join('') + '</div>';
       body = '<div class="se-card"><h3>Statut de prospection</h3>' + statutBtns + '</div>' +
+        '<div class="se-card" style="margin-top:16px"><h3>Enrichissement en cascade</h3>' +
+        '<p class="se-hint">Interroge successivement SIRENE, Aucadastre puis Exa, dans cet ordre, et s’arrête dès qu’un contact exploitable est trouvé — la provenance de chaque résultat reste visible.</p>' +
+        '<button class="se-btn ghost sm" style="margin-top:10px" data-act="robot-cascade" data-id="' + b.id + '">Lancer la cascade</button>' +
+        cascadeStepsHtml(b) +
+        '</div>' +
         '<div class="se-card" style="margin-top:16px"><h3>Actions commerciales</h3>' +
         '<div class="se-row" style="gap:8px;flex-wrap:wrap;margin-top:10px">' +
 
@@ -4068,6 +4175,7 @@
       if (b) { b.favori = !b.favori; commit(); render(); toast(b.favori ? 'Ajouté aux favoris.' : 'Retiré des favoris.', 'ok'); }
     },
     'bodacc-verifier': () => { verifierBodacc(); },
+    'robot-cascade': async (el) => { await enrichirCascade(el.getAttribute('data-id')); },
     'robot-tache': (el) => {
       const b = robotBien(el.getAttribute('data-id'));
       if (!b) return;
