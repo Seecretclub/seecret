@@ -665,18 +665,20 @@
 
   async function syncServeur() {
     try {
-      const [rl, rd, rt, rb, rr, ra] = await Promise.all([
+      const [rl, rd, rt, rb, rr, ra, ro] = await Promise.all([
         fetch('/api/leads', { headers: { accept: 'application/json' } }),
         fetch('/api/demandes', { headers: { accept: 'application/json' } }),
         fetch('/api/tasks', { headers: { accept: 'application/json' } }),
         fetch('/api/biens', { headers: { accept: 'application/json' } }),
         fetch('/api/recherches', { headers: { accept: 'application/json' } }),
-        fetch('/api/activites', { headers: { accept: 'application/json' } })
+        fetch('/api/activites', { headers: { accept: 'application/json' } }),
+        fetch('/api/offres', { headers: { accept: 'application/json' } })
       ]);
       const leads = rl.ok ? (await rl.json()).leads || [] : [];
       const demandes = rd.ok ? (await rd.json()).demandes || [] : [];
       state.tachesVerif = rt.ok ? ((await rt.json()).tasks || []) : [];
       state.activites = ra.ok ? ((await ra.json()).activites || []) : [];
+      const offresServeur = ro.ok ? ((await ro.json()).offres || []) : [];
 
       leads.forEach((l) => {
         let c = state.clients.find((x) => x.serverId === l.id) ||
@@ -706,6 +708,22 @@
 
       state.biensServeur = rb.ok ? ((await rb.json()).biens || []).map(mapBienServeur) : [];
       state.recherchesServeur = rr.ok ? ((await rr.json()).recherches || []).map(mapRechercheServeur) : [];
+
+      // Les offres réelles n'étaient jusqu'ici jamais synchronisées : la vue
+      // "Offres" du CRM ne montrait que les données de démo, jamais une vraie
+      // offre soumise par un acquéreur. On les fusionne comme les demandes,
+      // en résolvant client/bien locaux via leurs id serveur (leadId/bienId).
+      offresServeur.forEach((o) => {
+        const id = 'srv-' + o.id;
+        const c = state.clients.find((x) => x.serverId === o.leadId);
+        const b = state.biensServeur.find((x) => x.serverId === o.bienId);
+        const fresh = {
+          id: id, serverId: o.id, serveur: true, clientId: c ? c.id : null, bienId: b ? b.id : o.bienId,
+          montant: o.montant || 0, contre: o.contre || 0, message: o.message || '', statut: o.statut || 'en_attente', cree: o.cree || nowISO()
+        };
+        const existing = state.offres.find((x) => x.id === id);
+        if (existing) Object.assign(existing, fresh); else state.offres.unshift(fresh);
+      });
 
       try {
         const rbt = await fetch('/api/robot-biens', { headers: { accept: 'application/json' } });
@@ -838,7 +856,7 @@
         '<div class="se-nav-label">Suivi</div>' +
         '<nav class="se-nav se-nav-more">' +
           nav('visites', r.name, 'calendar', 'Visites') +
-          nav('offres', r.name, 'tag', 'Offres', offresNouvelles() || '') +
+          nav('offres', r.name, 'tag', 'Propositions', offresNouvelles() || '') +
           nav('taches', r.name, 'check', 'Tâches', tachesOuvertes().length || '') +
           nav('verifications', r.name, 'check', 'Vérifications', verifEnAttente() || '') +
           nav('messages', r.name, 'chat', 'Messages') +
@@ -868,12 +886,12 @@
   }
 
   function titre(r) {
-    const map = { tableau: 'Tableau de bord', demandes: 'Candidatures', demande: 'Fiche demande', clients: 'Leads', reseau: 'Réseau', pipeline: 'Pipeline de relance', notifications: 'À prévenir', client: 'Fiche lead', biens: 'Produits', bien: 'Fiche produit', recherches: 'Recherches', recherche: 'Recherche', robot: 'Immo Data Robot', 'robot-radar': 'Radar — Biens détectés', 'robot-opportunites': 'Opportunités Clients', 'robot-bien': 'Fiche bien Radar', 'robot-dpe': 'Recherche DPE', 'robot-proprietaires': 'Propriétaires', 'robot-proprietaire': 'Fiche propriétaire', 'portefeuille-foncier': 'Portefeuille foncier', 'societe-fonciere': 'Fiche société', membres: 'Membres', 'biens-club': 'Biens du club', rapprochements: 'Rapprochements', tracking: 'Tracking', visites: 'Visites', offres: 'Offres', verifications: 'Vérifications', taches: 'Tâches', messages: 'Messages', reglages: 'Réglages' };
+    const map = { tableau: 'Tableau de bord', demandes: 'Candidatures', demande: 'Fiche demande', clients: 'Leads', reseau: 'Réseau', pipeline: 'Pipeline de relance', notifications: 'À prévenir', client: 'Fiche lead', biens: 'Produits', bien: 'Fiche produit', recherches: 'Recherches', recherche: 'Recherche', robot: 'Immo Data Robot', 'robot-radar': 'Radar — Biens détectés', 'robot-opportunites': 'Opportunités Clients', 'robot-bien': 'Fiche bien Radar', 'robot-dpe': 'Recherche DPE', 'robot-proprietaires': 'Propriétaires', 'robot-proprietaire': 'Fiche propriétaire', 'portefeuille-foncier': 'Portefeuille foncier', 'societe-fonciere': 'Fiche société', membres: 'Membres', 'biens-club': 'Biens du club', rapprochements: 'Rapprochements', tracking: 'Tracking', visites: 'Visites', offres: 'Propositions → Offres', verifications: 'Vérifications', taches: 'Tâches', messages: 'Messages', reglages: 'Réglages' };
     return map[r.name] || 'CRM';
   }
 
   function offresNouvelles() {
-    return state.offres.filter((o) => o.statut === 'recue').length;
+    return state.offres.filter((o) => o.statut === 'recue' || o.statut === 'en_attente').length;
   }
 
   function verifEnAttente() {
@@ -914,7 +932,7 @@
       etage: b.etage || '', dpe: b.dpe || '', ges: b.ges || '', etat: b.etat || '', prix: b.prix || 0, charges: b.charges || 0,
       ascenseur: !!b.ascenseur, exterieur: b.exterieur || '', surfaceExterieur: b.surfaceExterieur || 0,
       delai: b.delai || '', dejaEnVente: b.dejaEnVente || '', motif: b.motif || '',
-      statut: b.statut || 'brouillon', proprietaireId: lead ? lead.id : null,
+      statut: b.statut || 'brouillon', etapeProposition: b.etapeProposition || '', proprietaireId: lead ? lead.id : null,
       photos: b.photos || [], description: b.description || '',
       atouts: b.atouts || b.annexes || [], annexes: b.annexes || [], mandat: { type: 'simple', fin: '' }, cree: b.cree || nowISO(),
       exclusivite: b.exclusivite || { statut: 'scan_en_cours', liens: [] },
@@ -956,7 +974,7 @@
     const nouvelles = state.demandes.filter((d) => d.statut === 'nouvelle');
     const taches = tachesOuvertes().slice(0, 4);
     const visites = visitesAVenir().slice(0, 3);
-    const offres = state.offres.filter((o) => o.statut === 'recue' || o.statut === 'contre');
+    const offres = state.offres.filter((o) => o.statut === 'recue' || o.statut === 'en_attente' || o.statut === 'contre');
     const ilYA7J = Date.now() - 7 * 24 * 3600 * 1000;
     const nouveauxClients = state.clients.filter((c) => c.cree && new Date(c.cree).getTime() > ilYA7J).length;
     const alertesDoublon = (state.biensServeur || []).concat(state.biens).filter((b) => b.exclusivite && b.exclusivite.statut === 'alerte_doublon').length;
@@ -3009,17 +3027,39 @@
   /* ---------------------------------- offres ------------------------------ */
 
   function statutOffre(s) {
-    return { recue: 'Reçue', contre: 'Contre-offre', acceptee: 'Acceptée', refusee: 'Refusée' }[s] || s;
+    return { recue: 'Reçue', en_attente: 'Reçue', contre: 'Contre-offre', acceptee: 'Acceptée', refusee: 'Refusée' }[s] || s;
   }
 
   function statutVisite(s) {
     return { demandee: 'À confirmer', confirmee: 'Confirmée', realisee: 'Réalisée', annulee: 'Annulée' }[s] || s;
   }
 
+  // Pipeline Propositions → Offres (étape 4, fusion CRM) : 3 étapes avant
+  // l'offre écrite — post-visite, pas de nouvelle entité, juste un champ sur
+  // le bien (etapeProposition) — puis l'offre comme 4e étape (déjà existante).
+  const PROPOSITION_COLS = [['a_presenter', 'À présenter'], ['presentee', 'Présentée'], ['reponse_recue', 'Réponse reçue']];
+
   function viewOffres() {
     const list = state.offres.slice().sort((a, b) => (a.cree < b.cree ? 1 : -1));
-    return head('Négociation', 'Offres', 'Chaque offre, son écart au prix, et la décision à prendre.') +
-      '<div class="se-card" style="padding:8px 16px"><table class="se-table"><thead><tr><th>Bien</th><th>Client</th><th>Montant</th><th>Écart</th><th>Date</th><th>Statut</th><th></th></tr></thead><tbody>' +
+    const biensOuverts = (state.biensServeur || []).concat(state.biens).filter((b) => b.statut === 'ouvert' || b.statut === 'avant-premiere');
+    const colonne = (k) => biensOuverts.filter((b) => (b.etapeProposition || (k === 'a_presenter' ? '' : null)) === k || (k === 'a_presenter' && !b.etapeProposition));
+    const carteBien = (b) => '<div class="se-list-item">' +
+      '<a href="#/bien/' + b.id + '" style="flex:1;min-width:0"><div style="font-size:13.5px">' + esc(b.titre) + '</div>' +
+      '<div class="se-hint">' + esc(b.ref) + ' · ' + euro(b.prix) + '</div></a>' +
+      '<select class="se-select" style="width:auto" data-act="proposition-deplacer" data-id="' + b.id + '">' +
+        PROPOSITION_COLS.map(([k, l]) => '<option value="' + k + '"' + ((b.etapeProposition || 'a_presenter') === k ? ' selected' : '') + '>' + l + '</option>').join('') +
+      '</select></div>';
+    const board = '<div class="se-card"><h3>Propositions (post-visite, avant l’offre écrite)</h3>' +
+      '<div class="se-grid cols-3" style="gap:14px;margin-top:10px;align-items:start">' +
+        PROPOSITION_COLS.map(([k, l]) => {
+          const items = colonne(k);
+          return '<div><div class="se-kicker" style="margin-bottom:8px">' + esc(l) + ' (' + items.length + ')</div>' +
+            (items.length ? items.map(carteBien).join('') : '<p class="se-muted" style="font-size:13px">Aucun bien.</p>') + '</div>';
+        }).join('') +
+      '</div></div>';
+    return head('Négociation', 'Propositions → Offres', 'De la présentation du bien jusqu’à la décision sur l’offre.') +
+      board +
+      '<div class="se-card" style="padding:8px 16px;margin-top:18px"><h3 style="padding:8px 0 0">Offres (4e étape)</h3><table class="se-table"><thead><tr><th>Bien</th><th>Client</th><th>Montant</th><th>Écart</th><th>Date</th><th>Statut</th><th></th></tr></thead><tbody>' +
       list.map((o) => {
         const b = bien(o.bienId);
         const c = client(o.clientId);
@@ -3028,7 +3068,7 @@
           '<td>' + esc(nomClient(c)) + '</td><td><b>' + euro(o.montant) + '</b></td>' +
           '<td class="' + (delta < 0 ? '' : '') + '">' + (delta > 0 ? '+' : '') + delta + ' %</td>' +
           '<td class="se-hint">' + dFR(o.cree) + '</td><td>' + statutOffre(o.statut) + '</td>' +
-          '<td>' + (o.statut === 'recue' || o.statut === 'contre'
+          '<td>' + (o.statut === 'recue' || o.statut === 'en_attente' || o.statut === 'contre'
             ? '<div class="se-row" style="gap:6px"><button class="se-btn ghost sm" data-act="offre-refusee" data-id="' + o.id + '">Refuser</button><button class="se-btn sm" data-act="offre-acceptee" data-id="' + o.id + '">Accepter</button></div>'
             : '') + '</td></tr>';
       }).join('') + '</tbody></table></div>';
@@ -3720,6 +3760,14 @@
         fetch('/api/leads/' + c.serverId, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ pipeline: el.value }) }).catch(() => {});
       }
     },
+    'proposition-deplacer': (el) => {
+      const b = bien(el.getAttribute('data-id'));
+      if (b) { b.etapeProposition = el.value; commit(); }
+      const serverId = b && (b.serverId || (b.id || '').replace(/^srv-b-/, ''));
+      if (serverId) {
+        fetch('/api/biens/' + serverId, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ etapeProposition: el.value }) }).catch(() => {});
+      }
+    },
     'whatsapp-preview': (el) => {
       const c = client(el.getAttribute('data-id'));
       if (!c) return;
@@ -4041,15 +4089,24 @@
       const o = state.offres.find((x) => x.id === id);
       if (!o) return;
       o.statut = 'acceptee';
-      state.offres.forEach((x) => { if (x !== o && x.bienId === o.bienId && x.statut === 'recue') x.statut = 'refusee'; });
+      state.offres.forEach((x) => { if (x !== o && x.bienId === o.bienId && (x.statut === 'recue' || x.statut === 'en_attente')) x.statut = 'refusee'; });
       const b = bien(o.bienId);
-      if (b) b.statut = 'sous-offre';
+      if (b) b.statut = o.serveur ? 'sous-compromis' : 'sous-offre';
       commit();
-      toast('Offre acceptée. Le bien passe en « sous offre ».', 'ok');
+      if (o.serveur && o.serverId) {
+        fetch('/api/offres/' + o.serverId + '/accepter', { method: 'POST', credentials: 'same-origin' }).then(syncServeur).catch(() => {});
+      }
+      toast('Offre acceptée. Le bien passe en « sous ' + (o.serveur ? 'compromis' : 'offre') + ' ».', 'ok');
     },
     'offre-refusee': (el, id) => {
       const o = state.offres.find((x) => x.id === id);
-      if (o) { o.statut = 'refusee'; commit(); toast('Offre refusée.'); }
+      if (!o) return;
+      o.statut = 'refusee';
+      commit();
+      if (o.serveur && o.serverId) {
+        fetch('/api/offres/' + o.serverId + '/refuser', { method: 'POST', credentials: 'same-origin' }).then(syncServeur).catch(() => {});
+      }
+      toast('Offre refusée.');
     },
     'message-ouvrir': (el, id) => { location.hash = '#/messages/' + id; },
     'export-clients': () => {
