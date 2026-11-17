@@ -29,7 +29,18 @@ const COMPARABLES_FILE = path.join(__dirname, 'data-comparables.json');
 app.use(cors());
 // Relevé à 8 Mo (au lieu de 1 Mo) pour laisser passer l'audio dicté à Célia
 // (quelques dizaines de secondes de voix encodées en base64).
-app.use(express.json({ limit: '8mb' }));
+app.use(express.json({ limit: '20mb' }));
+// Si le corps de la requête est invalide ou trop gros (ex. un audio dicté
+// trop long envoyé à Célia), express renvoie par défaut une page d'erreur
+// texte/HTML — qui casse le `.json()` côté client et finit en message
+// générique illisible ("Erreur de transcription" sans aucun détail). On
+// répond ici en JSON avec un message clair à la place.
+app.use((err, req, res, next) => {
+  if (!err) return next();
+  if (err.type === 'entity.too.large') return res.status(413).json({ error: 'Enregistrement trop volumineux (plus de 20 Mo) — parlez plus brièvement et réessayez.' });
+  if (err.type === 'entity.parse.failed' || err instanceof SyntaxError) return res.status(400).json({ error: 'Requête invalide.' });
+  next(err);
+});
 
 const uid = (p) => (p || 'id') + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const nowISO = () => new Date().toISOString();
@@ -2598,13 +2609,26 @@ async function dispatchOutilAssistant(db, req, nomOutil, input) {
   return { resultat: { ok: false, erreur: 'Outil inconnu : ' + nomOutil } };
 }
 
+// Délai maximal avant d'abandonner un appel à l'IA et de renvoyer une erreur
+// claire au lieu de laisser le client « mouliner » indéfiniment sans jamais
+// savoir si ça a planté ou si c'est juste lent.
+const DELAI_IA_MS = 30000;
+
+function erreurDelaiDepasse(fournisseur) {
+  return Object.assign(new Error(fournisseur + ' n’a pas répondu à temps (plus de 30s) — réessayez.'), { code: 'TIMEOUT' });
+}
+
 async function callAnthropic(messages) {
   if (!ANTHROPIC_API_KEY) throw Object.assign(new Error('ANTHROPIC_API_KEY non configurée sur ce serveur.'), { code: 'NO_KEY' });
-  const resp = await fetch(ANTHROPIC_API_BASE + '/v1/messages', {
-    method: 'POST',
-    headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: ANTHROPIC_MODEL, max_tokens: 1024, system: ASSISTANT_SYSTEM, tools: ASSISTANT_TOOLS_ANTHROPIC, messages: messages })
-  });
+  let resp;
+  try {
+    resp = await fetch(ANTHROPIC_API_BASE + '/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: ANTHROPIC_MODEL, max_tokens: 1024, system: ASSISTANT_SYSTEM, tools: ASSISTANT_TOOLS_ANTHROPIC, messages: messages }),
+      signal: AbortSignal.timeout(DELAI_IA_MS)
+    });
+  } catch (e) { if (e && e.name === 'TimeoutError') throw erreurDelaiDepasse('Anthropic'); throw e; }
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) throw Object.assign(new Error((data && data.error && data.error.message) || ('Anthropic ' + resp.status)), { code: 'API_ERROR' });
   return data;
@@ -2612,11 +2636,15 @@ async function callAnthropic(messages) {
 
 async function callGemini(contents) {
   if (!GEMINI_API_KEY) throw Object.assign(new Error('GEMINI_API_KEY non configurée sur ce serveur.'), { code: 'NO_KEY' });
-  const resp = await fetch(GEMINI_API_BASE + '/v1beta/models/' + encodeURIComponent(GEMINI_MODEL) + ':generateContent', {
-    method: 'POST',
-    headers: { 'x-goog-api-key': GEMINI_API_KEY, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ system_instruction: { parts: [{ text: ASSISTANT_SYSTEM }] }, contents: contents, tools: ASSISTANT_TOOLS_GEMINI })
-  });
+  let resp;
+  try {
+    resp = await fetch(GEMINI_API_BASE + '/v1beta/models/' + encodeURIComponent(GEMINI_MODEL) + ':generateContent', {
+      method: 'POST',
+      headers: { 'x-goog-api-key': GEMINI_API_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ system_instruction: { parts: [{ text: ASSISTANT_SYSTEM }] }, contents: contents, tools: ASSISTANT_TOOLS_GEMINI }),
+      signal: AbortSignal.timeout(DELAI_IA_MS)
+    });
+  } catch (e) { if (e && e.name === 'TimeoutError') throw erreurDelaiDepasse('Gemini'); throw e; }
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) throw Object.assign(new Error((data && data.error && data.error.message) || ('Gemini ' + resp.status)), { code: 'API_ERROR' });
   return data;
