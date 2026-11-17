@@ -196,10 +196,8 @@
   // ouverte/fermée, et si une écoute vocale est en cours.
   let celiaOuvert = false;
   let celiaEcoute = false;
-  let celiaReco = null;
-  // Transcript vocal en cours de dictée, affiché en direct dans le grand
-  // bandeau « Je vous écoute » (il n'y a plus de <input> pendant l'écoute).
-  let celiaTranscript = '';
+  let celiaRecorder = null; // MediaRecorder en cours, le temps de l'enregistrement
+  let celiaTranscription = false; // true pendant l'appel serveur qui transcrit l'audio
   state.docsParLead = state.docsParLead || {};
   state.tachesVerif = state.tachesVerif || [];
   state.biensServeur = state.biensServeur || [];
@@ -3703,8 +3701,25 @@
     } catch (e) { /* ignore */ }
   }
 
+  // On enregistre l'audio nous-mêmes (MediaRecorder) et on le transcrit côté
+  // serveur (via Gemini) plutôt que d'utiliser la reconnaissance vocale native
+  // du navigateur (SpeechRecognition / Web Speech API). Cette dernière a un
+  // support cassé sur iPhone : Safari ET Chrome y sont tous les deux forcés
+  // par iOS d'utiliser le même moteur WebKit, qui a un bug de longue date
+  // jamais corrigé par Apple (service de reconnaissance indisponible, même
+  // micro autorisé). MediaRecorder, lui, est largement supporté partout, y
+  // compris sur iOS depuis plusieurs années.
   function reconnaissanceDisponible() {
-    return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+    return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
+  }
+
+  function blobVersBase64(blob) {
+    return new Promise((resolve, reject) => {
+      const lecteur = new FileReader();
+      lecteur.onloadend = () => resolve(String(lecteur.result || '').split(',')[1] || '');
+      lecteur.onerror = reject;
+      lecteur.readAsDataURL(blob);
+    });
   }
 
   // Centralise l'envoi d'un message à Célia (texte tapé OU dicté au micro) —
@@ -3743,62 +3758,71 @@
     }, 30);
   }
 
-  function basculerEcoute() {
-    const Ctor = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!Ctor) { toast('Reconnaissance vocale non disponible sur ce navigateur — utilisez le clavier.', 'warn'); return; }
-    if (celiaEcoute) { if (celiaReco) celiaReco.stop(); return; }
+  async function basculerEcoute() {
+    if (celiaEcoute) {
+      // Un second tap arrête l'enregistrement ; la transcription + l'envoi se
+      // font dans recorder.onstop (ci-dessous).
+      if (celiaRecorder && celiaRecorder.state !== 'inactive') celiaRecorder.stop();
+      return;
+    }
+    if (!reconnaissanceDisponible()) { toast('Micro non disponible sur ce navigateur — utilisez le clavier.', 'warn'); return; }
     if (window.speechSynthesis) window.speechSynthesis.cancel();
-    const reco = new Ctor();
-    reco.lang = 'fr-FR';
-    reco.interimResults = true;
-    reco.maxAlternatives = 1;
-    celiaReco = reco;
-    celiaEcoute = true;
-    celiaTranscript = '';
-    render();
-    reco.onresult = (e) => {
-      // Pendant l'écoute, le panneau n'a plus de <input> (remplacé par le
-      // grand bandeau « Je vous écoute »), donc le texte vit dans cette
-      // variable plutôt que dans le DOM.
-      let texte = '';
-      for (let i = 0; i < e.results.length; i++) texte += e.results[i][0].transcript;
-      celiaTranscript = texte;
+    try {
+      // navigator.mediaDevices.getUserMedia() doit être appelé de façon
+      // synchrone dans le geste de l'utilisateur (le tap) — c'est le cas ici,
+      // basculerEcoute() étant appelée directement depuis le clic, avant ce
+      // premier `await`.
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const candidats = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/aac', 'audio/ogg;codecs=opus'];
+      const mime = candidats.find((m) => window.MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m)) || '';
+      const recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+      const morceaux = [];
+      celiaRecorder = recorder;
+      celiaEcoute = true;
+      celiaTranscription = false;
       render();
-      if (e.results[e.results.length - 1].isFinal) reco.stop();
-    };
-    reco.onerror = (e) => {
-      celiaEcoute = false;
-      celiaReco = null;
-      celiaTranscript = '';
-      render();
-      // On affiche la vraie cause (le navigateur la donne dans e.error) au lieu
-      // de laisser l'écoute s'arrêter silencieusement sans explication.
-      const code = e && e.error;
-      const messages = {
-        'not-allowed': 'Micro refusé — autorisez l’accès au micro pour ce site dans les réglages de votre navigateur.',
-        'service-not-allowed': 'Micro refusé — autorisez l’accès au micro pour ce site dans les réglages de votre navigateur.',
-        'no-speech': 'Rien n’a été entendu — réessayez en parlant juste après avoir appuyé.',
-        'audio-capture': 'Aucun micro détecté sur cet appareil.',
-        'network': 'Problème réseau pendant l’écoute — réessayez.',
-        'aborted': null // l'utilisateur a lui-même coupé l'écoute, rien à signaler
+      recorder.ondataavailable = (e) => { if (e.data && e.data.size) morceaux.push(e.data); };
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const typeFinal = recorder.mimeType || mime || 'audio/webm';
+        const blob = new Blob(morceaux, { type: typeFinal });
+        celiaEcoute = false;
+        celiaRecorder = null;
+        celiaTranscription = true;
+        render();
+        try {
+          const b64 = await blobVersBase64(blob);
+          const r = await fetch('/api/assistant/transcrire', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+            body: JSON.stringify({ audio: b64, mimeType: typeFinal })
+          });
+          const res = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(res.error || 'Erreur de transcription');
+          const texte = String(res.texte || '').trim();
+          celiaTranscription = false;
+          render();
+          if (texte) envoyerMessageCelia(texte);
+          else toast('Rien n’a été compris — réessayez en parlant juste après avoir appuyé.', 'warn');
+        } catch (e) {
+          celiaTranscription = false;
+          render();
+          toast('Transcription impossible : ' + (e.message || 'erreur inconnue') + '.', 'warn');
+        }
       };
-      const msg = code && Object.prototype.hasOwnProperty.call(messages, code) ? messages[code] : 'Erreur du micro (' + (code || 'inconnue') + ') — réessayez ou utilisez le clavier.';
-      if (msg) toast(msg, 'warn');
-    };
-    reco.onend = () => {
-      // On capture le texte dicté AVANT de remettre celiaTranscript à vide,
-      // car render() (appelé juste après) détache du DOM tout ce qui existait
-      // (bandeau d'écoute compris) — on appelle donc directement
-      // envoyerMessageCelia() avec le texte capturé, sans dépendre d'un
-      // événement DOM simulé sur un nœud qui n'existerait déjà plus.
-      const texte = celiaTranscript.trim();
+      recorder.start();
+    } catch (e) {
       celiaEcoute = false;
-      celiaReco = null;
-      celiaTranscript = '';
+      celiaRecorder = null;
       render();
-      if (texte) envoyerMessageCelia(texte);
-    };
-    try { reco.start(); } catch (e) { celiaEcoute = false; celiaReco = null; render(); }
+      const nom = e && e.name;
+      const messages = {
+        NotAllowedError: 'Micro refusé — autorisez l’accès au micro pour ce site dans les réglages de votre navigateur.',
+        PermissionDeniedError: 'Micro refusé — autorisez l’accès au micro pour ce site dans les réglages de votre navigateur.',
+        NotFoundError: 'Aucun micro détecté sur cet appareil.',
+        NotReadableError: 'Le micro est déjà utilisé par une autre application.'
+      };
+      toast((nom && messages[nom]) || ('Erreur du micro (' + (nom || (e && e.message) || 'inconnue') + ') — réessayez ou utilisez le clavier.'), 'warn');
+    }
   }
 
   function celiaWidget() {
@@ -3834,12 +3858,18 @@
       '</div>' +
       '<div class="se-celia-foot">' +
         (celiaEcoute ?
-          // Grande zone de tap unique pendant l'écoute : pas de petit bouton à
-          // viser, tout le bandeau arrête l'écoute et envoie ce qui a été dit.
+          // Grande zone de tap unique pendant l'enregistrement : pas de petit
+          // bouton à viser, tout le bandeau arrête l'écoute et envoie ce qui a
+          // été dit (la transcription se fait après, côté serveur).
           '<button type="button" class="se-celia-stop" data-act="celia-micro">' +
             '<span class="se-celia-stop-dot"></span>' + ICONS.mic +
-            '<span>' + (celiaTranscript ? esc(celiaTranscript) : 'Je vous écoute… touchez pour envoyer') + '</span>' +
+            '<span>Je vous écoute… touchez pour arrêter et envoyer</span>' +
           '</button>'
+        : celiaTranscription ?
+          '<div class="se-celia-stop se-celia-stop-attente">' +
+            '<span class="se-celia-stop-dot"></span>' + ICONS.mic +
+            '<span>Transcription en cours…</span>' +
+          '</div>'
         :
           '<form data-form="celia">' +
             (reconnaissanceDisponible() ? '<button type="button" class="se-celia-mic" data-act="celia-micro" title="Parler à Célia" ' + (state.celiaEnCours ? 'disabled' : '') + '>' + ICONS.mic + '</button>' : '') +
@@ -4564,7 +4594,7 @@
     'celia-toggle': () => {
       const ouverture = !celiaOuvert; // true si on passe de fermé à ouvert
       celiaOuvert = !celiaOuvert;
-      if (!ouverture && celiaReco) celiaReco.stop(); // fermer pendant l'écoute arrête proprement
+      if (!ouverture && celiaRecorder && celiaRecorder.state !== 'inactive') celiaRecorder.stop(); // fermer pendant l'écoute arrête proprement
       const doitEcouter = ouverture && reconnaissanceDisponible() && !celiaEcoute;
       render();
       if (doitEcouter) {

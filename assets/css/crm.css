@@ -322,6 +322,12 @@
 .se-celia-stop svg { width: 18px; height: 18px; flex: 0 0 auto; }
 .se-celia-stop span:last-child { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
 .se-celia-stop-dot { width: 8px; height: 8px; border-radius: 999px; background: #fff; flex: 0 0 auto; }
+/* Pendant la transcription (après l'enregistrement, en attendant la réponse
+   du serveur) : même forme que le bandeau d'écoute, mais neutre et sans
+   pulsation rapide — il n'y a plus rien à arrêter, juste à patienter. */
+.se-celia-stop-attente { background: var(--color-club-mist); color: var(--color-ink); cursor: default; animation: none; }
+.se-celia-stop-attente .se-celia-stop-dot { background: var(--color-taupe); animation: se-celia-pulse-douce 1.3s ease-in-out infinite; }
+@keyframes se-celia-pulse-douce { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
 
 @media (max-width: 860px) {
   /* --se-tabbar-h (définie dans app.css) donne la hauteur exacte, fixe, de la
