@@ -15,7 +15,15 @@ const app = express();
 // Railway (et tout reverse proxy) : récupérer la vraie IP et le bon protocole.
 app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
-const DATA_FILE = path.join(__dirname, 'data.json');
+// DATA_DIR pointe vers un volume persistant en production (Railway, etc.) :
+// sans ça, data.json et uploads/ vivent sur le disque éphémère du conteneur
+// et sont perdus à chaque redéploiement. En local, DATA_DIR vaut __dirname
+// comme avant (rien ne change pour le développement).
+const DATA_DIR = process.env.DATA_DIR || __dirname;
+fs.mkdirSync(DATA_DIR, { recursive: true });
+const DATA_FILE = path.join(DATA_DIR, 'data.json');
+// data-comparables.json est une donnée de référence livrée avec le code
+// (pas générée par les utilisateurs), elle reste dans le dépôt / __dirname.
 const COMPARABLES_FILE = path.join(__dirname, 'data-comparables.json');
 
 app.use(cors());
@@ -761,7 +769,7 @@ app.post('/api/auth/logout', (req, res) => {
    Espace membre — documents, photos, visibilité + endpoints CRM
    ===================================================================== */
 
-const UPLOADS_DIR = path.join(__dirname, 'uploads');
+const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
 const storage = multer.diskStorage({
