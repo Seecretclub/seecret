@@ -1561,6 +1561,8 @@
     if (b.dpe === 'F' || b.dpe === 'G') tags.push('DPE ' + b.dpe);
     const struct = tagStructure(b, allBiens || robotBiens());
     if (struct) tags.push(TAG_STRUCTURE_LABEL[struct].toUpperCase());
+    const detention = dureeDetentionInfo(b);
+    if (detention && detention.niveau === 'forte') tags.push('DÉTENTION ' + detention.ans + ' ANS');
     return tags;
   }
 
@@ -1585,6 +1587,30 @@
     if (!prop.nom) return { label: 'Non analysée', cls: 'muted' };
     if ((b.contacts || []).length) return { label: 'Contacts disponibles', cls: 'open' };
     return { label: 'Propriétaire identifié', cls: 'open' };
+  }
+
+  // Score de durée de détention : plus un propriétaire détient son bien depuis longtemps, plus
+  // la probabilité statistique de revente à moyen terme augmente (retour à la moyenne de la durée
+  // de détention en France, ~7-10 ans). Calculé à partir de la dernière vente DVF connue sur la
+  // parcelle — indicateur statistique, pas une science exacte, à combiner avec les autres signaux.
+  function parseDateFR(s) {
+    const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(String(s || '').trim());
+    if (!m) return null;
+    return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
+  }
+
+  function dureeDetentionInfo(b) {
+    const ventes = (b.dvfMutations || []).filter((m) => /vente/i.test(m.nature || ''));
+    if (!ventes.length) return null;
+    let plusRecente = null;
+    ventes.forEach((m) => { const d = parseDateFR(m.date); if (d && (!plusRecente || d > plusRecente)) plusRecente = d; });
+    if (!plusRecente) return null;
+    const ans = Math.floor((Date.now() - plusRecente.getTime()) / (365.25 * 24 * 3600 * 1000));
+    let niveau, label;
+    if (ans >= 15) { niveau = 'forte'; label = 'Détenu depuis ' + ans + ' ans — probabilité de revente élevée.'; }
+    else if (ans >= 7) { niveau = 'moyenne'; label = 'Détenu depuis ' + ans + ' ans — dans la moyenne de détention.'; }
+    else { niveau = 'faible'; label = 'Détenu depuis ' + ans + ' ans — revente peu probable à court terme.'; }
+    return { ans: ans, dateVente: plusRecente, niveau: niveau, label: label };
   }
 
   function lienCarteRobot(b) {
@@ -2144,6 +2170,10 @@
         const d = b.dvfMutations[0];
         signaux.push({ bien: b, nature: 'Mutation récente', explication: 'Vente du ' + d.date + ' · ' + d.valeur + ' €', source: 'DVF', intensite: 'moyenne' });
       }
+      const detention = dureeDetentionInfo(b);
+      if (detention && detention.niveau !== 'faible') {
+        signaux.push({ bien: b, nature: 'Détention longue', explication: detention.label, source: 'DVF (durée de détention)', intensite: detention.niveau });
+      }
       if (b.confidence_owner != null && b.confidence_owner < 50 && prop.nom) {
         signaux.push({ bien: b, nature: 'Propriétaire à confirmer', explication: 'Identification à confirmer (confiance ' + b.confidence_owner + ' %)', source: 'FPMU', intensite: 'faible' });
       }
@@ -2385,11 +2415,21 @@
             '<div class="se-hint">' + esc(m.valeur || '—') + ' € · ' + esc(m.typeLocal || '—') + (m.surface ? ' · ' + esc(m.surface) + ' m²' : '') + (m.pieces ? ' · ' + esc(m.pieces) + ' pièces' : '') + '</div></div>' +
             '<span class="se-badge muted">DVF</span></div>').join('') + '</div>'
         : '<p class="se-muted" style="margin-top:10px">Aucune mutation DVF chargée pour cette parcelle.</p>';
+      const detention = dureeDetentionInfo(b);
+      const detentionCls = { forte: 'alert', moyenne: 'warn', faible: 'muted' };
+      const detentionHtml = detention
+        ? '<div class="se-card" style="margin-top:16px"><h3>Score de durée de détention</h3>' +
+          '<div class="se-list-item" style="margin-top:4px"><div style="flex:1;min-width:0"><div style="font-size:13.5px">' + esc(detention.label) + '</div>' +
+          '<div class="se-hint">Dernière vente DVF connue : ' + detention.dateVente.toLocaleDateString('fr-FR') + '</div></div>' +
+          '<span class="se-badge ' + detentionCls[detention.niveau] + '">' + detention.ans + ' ans</span></div>' +
+          '<p class="se-hint" style="margin-top:10px">Indicateur statistique (durée moyenne de détention en France ≈ 7-10 ans) — à combiner avec les autres signaux, pas une certitude de mise en vente.</p></div>'
+        : '';
       body = '<div class="se-card"><h3>Historique des recherches</h3><div class="se-list" style="margin-top:10px">' +
         '<div class="se-list-item"><div style="flex:1"><div style="font-size:13.5px">Détection initiale</div><div class="se-hint">' + dFR(b.dateDetection) + '</div></div><span class="se-badge muted">' + (b.confidence_geocoding != null ? b.confidence_geocoding + '%' : '—') + ' confiance géo</span></div>' +
         '</div></div>' +
         '<div class="se-card" style="margin-top:16px"><h3>Mutations DVF</h3>' + dvfHtml +
-        '<button class="se-btn ghost sm" style="margin-top:10px" data-act="robot-dvf" data-id="' + b.id + '">Charger l’historique DVF</button></div>';
+        '<button class="se-btn ghost sm" style="margin-top:10px" data-act="robot-dvf" data-id="' + b.id + '">Charger l’historique DVF</button></div>' +
+        detentionHtml;
     } else if (tab === 'actions') {
       const statutBtns = '<div class="se-row" style="gap:6px;flex-wrap:wrap;margin-top:10px">' + STATUTS_PROSPECTION.map(([k, label]) =>
         '<button class="se-btn ghost sm' + (b.statutProspection === k ? ' is-on' : '') + '" data-act="robot-statut" data-id="' + b.id + '" data-statut="' + k + '">' + label + '</button>').join('') + '</div>';
