@@ -77,6 +77,7 @@
     'avant-premiere': { label: 'Avant-première', cls: '' },
     ouvert: { label: 'Ouvert aux visites', cls: 'open' },
     'sous-offre': { label: 'Sous offre', cls: 'offer' },
+    'sous-compromis': { label: 'Sous compromis', cls: 'offer' },
     vendu: { label: 'Vendu', cls: 'muted' }
   };
 
@@ -95,6 +96,21 @@
     statut: { label: 'Changement de statut', icon: 'building' },
     modification: { label: 'Modification de bien', icon: 'building' },
     info: { label: 'Message', icon: 'chat' }
+  };
+
+  // Journal d'activité unifié (fusion CRM, étape 2) — une seule source de vérité
+  // pour tout ce qui arrive à un lead/bien, alimentée par le serveur (/api/activites)
+  // et affichée dans la fiche contact, à la place des blocs ad hoc visites/demandes/offres.
+  const ACTIVITE = {
+    dossier_transmis: { label: 'Candidature reçue', icon: 'inbox' },
+    admissible: { label: 'Bien jugé recevable (pas de doublon d’exclusivité)', icon: 'check' },
+    admission: { label: 'Admission validée par l’agence', icon: 'user' },
+    mise_au_catalogue: { label: 'Bien mis au catalogue (avant-première)', icon: 'building' },
+    ouverture_visites: { label: 'Bien ouvert aux visites', icon: 'home' },
+    offre_faite: { label: 'Offre faite', icon: 'tag' },
+    offre_acceptee: { label: 'Offre acceptée', icon: 'check' },
+    retour_silence: { label: 'Contacté, puis silence — à relancer', icon: 'chat' },
+    converti: { label: 'Converti en membre', icon: 'check' }
   };
 
   function seed() {
@@ -649,16 +665,18 @@
 
   async function syncServeur() {
     try {
-      const [rl, rd, rt, rb, rr] = await Promise.all([
+      const [rl, rd, rt, rb, rr, ra] = await Promise.all([
         fetch('/api/leads', { headers: { accept: 'application/json' } }),
         fetch('/api/demandes', { headers: { accept: 'application/json' } }),
         fetch('/api/tasks', { headers: { accept: 'application/json' } }),
         fetch('/api/biens', { headers: { accept: 'application/json' } }),
-        fetch('/api/recherches', { headers: { accept: 'application/json' } })
+        fetch('/api/recherches', { headers: { accept: 'application/json' } }),
+        fetch('/api/activites', { headers: { accept: 'application/json' } })
       ]);
       const leads = rl.ok ? (await rl.json()).leads || [] : [];
       const demandes = rd.ok ? (await rd.json()).demandes || [] : [];
       state.tachesVerif = rt.ok ? ((await rt.json()).tasks || []) : [];
+      state.activites = ra.ok ? ((await ra.json()).activites || []) : [];
 
       leads.forEach((l) => {
         let c = state.clients.find((x) => x.serverId === l.id) ||
@@ -679,7 +697,7 @@
             budgetMin: 0, budgetMax: l.budgetMax || 0, quartiers: l.quartiers || [],
             piecesMin: l.piecesMin || 0, surfaceMin: l.surfaceMin || 0, surfaceMax: l.surfaceMax || 0, delai: l.delai || '', typeBien: l.typeBien || '',
             apport: l.apport || 0, financement: l.financement || '', courtier: !!l.courtier, bienAVendre: !!l.bienAVendre,
-            notes: '', tags: [], agent: 'Léa Marchand', cree: l.cree || nowISO(),
+            notes: '', tags: [], agent: 'Gabriel Taieb', cree: l.cree || nowISO(),
             documents: l.documents || 0, documentsValides: l.documentsValides || 0,
             pipeline: l.pipeline || '', adresseBien: l.adresseBien || '', siren: l.siren || '', parcelle: l.parcelle || '', dirigeants: l.dirigeants || []
           });
@@ -2687,6 +2705,7 @@
     const visites = state.visites.filter((v) => v.clientId === c.id);
     const offres = state.offres.filter((o) => o.clientId === c.id);
     const biensPossedes = ((state.biensServeur || []).concat(state.biens)).filter((b) => b.proprietaireId === c.id || b.leadId === c.serverId);
+    const activites = (state.activites || []).filter((a) => a.leadId === c.serverId).slice().sort((a, b) => new Date(b.at) - new Date(a.at));
 
     return '<div class="se-fiche-head">' +
         '<span class="se-avatar">' + esc((c.prenom.charAt(0) + c.nom.charAt(0)).toUpperCase()) + '</span>' +
@@ -2735,10 +2754,11 @@
         '<div class="se-grid" style="gap:18px">' +
           (biensPossedes.length ? '<div class="se-card"><h3>Biens au portefeuille</h3><div class="se-list" style="margin-top:8px">' + biensPossedes.map((b) => '<a class="se-rowlink" href="#/bien/' + b.id + '"><div style="flex:1"><div style="font-size:13.5px">' + esc(b.titre) + '</div><div class="se-sub">' + esc(b.ref) + ' · ' + euro(b.prix) + '</div></div>' + badgeBien(b.statut) + '</a>').join('') + '</div></div>' : '') +
           '<div class="se-card"><h3>Activité</h3><div class="se-timeline" style="margin-top:12px">' +
+            (activites.length ? activites.map((a) => '<div class="se-timeline-item">' + esc((ACTIVITE[a.type] || { label: a.type }).label) + '<span>' + ilYa(a.at) + (a.auteur ? ' · ' + esc(a.auteur) : '') + '</span></div>').join('') : '') +
             (visites.length ? visites.map((v) => '<div class="se-timeline-item">Visite ' + esc(bien(v.bienId) ? bien(v.bienId).titre : '') + '<span>' + dFR(v.date) + ' · ' + v.heure + ' · ' + statutVisite(v.statut) + '</span></div>').join('') : '') +
             (demandes.length ? demandes.map((d) => '<div class="se-timeline-item">' + esc((DEMANDE[d.type] || DEMANDE.info).label) + '<span>' + ilYa(d.cree) + '</span></div>').join('') : '') +
             (offres.length ? offres.map((o) => '<div class="se-timeline-item">Offre ' + euro(o.montant) + '<span>' + dFR(o.cree) + ' · ' + statutOffre(o.statut) + '</span></div>').join('') : '') +
-            (!visites.length && !demandes.length && !offres.length ? '<p class="se-muted">Aucune activité.</p>' : '') +
+            (!activites.length && !visites.length && !demandes.length && !offres.length ? '<p class="se-muted">Aucune activité.</p>' : '') +
           '</div></div>' +
           (c.serverId ? '<div class="se-card"><h3>Accès & documents du membre</h3>' +
             '<div class="se-row" style="justify-content:space-between;margin-top:10px"><span class="se-hint">Accès</span>' +
