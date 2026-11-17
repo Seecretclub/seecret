@@ -1839,7 +1839,10 @@ app.get('/api/robot/prospecting', requireAdmin, async (req, res) => {
   }
 });
 
-const DVF_PATH = '/Users/taieb/Desktop/immo-data-robot-foundation/data/dvf/ValeursFoncieres-2025.txt';
+// Chemin du fichier DVF (ValeursFoncieres-*.txt). Configurable via la variable
+// d'environnement DVF_PATH (ex. un volume Railway ou un stockage monté en
+// production) — fallback sur le chemin de dev local si elle n'est pas définie.
+const DVF_PATH = process.env.DVF_PATH || '/Users/taieb/Desktop/immo-data-robot-foundation/data/dvf/ValeursFoncieres-2025.txt';
 
 // Historique des mutations foncières d'une parcelle (DVF). Lecture streaming,
 // filtre sur code_departement|code_commune|prefixe|section|no_plan (commune sans zéros).
