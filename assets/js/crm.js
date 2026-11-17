@@ -72,13 +72,21 @@
   const BIENS_MEMBRES = 'seecret.biens.v1';
 
   const QUARTIERS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
-    .map((n) => ({ id: 'p' + n, label: 'Paris ' + n + (n === 1 ? 'ᵉʳ' : 'ᵉ') }))
+    .map((n) => ({ id: 'p' + n, label: 'Paris ' + n + (n === 1 ? 'ᵉʳ' : 'ᵉ'), cp: '750' + String(n).padStart(2, '0') }))
     .concat([
-      { id: 'boulogne', label: 'Boulogne-Billancourt' },
-      { id: 'neuilly', label: 'Neuilly-sur-Seine' },
-      { id: 'vincennes', label: 'Vincennes' }
+      { id: 'boulogne', label: 'Boulogne-Billancourt', cp: '92100' },
+      { id: 'neuilly', label: 'Neuilly-sur-Seine', cp: '92200' },
+      { id: 'vincennes', label: 'Vincennes', cp: '94300' }
     ]);
   const qLabel = (id) => (QUARTIERS.find((q) => q.id === id) || { label: id }).label;
+  const qSecteur = (id) => QUARTIERS.find((q) => q.id === id) || null;
+
+  // Ordre des classes DPE, de la meilleure à la pire — utilisé pour comparer
+  // « au moins aussi bonne que » la classe souhaitée par un acquéreur, pas
+  // seulement une égalité stricte (un acquéreur qui veut du D accepte aussi
+  // du C, B ou A).
+  const DPE_ORDER = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
+  const adresseKey = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
   const TYPES = ['Appartement', 'Maison', 'Duplex', 'Loft', 'Hôtel particulier', 'Terrain'];
   const ATOUTS = ['Terrasse', 'Jardin', 'Vue', 'Parquet d’origine', 'Cheminée', 'Verrière', 'Ascenseur', 'Cave', 'Parking', 'Dernier étage', 'Calme', 'Lumineux'];
@@ -392,7 +400,13 @@
     return out;
   }
 
+  // Un bien venu de l'ADEME n'a qu'un code postal (pas d'id de secteur
+  // Seecret) : on retrouve le secteur correspondant pour qu'il puisse matcher
+  // les recherches clients filtrées par secteur (comme n'importe quel bien).
+  const quartierDeCp = (cp) => (QUARTIERS.find((q) => q.cp === String(cp || '').trim()) || null);
+
   function mapSignalRobotBien(s) {
+    const secteur = quartierDeCp(s.code_postal_ban);
     return {
       id: s.signal_id ? 'sig-' + s.signal_id : (s.parcelle || s.dpe_id || uid('rb')),
       signalId: s.signal_id || null,
@@ -405,7 +419,7 @@
       surface_terrain_m2: null,
       contenance_cadastrale_m2: null,
       parcelle: s.parcelle || '',
-      quartiers: [],
+      quartiers: secteur ? [secteur.id] : [],
       dpe: s.etiquette_dpe || '',
       dpeId: s.numero_dpe || s.dpe_id || '',
       dpeDate: s.date_reception_dpe || s.dpe_observed_at || null,
@@ -564,8 +578,16 @@
   }
 
   function clientDeRecherche(rec) {
-    return state.clients.find((c) => c.id === rec.clientId || c.id === rec.leadId || c.serverId === rec.clientId || c.serverId === rec.leadId) ||
-      (state.clientsServeur || []).find((c) => c.id === rec.clientId || c.id === rec.leadId) || null;
+    // Chaque comparaison ne compte que si les deux côtés sont renseignés :
+    // sans ce garde-fou, deux recherches/clients qui n'ont ni l'un ni l'autre
+    // de leadId/serverId (undefined === undefined) matchaient le premier
+    // client de la liste par accident, au lieu du bon acquéreur.
+    return state.clients.find((c) =>
+      c.id === rec.clientId ||
+      (!!rec.leadId && c.id === rec.leadId) ||
+      (!!rec.clientId && c.serverId === rec.clientId) ||
+      (!!rec.leadId && c.serverId === rec.leadId)) ||
+      (state.clientsServeur || []).find((c) => c.id === rec.clientId || (!!rec.leadId && c.id === rec.leadId)) || null;
   }
 
   function scoreRobotBien(rb, rec) {
@@ -586,10 +608,12 @@
       if (rec.codePostaux.indexOf(rb.codePostal) > -1) s += 30;
       else inconnus.push('Localisation');
     } else { inconnus.push('Localisation'); }
-    // Type 20
+    // Type 20 — comparaison insensible à la casse : les biens issus de
+    // l'ADEME ont un type_batiment en minuscules ('appartement'), alors que
+    // les recherches utilisent la casse de TYPES ('Appartement').
     if (types.length) {
       tot += 20;
-      if (types.indexOf(rb.type) > -1) s += 20;
+      if (types.some((t) => String(t).toLowerCase() === String(rb.type || '').toLowerCase())) s += 20;
       else inconnus.push('Type de bien');
     } else { inconnus.push('Type de bien'); }
     // Surface 20
@@ -607,10 +631,12 @@
       if (rb.pieces && rb.pieces >= rec.piecesMin) s += 10;
       else inconnus.push('Pièces');
     } else { inconnus.push('Pièces'); }
-    // DPE 5
+    // DPE 5 — « au moins aussi bonne que » la classe souhaitée, pas une égalité
+    // stricte : un acquéreur qui accepte du D accepte aussi du C, B ou A.
     if (rec.dpe) {
       tot += 5;
-      if (rb.dpe === rec.dpe) s += 5;
+      const ir = DPE_ORDER.indexOf(rec.dpe), ib = DPE_ORDER.indexOf(rb.dpe);
+      if (ib > -1 && ir > -1 && ib <= ir) s += 5;
       else inconnus.push('DPE');
     } else { inconnus.push('DPE'); }
     const score = tot ? Math.round(s / tot * 100) : 0;
@@ -657,6 +683,43 @@
   }
 
   function robotBien(id) { return robotBiens().find((b) => b.id === id) || null; }
+
+  // Pour qu'un agent ait toujours de la matière à démarcher : à partir des
+  // critères d'une recherche active (secteur, type, surface, DPE), interroge
+  // la base DPE publique de l'ADEME pour trouver des biens réels qui y
+  // correspondent, les ajoute au Radar (dédoublonnés par adresse) et lance
+  // leur enrichissement propriétaire automatique — exactement le même
+  // pipeline que la recherche DPE manuelle, mais ciblé sur cette recherche.
+  async function rechercherDpePourRecherche(rec) {
+    const secteurs = (rec.quartiers || []).map(qSecteur).filter(Boolean);
+    if (!secteurs.length) return { ajoutes: 0, erreur: 'secteur' };
+    const typeMap = { Appartement: 'appartement', Maison: 'maison' };
+    const classes = rec.dpe ? DPE_ORDER.slice(0, DPE_ORDER.indexOf(rec.dpe) + 1) : [];
+    const dejaConnues = new Set((state.robotBiens || []).map((b) => adresseKey(b.adresse)));
+    let ajoutes = 0;
+    for (const sec of secteurs) {
+      const params = new URLSearchParams();
+      params.set('code_postal', sec.cp);
+      params.set('ville', sec.label);
+      if (rec.surfaceMin) params.set('surface_min', String(rec.surfaceMin));
+      if (rec.type && typeMap[rec.type]) params.set('type', typeMap[rec.type]);
+      if (classes.length) params.set('classes', classes.join(','));
+      params.set('tri', 'recent');
+      params.set('limit', '20');
+      try {
+        const r = await fetch('/api/robot/dpe?' + params.toString(), { credentials: 'same-origin' }).then((x) => x.json());
+        if (r.ok && r.results && r.results.length) {
+          const nouveaux = r.results
+            .filter((row) => !dejaConnues.has(adresseKey(row.adresse_ban || row.adresse_brut)))
+            .map(mapSignalRobotBien);
+          nouveaux.forEach((b) => { b.rechercheOrigine = rec.id; dejaConnues.add(adresseKey(b.adresse)); });
+          if (nouveaux.length) { state.robotBiens = (state.robotBiens || []).concat(nouveaux); ajoutes += nouveaux.length; }
+        }
+      } catch (e) { /* secteur suivant */ }
+    }
+    if (ajoutes) { saveRobotBiens(); enrichirDpeAuto(); }
+    return { ajoutes: ajoutes, erreur: null };
+  }
 
   /* ================================ rendu ================================ */
 
@@ -2272,29 +2335,69 @@
   }
 
   function viewOpportunites() {
-    const ms = matchings().slice().sort((a, b) => b.score - a.score);
+    const ms = matchings();
     const recherches = (state.recherchesServeur || []).concat(state.recherches);
-    const rows = ms.map((m) => {
-      const rb = robotBien(m.bienId);
-      const rec = recherches.find((r) => r.id === m.rechercheId) || {};
-      const client = clientDeRecherche(rec);
-      const prio = niveauPriorite(m.score);
-      const statuts = Object.keys(ST_MATCHING).map((k) =>
-        '<button class="se-btn ghost sm' + (m.statut === k ? ' is-on' : '') + '" data-act="matching-statut" data-key="' + m.key + '" data-statut="' + k + '">' + ST_MATCHING[k] + '</button>').join('');
+
+    // Un bien peut correspondre à plusieurs recherches : on groupe par bien et
+    // on annonce un nombre de correspondances en langage clair plutôt qu'un
+    // score en %, qui n'aide pas l'agent à savoir quoi faire.
+    const parBien = {};
+    ms.forEach((m) => { (parBien[m.bienId] = parBien[m.bienId] || []).push(m); });
+    const groupes = Object.keys(parBien).map((bid) => {
+      const items = parBien[bid].slice().sort((a, b) => b.score - a.score);
+      const rb = robotBien(bid);
+      return { bienId: bid, rb: rb, items: items, dateDetection: (rb && rb.dateDetection) || '' };
+    }).sort((a, b) => (b.dateDetection || '').localeCompare(a.dateDetection || ''));
+
+    const rows = groupes.map((g) => {
+      const rb = g.rb;
+      const clientsHtml = g.items.map((m) => {
+        const rec = recherches.find((r) => r.id === m.rechercheId) || {};
+        const cli = clientDeRecherche(rec);
+        const statuts = Object.keys(ST_MATCHING).map((k) =>
+          '<button class="se-btn ghost sm' + (m.statut === k ? ' is-on' : '') + '" data-act="matching-statut" data-key="' + m.key + '" data-statut="' + k + '">' + ST_MATCHING[k] + '</button>').join('');
+        return '<div class="se-list-item" style="align-items:flex-start;flex-direction:column;gap:6px">' +
+          '<div class="se-row" style="width:100%;justify-content:space-between">' +
+            '<a href="#/client/' + (cli ? cli.id : '') + '" style="font-size:13.5px;font-weight:500">' + (cli ? esc(nomClient(cli)) : '—') + '</a>' +
+            '<span class="se-badge ' + (m.statut === 'nouveau' ? 'warn' : 'muted') + '">' + (ST_MATCHING[m.statut] || m.statut) + '</span>' +
+          '</div>' +
+          '<div class="se-hint">' + (rec.titre ? esc(rec.titre) : 'Recherche') + (rec.prixMax ? ' · budget ' + euro(rec.prixMax) : '') + '</div>' +
+          '<div class="se-hint" style="line-height:1.5">' + explicationMatching(m, rb || {}, rec) + '</div>' +
+          '<div style="display:flex;flex-wrap:wrap;gap:6px">' + statuts + '</div>' +
+        '</div>';
+      }).join('');
       return '<div class="se-card" style="margin-bottom:12px">' +
         '<div class="se-row" style="justify-content:space-between;align-items:flex-start">' +
           '<div style="min-width:0"><b style="font-weight:600">' + esc((rb && rb.adresse) || 'Bien') + '</b>' +
-          '<div class="se-hint">' + esc((rb && rb.type) || '') + (rb && rb.ville ? ' · ' + esc(rb.ville) : '') + (rb && rb.surface_habitable_m2 != null ? ' · ' + rb.surface_habitable_m2 + ' m² hab.' : (rb && rb.contenance_cadastrale_m2 != null ? ' · parcelle ' + rb.contenance_cadastrale_m2 + ' m²' : '')) + '</div></div>' +
-          '<span class="se-badge ' + prio.cls + '" style="flex:0 0 auto">' + m.score + '% · ' + prio.label + '</span>' +
+          '<div class="se-hint">' + esc((rb && rb.type) || '') + (rb && rb.ville ? ' · ' + esc(rb.ville) : '') + (rb && rb.surface_habitable_m2 != null ? ' · ' + rb.surface_habitable_m2 + ' m² hab.' : (rb && rb.contenance_cadastrale_m2 != null ? ' · parcelle ' + rb.contenance_cadastrale_m2 + ' m²' : '')) + (rb && rb.dpe ? ' · DPE ' + esc(rb.dpe) : '') + '</div></div>' +
+          '<div style="text-align:right;flex:0 0 auto">' +
+            '<span class="se-badge open">Correspond à ' + g.items.length + ' recherche' + (g.items.length > 1 ? 's' : '') + '</span>' +
+            (rb ? '<div style="margin-top:6px"><a class="se-btn ghost sm" href="#/robot-bien/' + rb.id + '">Démarcher</a></div>' : '') +
+          '</div>' +
         '</div>' +
-        '<div class="se-row" style="gap:12px;margin-top:10px">' +
-          '<div style="flex:1"><div class="se-kicker" style="font-size:9.5px">Client</div><a href="#/client/' + (client ? client.id : '') + '">' + (client ? esc(nomClient(client)) : '—') + '</a></div>' +
-          '<div style="flex:2"><div class="se-kicker" style="font-size:9.5px">Recherche</div><div class="se-hint">' + (rec.titre ? esc(rec.titre) : '—') + (rec.prixMax ? ' · budget ' + euro(rec.prixMax) : '') + (rec.surfaceMin ? ' · ≥ ' + rec.surfaceMin + ' m²' : '') + '</div></div>' +
-        '</div>' +
-        '<div class="se-hint" style="margin-top:8px;line-height:1.5">' + explicationMatching(m, rb || {}, rec) + '</div>' +
-        '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px">' + statuts + '</div>' +
+        '<div class="se-list" style="margin-top:10px">' + clientsHtml + '</div>' +
       '</div>';
     }).join('');
+
+    // Pour que l'agent ait toujours de la matière : les recherches actives
+    // encore sans opportunité (ou avec peu) sont mises en avant, avec un
+    // accès direct pour lancer une recherche DPE publique ciblée dessus.
+    const actives = recherches.filter((r) => r.statut !== 'archivee');
+    const aDemarcher = actives.map((r) => ({ r: r, n: ms.filter((m) => m.rechercheId === r.id).length }))
+      .sort((a, b) => (a.n - b.n) || (b.r.cree || '').localeCompare(a.r.cree || ''));
+    const demarcheHtml = aDemarcher.length
+      ? '<div class="se-list" style="margin-top:10px">' + aDemarcher.map(({ r, n }) => {
+          const cli = client(r.clientId);
+          const secteurs = (r.quartiers || []).map(qLabel).join(', ');
+          return '<div class="se-list-item">' +
+            '<div style="flex:1;min-width:0"><a href="#/recherche/' + r.id + '" style="font-size:13.5px;font-weight:500">' + esc(r.titre) + '</a>' +
+            '<div class="se-hint">' + (cli ? esc(nomClient(cli)) : '—') + (secteurs ? ' · ' + esc(secteurs) : ' · aucun secteur défini') + '</div></div>' +
+            '<span class="se-badge ' + (n ? 'open' : 'muted') + '">' + n + ' opportunité' + (n > 1 ? 's' : '') + '</span>' +
+            (secteurs ? '<button class="se-btn ghost sm" data-act="recherche-dpe-opportunite" data-id="' + r.id + '">Chercher des biens DPE</button>' : '<span class="se-hint">Ajoutez un secteur pour lancer une recherche</span>') +
+          '</div>';
+        }).join('') + '</div>'
+      : '<p class="se-muted" style="margin-top:10px">Aucune recherche active pour l’instant.</p>';
+
     const signaux = signauxVendeurs();
     const signauxHtml = signaux.length
       ? '<div class="se-list" style="margin-top:10px">' + signaux.map((s) => '<div class="se-list-item">' +
@@ -2309,7 +2412,8 @@
       tabsRobot('robot-opportunites') +
       '<div class="se-row" style="gap:8px;margin-bottom:12px;justify-content:flex-end"><button class="se-btn ghost sm" data-act="synchroniser-permis">Synchroniser les permis</button></div>' +
       '<div class="se-card"><h3>' + signaux.length + ' signal(s) vendeur(s)</h3>' + signauxHtml + '</div>' +
-      '<div class="se-card" style="margin-top:16px"><h3>Opportunités clients</h3>' + (ms.length ? rows : '<p class="se-muted" style="margin-top:10px">Aucune correspondance acquéreur.</p>') + '</div>';
+      '<div class="se-card" style="margin-top:16px"><h3>Recherches à démarcher</h3><p class="se-muted">Pour toujours avoir des biens à proposer : lancez une recherche DPE publique ciblée sur les recherches qui ont le moins d’opportunités.</p>' + demarcheHtml + '</div>' +
+      '<div class="se-card" style="margin-top:16px"><h3>Opportunités clients</h3>' + (groupes.length ? rows : '<p class="se-muted" style="margin-top:10px">Aucune correspondance acquéreur.</p>') + '</div>';
   }
 
   function verifTag(v) {
@@ -3501,17 +3605,23 @@
   /* ------------------------------- recherches ----------------------------- */
 
   function viewRecherches() {
-    const list = (state.recherchesServeur || []).concat(state.recherches).map((r) => ({ r, n: biensCompatibles(r, 50).length })).sort((a, b) => b.n - a.n);
+    const tri = state.rechTri || 'recent';
+    let list = (state.recherchesServeur || []).concat(state.recherches).map((r) => ({ r, n: biensCompatibles(r, 50).length }));
+    list = tri === 'recent'
+      ? list.sort((a, b) => (b.r.cree || '').localeCompare(a.r.cree || ''))
+      : list.sort((a, b) => b.n - a.n);
+    const triBtn = (id, label) => '<button class="se-btn ghost sm' + (tri === id ? ' is-on' : '') + '" data-act="recherches-tri" data-tri="' + id + '">' + label + '</button>';
     return head('Matching', 'Recherches',
-      'Les critères de vos acquéreurs, confrontés en continu au portefeuille.',
+      'Les critères de vos acquéreurs, confrontés en continu au portefeuille et aux données publiques.',
       '<button class="se-btn" data-act="recherche-nouvelle">' + ICONS.plus + ' Nouvelle recherche</button>') +
+      '<div class="se-row" style="gap:6px;margin-bottom:12px">' + triBtn('recent', 'Plus récentes') + triBtn('match', 'Plus de correspondances') + '</div>' +
       '<div class="se-grid cols-2">' + list.map(({ r, n }) => {
         const c = client(r.clientId);
         return '<a class="se-card" href="#/recherche/' + r.id + '" style="text-decoration:none;color:inherit">' +
           '<div class="se-row" style="justify-content:space-between"><span class="kicker" style="color:var(--color-taupe)">' + esc(nomClient(c)) + '</span>' +
           '<span class="se-badge ' + (n ? 'open' : 'muted') + '">' + n + ' bien(s)</span></div>' +
           '<h3 style="font-family:var(--font-serif);font-weight:420;font-size:20px;margin:8px 0 6px">' + esc(r.titre) + '</h3>' +
-          '<div class="se-hint">≤ ' + euro(r.prixMax) + ' · ' + r.piecesMin + '+ pièces · ' + r.surfaceMin + '+ m²</div>' +
+          '<div class="se-hint">≤ ' + euro(r.prixMax) + ' · ' + r.piecesMin + '+ pièces · ' + r.surfaceMin + '+ m²' + (r.dpe ? ' · DPE ' + r.dpe + '+' : '') + '</div>' +
           '<div class="se-hint" style="margin-top:4px">' + (r.quartiers || []).map(qLabel).join(' · ') + '</div>' +
           '</a>';
       }).join('') + '</div>';
@@ -3522,27 +3632,50 @@
     if (!rec) return '<div class="se-card se-empty"><div class="se-empty-title">Recherche introuvable</div><a class="se-btn" href="#/recherches">Retour</a></div>';
     const c = client(rec.clientId);
     const matches = biensCompatibles(rec, 40);
+    const oppPubliques = matchings().filter((m) => m.rechercheId === rec.id).sort((a, b) => b.score - a.score);
+    const secteurs = (rec.quartiers || []).map(qLabel).join(', ');
 
-    return head(esc(nomClient(c)), esc(rec.titre), 'Critères confrontés à ' + state.biens.length + ' biens du portefeuille.',
+    const oppHtml = oppPubliques.length
+      ? '<div class="se-list" style="margin-top:8px">' + oppPubliques.map((m) => {
+          const rb = robotBien(m.bienId);
+          return '<div class="se-list-item">' +
+            '<div style="flex:1;min-width:0"><div style="font-size:14px">' + esc((rb && rb.adresse) || 'Bien') + '</div>' +
+            '<div class="se-sub">' + esc((rb && rb.type) || '') + (rb && rb.ville ? ' · ' + esc(rb.ville) : '') + (rb && rb.dpe ? ' · DPE ' + esc(rb.dpe) : '') + '</div></div>' +
+            (rb ? '<a class="se-btn ghost sm" href="#/robot-bien/' + rb.id + '">Démarcher</a>' : '') +
+          '</div>';
+        }).join('') + '</div>'
+      : '<p class="se-muted" style="margin-top:8px">Aucune opportunité détectée pour l’instant dans les données publiques.</p>';
+
+    return head(esc(nomClient(c)), esc(rec.titre), 'Critères confrontés à ' + state.biens.length + ' biens du portefeuille et aux données publiques.',
       '<button class="se-btn ghost" data-act="recherche-editer" data-id="' + rec.id + '">Modifier</button>' +
       '<button class="se-btn" data-act="recherche-envoyer" data-id="' + rec.id + '">Envoyer la sélection</button>') +
       '<div class="se-split">' +
-        '<div class="se-card"><h3>Biens compatibles</h3>' +
-          (matches.length ? '<div class="se-list" style="margin-top:8px">' + matches.map((m) => '<div class="se-list-item">' +
-            '<a href="#/bien/' + m.bien.id + '" style="flex:1;min-width:0;display:flex;align-items:center;gap:10px;text-decoration:none;color:inherit">' +
-              '<img class="se-thumb" src="' + photo(m.bien) + '" alt="" style="width:40px;height:40px;flex:0 0 40px"/>' +
-              '<div style="flex:1;min-width:0"><div style="font-size:14px">' + esc(m.bien.titre) + '</div>' +
-              '<div class="se-sub">' + esc(m.bien.ref) + ' · ' + euro(m.bien.prix) + ' · ' + num(m.bien.surface) + ' m² · ' + esc(qLabel(m.bien.quartier)) + '</div></div>' +
-              scoreTag(m.score) +
-            '</a>' +
-            '<button class="se-btn ghost sm" data-act="bien-envoyer" data-bien="' + m.bien.id + '" data-client="' + c.id + '">Envoyer</button>' +
-          '</div>').join('') + '</div>' : '<p class="se-muted" style="margin-top:8px">Aucun bien ne correspond encore.</p>') +
+        '<div>' +
+          '<div class="se-card"><h3>Biens compatibles (portefeuille)</h3>' +
+            (matches.length ? '<div class="se-list" style="margin-top:8px">' + matches.map((m) => '<div class="se-list-item">' +
+              '<a href="#/bien/' + m.bien.id + '" style="flex:1;min-width:0;display:flex;align-items:center;gap:10px;text-decoration:none;color:inherit">' +
+                '<img class="se-thumb" src="' + photo(m.bien) + '" alt="" style="width:40px;height:40px;flex:0 0 40px"/>' +
+                '<div style="flex:1;min-width:0"><div style="font-size:14px">' + esc(m.bien.titre) + '</div>' +
+                '<div class="se-sub">' + esc(m.bien.ref) + ' · ' + euro(m.bien.prix) + ' · ' + num(m.bien.surface) + ' m² · ' + esc(qLabel(m.bien.quartier)) + '</div></div>' +
+                scoreTag(m.score) +
+              '</a>' +
+              '<button class="se-btn ghost sm" data-act="bien-envoyer" data-bien="' + m.bien.id + '" data-client="' + c.id + '">Envoyer</button>' +
+            '</div>').join('') + '</div>' : '<p class="se-muted" style="margin-top:8px">Aucun bien ne correspond encore.</p>') +
+          '</div>' +
+          '<div class="se-card" style="margin-top:16px"><div class="se-row" style="justify-content:space-between;align-items:flex-start">' +
+            '<h3>Opportunités publiques (DPE)</h3>' +
+            (secteurs ? '<button class="se-btn ghost sm" data-act="recherche-dpe-opportunite" data-id="' + rec.id + '">Chercher des biens DPE correspondants</button>' : '') +
+          '</div>' +
+          (secteurs ? '' : '<p class="se-hint" style="margin-top:6px">Ajoutez un secteur à cette recherche pour pouvoir lancer une recherche DPE ciblée.</p>') +
+            oppHtml +
+          '</div>' +
         '</div>' +
         '<div class="se-card"><h3>Critères</h3><div class="se-kv" style="margin-top:12px">' +
           kv('Budget max', euro(rec.prixMax)) + kv('Type', esc(rec.type || 'tout')) +
           kv('Pièces min', rec.piecesMin || '—') + kv('Surface', (rec.surfaceMin ? rec.surfaceMin + ' m² min' : '—') + (rec.surfaceMax ? ' · ' + rec.surfaceMax + ' m² max' : '')) +
+          kv('DPE', rec.dpe ? rec.dpe + ' ou mieux' : 'Indifférent') +
           kv('Délai', esc(rec.delai || '—')) +
-          kv('Secteurs', (rec.quartiers || []).map(qLabel).join(', ') || '—') +
+          kv('Secteurs', secteurs || '—') +
           kv('Alertes', rec.alertes ? 'Activées' : 'Désactivées') +
         '</div>' + (c ? '<a class="se-btn ghost block" style="margin-top:14px" href="#/client/' + c.id + '">Acquéreur : ' + esc(nomClient(c)) + '</a>' : '') + '</div>' +
       '</div>';
@@ -4096,8 +4229,8 @@
   }
 
   function rechercheModal(r, clientId) {
-    const v = r || { clientId: clientId || (state.clients[0] && state.clients[0].id), titre: '', type: 'Appartement', prixMax: 2000000, piecesMin: 3, surfaceMin: 80, quartiers: [], alertes: true };
-    return '<h3>' + (r ? 'Modifier la recherche' : 'Nouvelle recherche') + '</h3><p class="se-muted">Le CRM confrontera ces critères au portefeuille.</p>' +
+    const v = r || { clientId: clientId || (state.clients[0] && state.clients[0].id), titre: '', type: 'Appartement', prixMax: 2000000, piecesMin: 3, surfaceMin: 80, dpe: '', quartiers: [], alertes: true };
+    return '<h3>' + (r ? 'Modifier la recherche' : 'Nouvelle recherche') + '</h3><p class="se-muted">Le CRM confrontera ces critères au portefeuille et aux données publiques (DPE ADEME).</p>' +
       '<form data-form="recherche" data-id="' + (r ? r.id : '') + '"><div class="se-form-grid">' +
         field('Client', 'clientId', v.clientId, { type: 'select', options: state.clients.filter((c) => c.type !== 'vendeur').map((c) => ({ value: c.id, label: nomClient(c) })) }) +
         field('Type', 'type', v.type, { type: 'select', options: [{ value: '', label: 'Indifférent' }].concat(TYPES.map((t) => ({ value: t, label: t }))) }) +
@@ -4105,6 +4238,7 @@
         field('Budget max (€)', 'prixMax', v.prixMax, { type: 'number' }) +
         field('Pièces min', 'piecesMin', v.piecesMin, { type: 'number' }) +
         field('Surface min (m²)', 'surfaceMin', v.surfaceMin, { type: 'number' }) +
+        field('DPE (classe acceptée)', 'dpe', v.dpe || '', { type: 'select', options: [{ value: '', label: 'Indifférent' }].concat(DPE_ORDER.map((c) => ({ value: c, label: c + ' ou mieux' }))) }) +
         '<div class="se-field full"><label>Secteurs</label><div class="se-chips">' +
           QUARTIERS.map((q) => '<button type="button" class="se-chip" data-act="q-toggle" data-id="' + q.id + '" aria-pressed="' + ((v.quartiers || []).indexOf(q.id) > -1) + '">' + q.label + '</button>').join('') +
         '</div></div>' +
@@ -4494,6 +4628,7 @@
       } catch (e) { toast(e.message || 'Ajout impossible.', 'warn'); }
     },
     'robot-bien-tab': (el) => { state.robotBienTab = el.getAttribute('data-tab'); render(); },
+    'recherches-tri': (el) => { state.rechTri = el.getAttribute('data-tri'); render(); },
     'robot-enrichir': async (el) => {
       const id = el.getAttribute('data-id');
       const b = robotBien(id);
@@ -4589,6 +4724,24 @@
         }
       } catch (e) { state.dpe = null; toast(e.message || 'Recherche impossible.', 'warn'); }
       if (status) status.textContent = '';
+      render();
+    },
+    'recherche-dpe-opportunite': async (el) => {
+      const id = el.getAttribute('data-id');
+      const rec = recherche(id);
+      if (!rec) return;
+      el.disabled = true;
+      const texteInitial = el.textContent;
+      el.textContent = 'Recherche en cours…';
+      try {
+        const res = await rechercherDpePourRecherche(rec);
+        if (res.erreur === 'secteur') toast('Ajoutez un secteur à cette recherche pour cibler la recherche DPE.', 'warn');
+        else toast(res.ajoutes ? res.ajoutes + ' bien(s) DPE trouvé(s) et ajouté(s) aux opportunités.' : 'Aucun nouveau bien DPE trouvé pour ce secteur — réessayez plus tard.', res.ajoutes ? 'ok' : 'warn');
+      } catch (e) {
+        toast('Recherche DPE impossible.', 'warn');
+      }
+      el.disabled = false;
+      el.textContent = texteInitial;
       render();
     },
     'notification-traiter': async (el) => {
@@ -5217,7 +5370,7 @@
       const obj = {
         id: id || uid('r'), clientId: data.get('clientId'), titre: String(data.get('titre') || 'Recherche').trim(),
         type: data.get('type'), prixMax: chiffres(data.get('prixMax')), piecesMin: chiffres(data.get('piecesMin')),
-        surfaceMin: chiffres(data.get('surfaceMin')),
+        surfaceMin: chiffres(data.get('surfaceMin')), dpe: String(data.get('dpe') || ''),
         quartiers: $$('.se-chip[aria-pressed="true"]', form).map((c) => c.getAttribute('data-id')),
         statut: 'active', alertes: true,
         cree: existing ? existing.cree : nowISO()
