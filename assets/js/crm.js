@@ -822,7 +822,7 @@
           nav('biens', r.name, 'building', 'Produits') +
           nav('recherches', r.name, 'search', 'Recherches') +
           nav('robot', r.name, 'robot', 'Immo Data Robot', (matchings().filter((m) => m.statut === 'nouveau').length) || '') +
-          nav('notifications', r.name, 'inbox', 'Notifications', (notifications().length) || '') +
+          nav('notifications', r.name, 'inbox', 'À prévenir', (notifications().length) || '') +
         '</nav>' +
         '<div class="se-nav-label">Le Club</div>' +
         '<nav class="se-nav">' +
@@ -868,7 +868,7 @@
   }
 
   function titre(r) {
-    const map = { tableau: 'Tableau de bord', demandes: 'Candidatures', demande: 'Fiche demande', clients: 'Leads', reseau: 'Réseau', pipeline: 'Pipeline de relance', notifications: 'Notifications', client: 'Fiche lead', biens: 'Produits', bien: 'Fiche produit', recherches: 'Recherches', recherche: 'Recherche', robot: 'Immo Data Robot', 'robot-radar': 'Radar — Biens détectés', 'robot-opportunites': 'Opportunités Clients', 'robot-bien': 'Fiche bien Radar', 'robot-dpe': 'Recherche DPE', 'robot-proprietaires': 'Propriétaires', 'robot-proprietaire': 'Fiche propriétaire', 'portefeuille-foncier': 'Portefeuille foncier', 'societe-fonciere': 'Fiche société', membres: 'Membres', 'biens-club': 'Biens du club', rapprochements: 'Rapprochements', tracking: 'Tracking', visites: 'Visites', offres: 'Offres', verifications: 'Vérifications', taches: 'Tâches', messages: 'Messages', reglages: 'Réglages' };
+    const map = { tableau: 'Tableau de bord', demandes: 'Candidatures', demande: 'Fiche demande', clients: 'Leads', reseau: 'Réseau', pipeline: 'Pipeline de relance', notifications: 'À prévenir', client: 'Fiche lead', biens: 'Produits', bien: 'Fiche produit', recherches: 'Recherches', recherche: 'Recherche', robot: 'Immo Data Robot', 'robot-radar': 'Radar — Biens détectés', 'robot-opportunites': 'Opportunités Clients', 'robot-bien': 'Fiche bien Radar', 'robot-dpe': 'Recherche DPE', 'robot-proprietaires': 'Propriétaires', 'robot-proprietaire': 'Fiche propriétaire', 'portefeuille-foncier': 'Portefeuille foncier', 'societe-fonciere': 'Fiche société', membres: 'Membres', 'biens-club': 'Biens du club', rapprochements: 'Rapprochements', tracking: 'Tracking', visites: 'Visites', offres: 'Offres', verifications: 'Vérifications', taches: 'Tâches', messages: 'Messages', reglages: 'Réglages' };
     return map[r.name] || 'CRM';
   }
 
@@ -2454,12 +2454,28 @@
       out.push({ id: 'tache-' + t.id, clientId: t.clientId || '', sujet: t.titre, actionAuto: 'Rappel programmé', actionHumaine: 'Relance à effectuer', date: t.echeance, priorite: 'haute', type: 'relance' });
     });
     state.demandes.filter((d) => d.statut === 'nouvelle').forEach((d) => {
-      out.push({ id: 'demande-' + d.id, clientId: d.clientId || '', sujet: 'Nouvelle demande d’adhésion', actionAuto: 'Dossier reçu', actionHumaine: 'Traiter la demande', date: d.cree || new Date().toISOString(), priorite: 'haute', type: 'demande' });
+      // Les demandes synchronisées depuis le serveur portent leadId (l'id Lead
+      // côté serveur), jamais clientId (champ propre aux demandes locales/démo) :
+      // on résout le client local via serverId pour que le message pré-rempli et
+      // le bouton WhatsApp fonctionnent aussi pour une vraie candidature reçue.
+      const c = d.clientId ? client(d.clientId) : (d.leadId ? state.clients.find((x) => x.serverId === d.leadId) : null);
+      out.push({ id: 'demande-' + d.id, clientId: c ? c.id : '', sujet: 'Nouvelle demande d’adhésion', actionAuto: 'Dossier reçu', actionHumaine: 'Traiter la demande', date: d.cree || new Date().toISOString(), priorite: 'haute', type: 'demande' });
     });
     state.clients.filter((c) => c.serveurStatut === 'suspendu').forEach((c) => {
       out.push({ id: 'suspendu-' + c.id, clientId: c.id, sujet: 'Adhésion suspendue', actionAuto: 'Suspension enregistrée', actionHumaine: 'Régularisation à suivre', date: new Date().toISOString(), priorite: 'moyenne', type: 'adhesion' });
     });
     return out.filter((n) => traitees.indexOf(n.id) === -1);
+  }
+
+  // Message pré-rempli pour une relance "À prévenir", adapté au motif (tâche en
+  // retard, candidature à traiter, adhésion suspendue) — jamais envoyé
+  // automatiquement : seul un clic humain sur WhatsApp ou Copier agit.
+  function prevenirMessage(n, c) {
+    const prenom = c ? (c.prenom || '') : '';
+    if (n.type === 'relance') return 'Bonjour ' + prenom + ', je reviens vers vous au sujet de « ' + n.sujet + ' ». Où en êtes-vous ?\n\nBien cordialement,\nGabriel Taieb\nSeecret';
+    if (n.type === 'demande') return 'Bonjour ' + prenom + ', nous avons bien reçu votre demande et revenons vers vous très rapidement.\n\nBien cordialement,\nGabriel Taieb\nSeecret';
+    if (n.type === 'adhesion') return 'Bonjour ' + prenom + ', votre adhésion à Seecret est actuellement suspendue. Je reste à votre disposition si vous souhaitez en discuter.\n\nBien cordialement,\nGabriel Taieb\nSeecret';
+    return 'Bonjour ' + prenom + ', je reviens vers vous au sujet de « ' + n.sujet + ' ».\n\nBien cordialement,\nGabriel Taieb\nSeecret';
   }
 
   function viewNotifications() {
@@ -2468,21 +2484,25 @@
     const carte = (n) => {
       const c = n.clientId ? client(n.clientId) : null;
       const tel = c ? String(c.tel || '').replace(/[^0-9]/g, '') : '';
+      const msg = c ? prevenirMessage(n, c) : '';
+      const wa = tel ? 'https://wa.me/' + tel + '?text=' + encodeURIComponent(msg) : '';
       return '<div class="se-list-item" style="align-items:flex-start">' +
+        '<label class="se-reseau-check" style="padding-top:2px"><input type="checkbox" data-act="notification-traiter" data-id="' + n.id + '" title="Fait"/></label>' +
         '<div style="flex:1;min-width:0">' +
           '<div class="se-kicker" style="font-size:9.5px">' + esc(n.type.toUpperCase()) + '</div>' +
           '<div style="font-size:13.5px;font-weight:500">' + esc(n.sujet) + '</div>' +
           '<div class="se-hint">' + esc(n.actionAuto) + ' → ' + esc(n.actionHumaine) + '</div>' +
           '<div class="se-hint">' + anciennete(n.date) + (c ? ' · ' + esc(nomClient(c)) : '') + '</div>' +
+          (c ? '<p class="se-reseau-msg">' + esc(msg.replace(/\n+/g, ' ')) + '</p>' : '') +
         '</div>' +
         '<div style="flex:0 0 auto;display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end">' +
-          (tel ? '<button class="se-btn ghost sm" data-act="notification-whatsapp" data-id="' + n.id + '">WhatsApp</button>' : '') +
+          (c ? '<button class="se-btn ghost sm" data-act="copier-contact" data-value="' + esc(msg) + '">Copier</button>' : '') +
+          (wa ? '<a class="se-btn ghost sm" href="' + esc(wa) + '" target="_blank" rel="noopener">WhatsApp</a>' : '') +
           (c ? '<a class="se-btn ghost sm" href="#/client/' + c.id + '">Fiche</a>' : '') +
-          '<button class="se-btn ghost sm" data-act="notification-traiter" data-id="' + n.id + '">Traité</button>' +
         '</div>' +
       '</div>';
     };
-    return head('Intelligence', 'Notifications', list.length + ' action(s) humaine(s) à effectuer.', '') +
+    return head('Intelligence', 'À prévenir', list.length + ' action(s) humaine(s) à effectuer — case « Fait » une fois le contact recontacté.', '') +
       (list.length ? '<div class="se-card"><div class="se-list">' + list.map(carte).join('') + '</div></div>' : '<div class="se-card"><p class="se-muted">Aucune action en attente. Tout est à jour.</p></div>');
   }
 
