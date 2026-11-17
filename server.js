@@ -1747,6 +1747,44 @@ app.get('/api/robot/dirigeants', requireAdmin, async (req, res) => {
   } catch (e) { res.status(502).json({ error: 'SIRENE injoignable.' }); }
 });
 
+// Signal BODACC — Bulletin officiel des annonces civiles et commerciales (data.gouv.fr /
+// Opendatasoft, API publique et gratuite, sans clé). Sert à détecter qu'une société ou SCI déjà
+// repérée comme propriétaire par le Radar fait l'objet d'une procédure collective (liquidation,
+// redressement) ou d'une radiation — signal légal et public de vente potentiellement forcée.
+const BODACC_URL = 'https://bodacc-datadila.opendatasoft.com/api/records/1.0/search/';
+app.get('/api/robot/bodacc', requireAdmin, async (req, res) => {
+  const siren = String(req.query.siren || '').replace(/\s/g, '').trim();
+  if (!/^\d{9}$/.test(siren)) return res.status(400).json({ error: 'SIREN à 9 chiffres requis.' });
+  try {
+    const params = new URLSearchParams();
+    params.set('dataset', 'annonces-commerciales');
+    params.set('q', siren);
+    params.set('rows', '20');
+    params.set('sort', '-dateparution');
+    const r = await fetch(BODACC_URL + '?' + params.toString(), { signal: AbortSignal.timeout(15000) });
+    if (!r.ok) return res.status(502).json({ error: 'BODACC a répondu ' + r.status + '.' });
+    const data = await r.json().catch(() => ({}));
+    const records = Array.isArray(data.records) ? data.records : [];
+    // Le paramètre q est une recherche plein texte côté BODACC : on revérifie nous-mêmes que le
+    // SIREN apparaît bien dans le champ registre pour écarter les faux positifs (homonymes, etc.).
+    const annonces = records
+      .map((rec) => rec.fields || {})
+      .filter((f) => (Array.isArray(f.registre) ? f.registre : []).some((x) => String(x).indexOf(siren) > -1))
+      .map((f) => ({
+        dateparution: f.dateparution || null,
+        commercant: f.commercant || '',
+        ville: f.ville || '',
+        tribunal: f.tribunal || '',
+        familleavis: f.familleavis_lib || f.familleavis || '',
+        natureJugement: (f.jugement && (f.jugement.nature || f.jugement.famille)) || '',
+        dateJugement: (f.jugement && f.jugement.date) || null
+      }));
+    res.json({ ok: true, siren: siren, annonces: annonces });
+  } catch (e) {
+    res.status(502).json({ error: 'BODACC injoignable.' });
+  }
+});
+
 app.post('/api/robot/enrichir', requireAdmin, async (req, res) => {
   const adresse = String((req.body && req.body.adresse) || '').trim();
   if (!adresse) return res.status(400).json({ error: 'Adresse requise.' });
