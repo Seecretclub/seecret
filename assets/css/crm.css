@@ -258,3 +258,64 @@
   .se-reseau-actions .se-btn { width: 100%; }
   .se-reseau-bulkbar { bottom: 74px; } /* au-dessus de la barre de nav mobile fixe */
 }
+
+/* --------------------------- Célia (bulle flottante) -------------------------- */
+
+.se-celia-btn {
+  position: fixed; right: max(22px, env(safe-area-inset-right)); bottom: max(22px, env(safe-area-inset-bottom));
+  z-index: 40; width: 56px; height: 56px; border-radius: 999px; border: none; cursor: pointer;
+  background: var(--color-ink); color: #fff; display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 10px 28px rgba(20,18,16,.3);
+}
+.se-celia-btn:hover { opacity: .92; }
+.se-celia-btn svg { width: 23px; height: 23px; }
+.se-celia-btn-dot {
+  position: absolute; top: 4px; right: 4px; width: 10px; height: 10px; border-radius: 999px;
+  background: #3ba55d; border: 2px solid var(--color-ink);
+}
+
+.se-celia-panel {
+  position: fixed; right: max(20px, env(safe-area-inset-right)); bottom: max(20px, env(safe-area-inset-bottom));
+  z-index: 41; width: 380px; max-width: calc(100vw - 32px);
+  max-height: min(620px, calc(100vh - 48px)); display: flex; flex-direction: column;
+  background: var(--color-paper); border: 1px solid var(--color-stroke-faint); border-radius: 20px;
+  box-shadow: 0 24px 64px rgba(20,18,16,.26); overflow: hidden;
+}
+.se-celia-head {
+  flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between;
+  padding: 13px 14px; border-bottom: 1px solid var(--color-stroke-faint);
+}
+.se-celia-head .nom { display: flex; align-items: center; gap: 9px; font-weight: 600; font-size: 14.5px; }
+.se-celia-avatar {
+  width: 26px; height: 26px; border-radius: 999px; background: var(--color-club-violet); color: #fff;
+  display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; flex: 0 0 auto;
+}
+.se-celia-icon {
+  border: none; background: transparent; cursor: pointer; color: var(--color-taupe);
+  width: 30px; height: 30px; border-radius: 999px; display: flex; align-items: center; justify-content: center;
+}
+.se-celia-icon:hover { background: var(--color-club-mist); color: var(--color-ink); }
+.se-celia-icon svg { width: 16px; height: 16px; }
+.se-celia-body { flex: 1 1 auto; overflow-y: auto; padding: 14px; min-height: 160px; }
+.se-celia-foot { flex: 0 0 auto; padding: 10px; border-top: 1px solid var(--color-stroke-faint); }
+.se-celia-foot form { display: flex; gap: 8px; align-items: center; }
+.se-celia-foot .se-input { flex: 1 1 auto; min-width: 0; }
+.se-celia-mic {
+  flex: 0 0 auto; width: 36px; height: 36px; border-radius: 999px; border: none; cursor: pointer;
+  background: var(--color-club-mist); color: var(--color-ink); display: flex; align-items: center; justify-content: center;
+}
+.se-celia-mic svg { width: 17px; height: 17px; }
+.se-celia-mic.actif { background: var(--color-alert, #c0392b); color: #fff; animation: se-celia-pulse 1.3s ease-in-out infinite; }
+@keyframes se-celia-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(192,57,43,.45); }
+  50% { box-shadow: 0 0 0 9px rgba(192,57,43,0); }
+}
+
+@media (max-width: 860px) {
+  .se-celia-btn { bottom: max(90px, calc(74px + env(safe-area-inset-bottom) + 16px)); }
+  .se-celia-panel {
+    right: 12px; left: 12px; width: auto; max-width: none;
+    bottom: max(90px, calc(74px + env(safe-area-inset-bottom) + 16px));
+    max-height: min(70vh, calc(100vh - 170px));
+  }
+}

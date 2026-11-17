@@ -2375,29 +2375,48 @@ app.use((err, req, res, next) => {
 });
 
 // ====================================================================
-// Assistant CRM conversationnel — un agent qui sort de rendez-vous parle en
-// langage naturel à l'IA (Claude, via l'API Anthropic, avec tool use) et elle
-// exécute les actions correspondantes directement dans le CRM : créer/mettre
-// à jour un lead, changer son statut pipeline, programmer un rappel daté,
-// envoyer l'invitation au parcours de candidature. Nécessite ANTHROPIC_API_KEY
-// en variable d'environnement — sans elle, l'endpoint répond une erreur claire
+// Assistant CRM conversationnel (Célia) — un agent qui sort de rendez-vous lui
+// parle en langage naturel (ou au micro, côté client) et elle exécute les
+// actions correspondantes directement dans le CRM : créer/mettre à jour un
+// lead, changer son statut pipeline, programmer un rappel daté, envoyer
+// l'invitation au parcours de candidature.
+//
+// Deux fournisseurs d'IA supportés, au choix via la variable AI_PROVIDER :
+//   - 'gemini'    (par défaut si GEMINI_API_KEY est présente) : API Gemini de
+//                 Google (Google AI Studio) — GRATUITE, sans carte bancaire.
+//   - 'anthropic' (par défaut sinon, ou si ANTHROPIC_API_KEY est présente)  :
+//                 API Anthropic (Claude) — payante à l'usage, nécessite une
+//                 carte bancaire sur console.anthropic.com.
+// Sans clé pour le fournisseur actif, l'endpoint répond une erreur claire
 // plutôt que de planter.
 // ====================================================================
+const AI_PROVIDER = (process.env.AI_PROVIDER || (process.env.GEMINI_API_KEY ? 'gemini' : 'anthropic')).toLowerCase();
+
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-5-20250929';
 // Configurable pour les tests (pointé vers un faux serveur qui imite l'API
 // Anthropic) — en production, reste toujours l'API officielle par défaut.
 const ANTHROPIC_API_BASE = process.env.ANTHROPIC_API_BASE || 'https://api.anthropic.com';
 
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+// Modèle gratuit (sans carte bancaire) sur Google AI Studio au moment de
+// l'écriture — vérifiable/ajustable sur aistudio.google.com si Google change
+// l'offre gratuite.
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const GEMINI_API_BASE = process.env.GEMINI_API_BASE || 'https://generativelanguage.googleapis.com';
+
 function escHtml(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-const ASSISTANT_TOOLS = [
+// Définition neutre (indépendante du fournisseur) des outils de Célia — adaptée
+// au format Anthropic (`input_schema`) ou Gemini (`functionDeclarations`/
+// `parameters`) selon AI_PROVIDER, voir ASSISTANT_TOOLS_ANTHROPIC/GEMINI plus bas.
+const OUTILS_ASSISTANT = [
   {
     name: 'creer_ou_maj_lead',
     description: "Crée un nouveau lead (prospect/contact) dans le CRM, ou met à jour un lead existant si un lead avec le même email, téléphone ou nom complet existe déjà. À utiliser dès qu'un agent rapporte un échange ou un rendez-vous avec un propriétaire ou un contact à suivre.",
-    input_schema: {
+    parameters: {
       type: 'object',
       properties: {
         prenom: { type: 'string', description: 'Prénom du contact, si connu' },
@@ -2415,7 +2434,7 @@ const ASSISTANT_TOOLS = [
   {
     name: 'changer_pipeline',
     description: "Change le statut de suivi commercial (pipeline) d'un lead déjà identifié par son nom complet.",
-    input_schema: {
+    parameters: {
       type: 'object',
       properties: {
         nomComplet: { type: 'string', description: 'Nom complet (prénom + nom) du lead concerné' },
@@ -2427,7 +2446,7 @@ const ASSISTANT_TOOLS = [
   {
     name: 'programmer_rappel',
     description: "Programme un rappel daté (ex. un rendez-vous, une relance à faire) lié à un lead déjà identifié par son nom complet.",
-    input_schema: {
+    parameters: {
       type: 'object',
       properties: {
         nomComplet: { type: 'string', description: 'Nom complet (prénom + nom) du lead concerné' },
@@ -2441,7 +2460,7 @@ const ASSISTANT_TOOLS = [
   {
     name: 'envoyer_invitation_candidature',
     description: "Envoie par email le lien vers le parcours de candidature/adhésion Seecret à un lead déjà identifié par son nom complet et qui a un email connu.",
-    input_schema: {
+    parameters: {
       type: 'object',
       properties: {
         nomComplet: { type: 'string', description: 'Nom complet (prénom + nom) du lead concerné' },
@@ -2451,8 +2470,10 @@ const ASSISTANT_TOOLS = [
     }
   }
 ];
+const ASSISTANT_TOOLS_ANTHROPIC = OUTILS_ASSISTANT.map((o) => ({ name: o.name, description: o.description, input_schema: o.parameters }));
+const ASSISTANT_TOOLS_GEMINI = [{ functionDeclarations: OUTILS_ASSISTANT.map((o) => ({ name: o.name, description: o.description, parameters: o.parameters })) }];
 
-const ASSISTANT_SYSTEM = "Tu es l'assistant interne du CRM Seecret, une agence immobilière. Un agent te parle en langage naturel, en général juste après un rendez-vous ou une visite, pour te raconter ce qui s'est passé. Comprends ce qu'il raconte et exécute toi-même les actions correspondantes dans le CRM via les outils fournis — ne te contente jamais de répondre en texte si une action est possible. Si plusieurs actions sont nécessaires (ex. créer le lead ET programmer un rappel ET envoyer l'invitation), appelle plusieurs outils, dans un ordre logique (toujours créer/identifier le lead avant d'agir sur lui). Si une information nécessaire manque (ex. aucune date pour un rappel), pose la question à l'agent au lieu d'inventer une valeur. Réponds toujours en français, de façon brève et concrète, en confirmant ce que tu as fait.";
+const ASSISTANT_SYSTEM = "Tu es Célia, l'assistante interne vocale du CRM Seecret, une agence immobilière. Un agent te parle à l'oral ou à l'écrit, en général juste après un rendez-vous ou une visite, pour te raconter ce qui s'est passé. Comprends ce qu'il raconte et exécute toi-même les actions correspondantes dans le CRM via les outils fournis — ne te contente jamais de répondre en texte si une action est possible. Si plusieurs actions sont nécessaires (ex. créer le lead ET programmer un rappel ET envoyer l'invitation), appelle plusieurs outils, dans un ordre logique (toujours créer/identifier le lead avant d'agir sur lui). Si une information nécessaire manque (ex. aucune date pour un rappel), pose la question à l'agent au lieu d'inventer une valeur. Réponds toujours en français, de façon brève, orale et naturelle (ta réponse peut être lue à voix haute), en confirmant ce que tu as fait.";
 
 function trouverLeadParNom(db, texte) {
   const q = String(texte || '').trim().toLowerCase();
@@ -2497,7 +2518,7 @@ async function envoyerInvitationCandidatureEmail(req, lead, messagePersonnalise)
 // d'actions affiché à l'agent dans le panneau de chat.
 async function dispatchOutilAssistant(db, req, nomOutil, input) {
   input = input || {};
-  const auteur = 'Assistant · ' + nomComplet(req.lead);
+  const auteur = 'Célia · ' + nomComplet(req.lead);
 
   if (nomOutil === 'creer_ou_maj_lead') {
     const nom = String(input.nom || '').trim();
@@ -2577,43 +2598,92 @@ async function callAnthropic(messages) {
   const resp = await fetch(ANTHROPIC_API_BASE + '/v1/messages', {
     method: 'POST',
     headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: ANTHROPIC_MODEL, max_tokens: 1024, system: ASSISTANT_SYSTEM, tools: ASSISTANT_TOOLS, messages: messages })
+    body: JSON.stringify({ model: ANTHROPIC_MODEL, max_tokens: 1024, system: ASSISTANT_SYSTEM, tools: ASSISTANT_TOOLS_ANTHROPIC, messages: messages })
   });
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) throw Object.assign(new Error((data && data.error && data.error.message) || ('Anthropic ' + resp.status)), { code: 'API_ERROR' });
   return data;
 }
 
+async function callGemini(contents) {
+  if (!GEMINI_API_KEY) throw Object.assign(new Error('GEMINI_API_KEY non configurée sur ce serveur.'), { code: 'NO_KEY' });
+  const resp = await fetch(GEMINI_API_BASE + '/v1beta/models/' + encodeURIComponent(GEMINI_MODEL) + ':generateContent', {
+    method: 'POST',
+    headers: { 'x-goog-api-key': GEMINI_API_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ system_instruction: { parts: [{ text: ASSISTANT_SYSTEM }] }, contents: contents, tools: ASSISTANT_TOOLS_GEMINI })
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw Object.assign(new Error((data && data.error && data.error.message) || ('Gemini ' + resp.status)), { code: 'API_ERROR' });
+  return data;
+}
+
+async function conversationAnthropic(db, req, historique, message) {
+  const messages = historique.concat([{ role: 'user', content: message }]);
+  const actions = [];
+  let tours = 0;
+  let data = await callAnthropic(messages);
+  while (data.stop_reason === 'tool_use' && tours < 6) {
+    tours++;
+    messages.push({ role: 'assistant', content: data.content });
+    const toolResults = [];
+    for (const bloc of data.content) {
+      if (bloc.type !== 'tool_use') continue;
+      const r = await dispatchOutilAssistant(db, req, bloc.name, bloc.input);
+      if (r && r.resume) actions.push({ outil: bloc.name, resume: r.resume, lien: r.lien || null });
+      toolResults.push({ type: 'tool_result', tool_use_id: bloc.id, content: JSON.stringify((r && r.resultat) || r) });
+    }
+    writeDb(db);
+    messages.push({ role: 'user', content: toolResults });
+    data = await callAnthropic(messages);
+  }
+  messages.push({ role: 'assistant', content: data.content });
+  const texte = (data.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim() || 'Fait.';
+  return { texte: texte, actions: actions, historique: messages };
+}
+
+async function conversationGemini(db, req, historique, message) {
+  let contents = historique.concat([{ role: 'user', parts: [{ text: message }] }]);
+  const actions = [];
+  let tours = 0;
+  let data = await callGemini(contents);
+  let parts = (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) || [];
+  let appels = parts.filter((p) => p.functionCall);
+  while (appels.length && tours < 6) {
+    tours++;
+    contents.push({ role: 'model', parts: parts });
+    const reponses = [];
+    for (const p of appels) {
+      const fc = p.functionCall;
+      const r = await dispatchOutilAssistant(db, req, fc.name, fc.args);
+      if (r && r.resume) actions.push({ outil: fc.name, resume: r.resume, lien: r.lien || null });
+      reponses.push({ functionResponse: { name: fc.name, id: fc.id, response: { result: (r && r.resultat) || r } } });
+    }
+    writeDb(db);
+    contents.push({ role: 'user', parts: reponses });
+    data = await callGemini(contents);
+    parts = (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) || [];
+    appels = parts.filter((p) => p.functionCall);
+  }
+  contents.push({ role: 'model', parts: parts });
+  const texte = parts.filter((p) => p.text).map((p) => p.text).join('\n').trim() || 'Fait.';
+  return { texte: texte, actions: actions, historique: contents };
+}
+
 // Boucle de conversation avec tool use : tant que le modèle demande des outils,
 // on les exécute et on lui renvoie le résultat, jusqu'à ce qu'il réponde en texte
-// (ou 6 tours maximum, garde-fou contre une boucle infinie).
+// (ou 6 tours maximum, garde-fou contre une boucle infinie). Le format de
+// `historique` dépend du fournisseur actif (AI_PROVIDER) — le client le traite
+// comme une donnée opaque, à retourner telle quelle au tour suivant.
 app.post('/api/assistant/chat', requireAdmin, async (req, res) => {
   const message = String((req.body && req.body.message) || '').trim();
   if (!message) return res.status(400).json({ error: 'Message vide.' });
   const historique = Array.isArray(req.body && req.body.historique) ? req.body.historique : [];
   const db = readDb();
-  const messages = historique.concat([{ role: 'user', content: message }]);
-  const actions = [];
-  let tours = 0;
   try {
-    let data = await callAnthropic(messages);
-    while (data.stop_reason === 'tool_use' && tours < 6) {
-      tours++;
-      messages.push({ role: 'assistant', content: data.content });
-      const toolResults = [];
-      for (const bloc of data.content) {
-        if (bloc.type !== 'tool_use') continue;
-        const r = await dispatchOutilAssistant(db, req, bloc.name, bloc.input);
-        if (r && r.resume) actions.push({ outil: bloc.name, resume: r.resume, lien: r.lien || null });
-        toolResults.push({ type: 'tool_result', tool_use_id: bloc.id, content: JSON.stringify((r && r.resultat) || r) });
-      }
-      writeDb(db);
-      messages.push({ role: 'user', content: toolResults });
-      data = await callAnthropic(messages);
-    }
-    messages.push({ role: 'assistant', content: data.content });
-    const texte = (data.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim() || 'Fait.';
-    res.json({ ok: true, reponse: texte, actions: actions, historique: messages });
+    const resultat = AI_PROVIDER === 'gemini'
+      ? await conversationGemini(db, req, historique, message)
+      : await conversationAnthropic(db, req, historique, message);
+    res.json({ ok: true, reponse: resultat.texte, actions: resultat.actions, historique: resultat.historique });
   } catch (err) {
     if (err && err.code === 'NO_KEY') return res.status(503).json({ error: err.message });
     res.status(502).json({ error: (err && err.message) || "Impossible de contacter l'assistant." });

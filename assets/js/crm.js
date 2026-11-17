@@ -50,7 +50,11 @@
     phone: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3h3l1.5 4-2 1.5a10 10 0 0 0 4 4L13 10.5 17 12v3a1 1 0 0 1-1 1A13 13 0 0 1 3 4a1 1 0 0 1 1-1z"/></svg>',
     mail: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4.5" width="15" height="11" rx="2"/><path d="m3 6 7 5 7-5"/></svg>',
     tools: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m12.5 7.5 5 5-3 3-5-5M7.5 12.5l-5-5 3-3 5 5"/><path d="m3 17 2.5-2.5M14.5 5.5 17 3"/></svg>',
-    out: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h4M13 6l4 4-4 4M17 10H7"/></svg>'
+    out: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h4M13 6l4 4-4 4M17 10H7"/></svg>',
+    mic: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2.5" width="6" height="10" rx="3"/><path d="M4.5 9.5a5.5 5.5 0 0 0 11 0M10 15v2.5M7 17.5h6"/></svg>',
+    x: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M5 5l10 10M15 5 5 15"/></svg>',
+    volume: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8v4h3l4 3.5v-10.5L6 8z"/><path d="M14 7a4 4 0 0 1 0 6"/></svg>',
+    volumeOff: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8v4h3l4 3.5v-10.5L6 8z"/><path d="m13 7.5 4 4m0-4-4 4"/></svg>'
   };
 
   /* ================================= données ============================== */
@@ -111,9 +115,9 @@
     offre_acceptee: { label: 'Offre acceptée', icon: 'check' },
     retour_silence: { label: 'Contacté, puis silence — à relancer', icon: 'chat' },
     converti: { label: 'Converti en membre', icon: 'check' },
-    lead_cree_assistant: { label: 'Lead créé par l’Assistant', icon: 'chat' },
-    lead_maj_assistant: { label: 'Lead mis à jour par l’Assistant', icon: 'chat' },
-    rappel_programme: { label: 'Rappel programmé par l’Assistant', icon: 'calendar' },
+    lead_cree_assistant: { label: 'Lead créé par Célia', icon: 'chat' },
+    lead_maj_assistant: { label: 'Lead mis à jour par Célia', icon: 'chat' },
+    rappel_programme: { label: 'Rappel programmé par Célia', icon: 'calendar' },
     candidature_envoyee: { label: 'Invitation à candidater envoyée', icon: 'inbox' }
   };
 
@@ -188,16 +192,24 @@
   let modal = null;
   let modalLarge = false;
   let lastRoute = '';
+  // Célia : état purement éphémère de la bulle (jamais persisté, comme `modal`) —
+  // ouverte/fermée, et si une écoute vocale est en cours.
+  let celiaOuvert = false;
+  let celiaEcoute = false;
+  let celiaReco = null;
   state.docsParLead = state.docsParLead || {};
   state.tachesVerif = state.tachesVerif || [];
   state.biensServeur = state.biensServeur || [];
   state.recherchesServeur = state.recherchesServeur || [];
-  // Assistant CRM conversationnel : messages affichés à l'écran (avec le résumé
-  // des actions exécutées) + l'historique brut envoyé à l'API pour que l'IA se
-  // souvienne du fil de la conversation. Purement local (jamais resynchronisé
-  // depuis le serveur), comme la cadence de relance.
-  state.assistantMessages = state.assistantMessages || [];
-  state.assistantHistorique = state.assistantHistorique || [];
+  // Célia (assistant CRM conversationnel et vocal) : messages affichés à l'écran
+  // (avec le résumé des actions exécutées) + l'historique brut envoyé à l'API
+  // pour qu'elle se souvienne du fil de la conversation. Purement local (jamais
+  // resynchronisé depuis le serveur), comme la cadence de relance. Migration
+  // depuis les anciens noms de clés (panneau "Assistant" avant Célia).
+  state.celiaMessages = state.celiaMessages || state.assistantMessages || [];
+  state.celiaHistorique = state.celiaHistorique || state.assistantHistorique || [];
+  delete state.assistantMessages;
+  delete state.assistantHistorique;
 
   function load() {
     try {
@@ -814,7 +826,6 @@
       verifications: viewVerifications,
       taches: viewTaches,
       messages: viewMessages,
-      assistant: viewAssistant,
       reglages: viewReglages
     };
 
@@ -846,7 +857,6 @@
         '<div class="se-nav-scroll">' +
         '<nav class="se-nav">' +
           nav('tableau', r.name, 'home', 'Tableau de bord') +
-          nav('assistant', r.name, 'chat', 'Assistant') +
         '</nav>' +
         '<div class="se-nav-label">Prospection</div>' +
         '<nav class="se-nav">' +
@@ -897,11 +907,12 @@
         '</div>' +
         '<div class="se-view">' + content + '</div>' +
       '</div>' +
-    '</div>';
+    '</div>' +
+    celiaWidget();
   }
 
   function titre(r) {
-    const map = { tableau: 'Tableau de bord', demandes: 'Candidatures', demande: 'Fiche demande', clients: 'Leads', reseau: 'Réseau', pipeline: 'Pipeline de relance', notifications: 'À prévenir', client: 'Fiche lead', biens: 'Produits', bien: 'Fiche produit', recherches: 'Recherches', recherche: 'Recherche', robot: 'Immo Data Robot', 'robot-radar': 'Radar — Biens détectés', 'robot-opportunites': 'Opportunités Clients', 'robot-bien': 'Fiche bien Radar', 'robot-dpe': 'Recherche DPE', 'robot-proprietaires': 'Propriétaires', 'robot-proprietaire': 'Fiche propriétaire', 'portefeuille-foncier': 'Portefeuille foncier', 'societe-fonciere': 'Fiche société', bodacc: 'Signaux BODACC', membres: 'Membres', 'biens-club': 'Biens du club', rapprochements: 'Rapprochements', tracking: 'Tracking', visites: 'Visites', offres: 'Propositions → Offres', verifications: 'Vérifications', taches: 'Tâches', messages: 'Messages', assistant: 'Assistant', reglages: 'Réglages' };
+    const map = { tableau: 'Tableau de bord', demandes: 'Candidatures', demande: 'Fiche demande', clients: 'Leads', reseau: 'Réseau', pipeline: 'Pipeline de relance', notifications: 'À prévenir', client: 'Fiche lead', biens: 'Produits', bien: 'Fiche produit', recherches: 'Recherches', recherche: 'Recherche', robot: 'Immo Data Robot', 'robot-radar': 'Radar — Biens détectés', 'robot-opportunites': 'Opportunités Clients', 'robot-bien': 'Fiche bien Radar', 'robot-dpe': 'Recherche DPE', 'robot-proprietaires': 'Propriétaires', 'robot-proprietaire': 'Fiche propriétaire', 'portefeuille-foncier': 'Portefeuille foncier', 'societe-fonciere': 'Fiche société', bodacc: 'Signaux BODACC', membres: 'Membres', 'biens-club': 'Biens du club', rapprochements: 'Rapprochements', tracking: 'Tracking', visites: 'Visites', offres: 'Propositions → Offres', verifications: 'Vérifications', taches: 'Tâches', messages: 'Messages', reglages: 'Réglages' };
     return map[r.name] || 'CRM';
   }
 
@@ -3641,29 +3652,143 @@
       '</div>';
   }
 
-  /* --------------------------------- assistant ----------------------------- */
+  /* ----------------------------------- célia -------------------------------- */
+  // Célia (clin d'œil à « IA ») : l'assistant conversationnel et vocal du CRM,
+  // sous forme de bulle flottante présente sur tout l'écran (pas un onglet) —
+  // un agent qui sort de rendez-vous lui parle directement au micro, où qu'il
+  // soit dans le CRM, et elle agit (lead, pipeline, rappel, candidature).
 
-  function viewAssistant() {
-    const msgs = state.assistantMessages || [];
-    return head('CRM', 'Assistant', 'Racontez un rendez-vous ou une visite en langage naturel — il crée ou met à jour le lead, programme un rappel, change le pipeline ou envoie l’invitation à candidater, directement dans le CRM.') +
-      '<div class="se-card" style="max-width:720px">' +
-        '<div class="se-chat" data-assistant-scroll style="max-height:50vh;overflow-y:auto">' +
-          (msgs.length ? msgs.map((m) => (
-            '<div class="se-bubble ' + (m.role === 'user' ? 'me' : 'agent') + '">' +
-              esc(m.texte).replace(/\n/g, '<br>') +
-              ((m.actions && m.actions.length) ? '<div class="se-row" style="flex-wrap:wrap;gap:6px;margin-top:8px">' +
-                m.actions.map((a) => (a.lien ? '<a class="se-badge open" href="' + a.lien + '">' + esc(a.resume) + '</a>' : '<span class="se-badge open">' + esc(a.resume) + '</span>')).join('') +
-              '</div>' : '') +
-            '</div>'
-          )).join('') : '<p class="se-muted">Exemple : « Je sors de chez Mme Intel, 12 rue de Seine, elle veut vendre. Envoie-lui la candidature et programme un rappel pour le 28. »</p>') +
-          (state.assistantEnCours ? '<div class="se-bubble agent"><span class="se-muted">…</span></div>' : '') +
+  function vocalActif() {
+    try { return localStorage.getItem('seecret.celia.vocal') !== 'off'; } catch (e) { return true; }
+  }
+  function basculerVocal() {
+    try { localStorage.setItem('seecret.celia.vocal', vocalActif() ? 'off' : 'on'); } catch (e) { /* ignore */ }
+    if (!vocalActif() && window.speechSynthesis) window.speechSynthesis.cancel();
+    render();
+  }
+  function direAVoixHaute(texte) {
+    if (!window.speechSynthesis || !vocalActif() || !texte) return;
+    try {
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(texte);
+      u.lang = 'fr-FR';
+      const voix = window.speechSynthesis.getVoices().find((v) => /^fr/i.test(v.lang));
+      if (voix) u.voice = voix;
+      window.speechSynthesis.speak(u);
+    } catch (e) { /* ignore */ }
+  }
+
+  function reconnaissanceDisponible() {
+    return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+  }
+
+  // Centralise l'envoi d'un message à Célia (texte tapé OU dicté au micro) —
+  // appelée directement par le code, jamais via un événement `submit` simulé :
+  // un `render()` peut avoir lieu entre-temps (ex. à la fin de l'écoute vocale)
+  // et détacherait le formulaire du DOM, empêchant l'événement de remonter.
+  async function envoyerMessageCelia(texte) {
+    texte = String(texte || '').trim();
+    if (!texte || state.celiaEnCours) return;
+    state.celiaMessages.push({ role: 'user', texte: texte, at: nowISO() });
+    state.celiaEnCours = true;
+    commit();
+    let reponseTexte = '';
+    try {
+      const r = await fetch('/api/assistant/chat', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+        body: JSON.stringify({ message: texte, historique: state.celiaHistorique })
+      });
+      const res = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(res.error || 'Erreur serveur');
+      reponseTexte = res.reponse || '…';
+      state.celiaMessages.push({ role: 'assistant', texte: reponseTexte, actions: res.actions || [], at: nowISO() });
+      // On ne garde que les 30 derniers messages envoyés à l'API, pour que
+      // l'historique ne grossisse pas indéfiniment au fil d'une longue session.
+      state.celiaHistorique = (res.historique || []).slice(-30);
+    } catch (e) {
+      reponseTexte = 'Désolé, une erreur est survenue : ' + (e.message || 'inconnue') + '.';
+      state.celiaMessages.push({ role: 'assistant', texte: reponseTexte, actions: [] });
+    }
+    state.celiaEnCours = false;
+    commit();
+    direAVoixHaute(reponseTexte);
+    setTimeout(() => {
+      const box = document.querySelector('[data-celia-scroll]');
+      if (box) box.scrollTop = box.scrollHeight;
+    }, 30);
+  }
+
+  function basculerEcoute() {
+    const Ctor = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Ctor) { toast('Reconnaissance vocale non disponible sur ce navigateur — utilisez le clavier.', 'warn'); return; }
+    if (celiaEcoute) { if (celiaReco) celiaReco.stop(); return; }
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
+    const reco = new Ctor();
+    reco.lang = 'fr-FR';
+    reco.interimResults = true;
+    reco.maxAlternatives = 1;
+    celiaReco = reco;
+    celiaEcoute = true;
+    render();
+    reco.onresult = (e) => {
+      let texte = '';
+      for (let i = 0; i < e.results.length; i++) texte += e.results[i][0].transcript;
+      const input = document.querySelector('.se-celia-panel form[data-form="celia"] input[name="texte"]');
+      if (input) input.value = texte;
+      if (e.results[e.results.length - 1].isFinal) reco.stop();
+    };
+    reco.onerror = () => { celiaEcoute = false; celiaReco = null; render(); };
+    reco.onend = () => {
+      // On capture le texte dicté AVANT le render() qui suit : il détache le
+      // <form> et son <input> du DOM, donc un événement "submit" simulé sur
+      // l'ancien nœud ne remonterait plus jusqu'au gestionnaire délégué.
+      // On appelle donc directement envoyerMessageCelia() avec le texte capturé,
+      // sans dépendre d'un événement DOM.
+      const input = document.querySelector('.se-celia-panel form[data-form="celia"] input[name="texte"]');
+      const texte = input ? input.value.trim() : '';
+      celiaEcoute = false;
+      celiaReco = null;
+      render();
+      if (texte) envoyerMessageCelia(texte);
+    };
+    try { reco.start(); } catch (e) { celiaEcoute = false; celiaReco = null; render(); }
+  }
+
+  function celiaWidget() {
+    if (!celiaOuvert) {
+      return '<button class="se-celia-btn" data-act="celia-toggle" aria-label="Ouvrir Célia">' +
+        '<span class="se-celia-btn-dot"></span>' + ICONS.chat +
+      '</button>';
+    }
+    const msgs = state.celiaMessages || [];
+    return '<div class="se-celia-panel">' +
+      '<div class="se-celia-head">' +
+        '<span class="nom"><span class="se-celia-avatar">C</span>Célia</span>' +
+        '<div class="se-row" style="gap:2px">' +
+          '<button class="se-celia-icon" data-act="celia-vocal-toggle" title="' + (vocalActif() ? 'Couper la voix' : 'Activer la voix') + '">' + (vocalActif() ? ICONS.volume : ICONS.volumeOff) + '</button>' +
+          (msgs.length ? '<button class="se-celia-icon" data-act="celia-reset" title="Nouvelle conversation">' + ICONS.plus + '</button>' : '') +
+          '<button class="se-celia-icon" data-act="celia-toggle" title="Fermer">' + ICONS.x + '</button>' +
         '</div>' +
-        '<form class="se-composer" data-form="assistant">' +
-          '<input class="se-input" name="texte" placeholder="Racontez votre rendez-vous…" autocomplete="off" autofocus ' + (state.assistantEnCours ? 'disabled' : '') + '/>' +
-          '<button class="se-btn" type="submit" ' + (state.assistantEnCours ? 'disabled' : '') + '>Envoyer</button>' +
+      '</div>' +
+      '<div class="se-celia-body se-chat" data-celia-scroll>' +
+        (msgs.length ? msgs.map((m) => (
+          '<div class="se-bubble ' + (m.role === 'user' ? 'me' : 'agent') + '">' +
+            esc(m.texte).replace(/\n/g, '<br>') +
+            ((m.actions && m.actions.length) ? '<div class="se-row" style="flex-wrap:wrap;gap:6px;margin-top:8px">' +
+              m.actions.map((a) => (a.lien ? '<a class="se-badge open" href="' + a.lien + '">' + esc(a.resume) + '</a>' : '<span class="se-badge open">' + esc(a.resume) + '</span>')).join('') +
+            '</div>' : '') +
+          '</div>'
+        )).join('') : '<p class="se-muted">Dites-lui par exemple : « Je sors de chez Mme Intel, 12 rue de Seine, elle veut vendre. Envoie-lui la candidature et programme un rappel pour le 28. »' + (reconnaissanceDisponible() ? ' — au micro ou au clavier.' : '') + '</p>') +
+        (state.celiaEnCours ? '<div class="se-bubble agent"><span class="se-muted">…</span></div>' : '') +
+      '</div>' +
+      '<div class="se-celia-foot">' +
+        '<form data-form="celia">' +
+          (reconnaissanceDisponible() ? '<button type="button" class="se-celia-mic' + (celiaEcoute ? ' actif' : '') + '" data-act="celia-micro" title="' + (celiaEcoute ? 'Arrêter l’écoute' : 'Parler à Célia') + '" ' + (state.celiaEnCours ? 'disabled' : '') + '>' + ICONS.mic + '</button>' : '') +
+          '<input class="se-input" name="texte" placeholder="' + (celiaEcoute ? 'Je vous écoute…' : 'Écrivez ou parlez…') + '" autocomplete="off" ' + (state.celiaEnCours ? 'disabled' : '') + '/>' +
+          '<button class="se-btn sm" type="submit" ' + (state.celiaEnCours ? 'disabled' : '') + '>Envoyer</button>' +
         '</form>' +
       '</div>' +
-      (msgs.length ? '<button class="se-btn ghost sm" style="margin-top:10px" data-act="assistant-reset">Nouvelle conversation</button>' : '');
+    '</div>';
   }
 
   /* --------------------------------- réglages ----------------------------- */
@@ -4365,7 +4490,10 @@
     },
     'bodacc-verifier': () => { verifierBodacc(); },
     'robot-cascade': async (el) => { await enrichirCascade(el.getAttribute('data-id')); },
-    'assistant-reset': () => { state.assistantMessages = []; state.assistantHistorique = []; commit(); },
+    'celia-toggle': () => { celiaOuvert = !celiaOuvert; render(); setTimeout(() => { const box = document.querySelector('[data-celia-scroll]'); if (box) box.scrollTop = box.scrollHeight; }, 30); },
+    'celia-reset': () => { state.celiaMessages = []; state.celiaHistorique = []; commit(); },
+    'celia-micro': () => basculerEcoute(),
+    'celia-vocal-toggle': () => basculerVocal(),
     'robot-valorisation': async (el) => { await estimerValorisation(el.getAttribute('data-id')); },
     'robot-tache': (el) => {
       const b = robotBien(el.getAttribute('data-id'));
@@ -4738,33 +4866,10 @@
       return;
     }
 
-    if (kind === 'assistant') {
+    if (kind === 'celia') {
       const texte = String(data.get('texte') || '').trim();
-      if (!texte || state.assistantEnCours) return;
       form.reset();
-      state.assistantMessages.push({ role: 'user', texte: texte, at: nowISO() });
-      state.assistantEnCours = true;
-      commit();
-      try {
-        const r = await fetch('/api/assistant/chat', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
-          body: JSON.stringify({ message: texte, historique: state.assistantHistorique })
-        });
-        const res = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(res.error || 'Erreur serveur');
-        state.assistantMessages.push({ role: 'assistant', texte: res.reponse || '…', actions: res.actions || [], at: nowISO() });
-        // On ne garde que les 30 derniers messages envoyés à l'API, pour que
-        // l'historique ne grossisse pas indéfiniment au fil d'une longue session.
-        state.assistantHistorique = (res.historique || []).slice(-30);
-      } catch (e) {
-        state.assistantMessages.push({ role: 'assistant', texte: 'Désolé, une erreur est survenue : ' + (e.message || 'inconnue') + '.', actions: [] });
-      }
-      state.assistantEnCours = false;
-      commit();
-      setTimeout(() => {
-        const box = document.querySelector('[data-assistant-scroll]');
-        if (box) box.scrollTop = box.scrollHeight;
-      }, 30);
+      await envoyerMessageCelia(texte);
       return;
     }
 
