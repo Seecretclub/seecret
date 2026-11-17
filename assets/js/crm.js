@@ -3801,7 +3801,7 @@
             body: JSON.stringify({ audio: b64, mimeType: typeFinal })
           });
           const res = await r.json().catch(() => ({}));
-          if (!r.ok) throw new Error(res.error || 'Erreur de transcription');
+          if (!r.ok) throw new Error(res.error || ('Erreur de transcription (code ' + r.status + ')'));
           const texte = String(res.texte || '').trim();
           celiaTranscription = false;
           if (texte) {
@@ -3825,6 +3825,11 @@
         }
       };
       recorder.start();
+      // Filet de sécurité : si on oublie de retaper pour arrêter (ou qu'on ne
+      // trouve pas comment), on coupe automatiquement après 90s au lieu de
+      // laisser l'enregistrement — et le fichier à transcrire — grossir
+      // indéfiniment.
+      setTimeout(() => { if (recorder.state !== 'inactive') recorder.stop(); }, 90000);
     } catch (e) {
       celiaEcoute = false;
       celiaRecorder = null;
