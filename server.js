@@ -2395,15 +2395,23 @@ app.use((err, req, res, next) => {
 // l'invitation au parcours de candidature.
 //
 // Deux fournisseurs d'IA supportés, au choix via la variable AI_PROVIDER :
-//   - 'gemini'    (par défaut si GEMINI_API_KEY est présente) : API Gemini de
-//                 Google (Google AI Studio) — GRATUITE, sans carte bancaire.
-//   - 'anthropic' (par défaut sinon, ou si ANTHROPIC_API_KEY est présente)  :
-//                 API Anthropic (Claude) — payante à l'usage, nécessite une
-//                 carte bancaire sur console.anthropic.com.
-// Sans clé pour le fournisseur actif, l'endpoint répond une erreur claire
-// plutôt que de planter.
+//   - 'anthropic' (par défaut si ANTHROPIC_API_KEY est présente) : API
+//                 Anthropic (Claude) — payante à l'usage (carte déjà
+//                 enregistrée sur console.anthropic.com si la clé existe).
+//   - 'gemini'    (par défaut sinon, si GEMINI_API_KEY est présente) : API
+//                 Gemini de Google (Google AI Studio) — gratuite, sans
+//                 carte bancaire, MAIS limitée à 20 requêtes/jour sur le
+//                 palier gratuit.
+// Quand les deux clés sont présentes, on privilégie Anthropic par défaut
+// pour la CONVERSATION : ça laisse tout le quota gratuit Gemini (très
+// limité) disponible pour la dictée vocale (transcrireAudioGemini,
+// ci-dessous), seul des deux fournisseurs à accepter l'audio en entrée —
+// au lieu que les deux usages se partagent les 20 requêtes/jour. Un
+// AI_PROVIDER explicite sur Railway reste toujours prioritaire sur ce choix
+// par défaut. Sans clé pour le fournisseur actif, l'endpoint répond une
+// erreur claire plutôt que de planter.
 // ====================================================================
-const AI_PROVIDER = (process.env.AI_PROVIDER || (process.env.GEMINI_API_KEY ? 'gemini' : 'anthropic')).toLowerCase();
+const AI_PROVIDER = (process.env.AI_PROVIDER || (process.env.ANTHROPIC_API_KEY ? 'anthropic' : (process.env.GEMINI_API_KEY ? 'gemini' : 'anthropic'))).toLowerCase();
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-5-20250929';
