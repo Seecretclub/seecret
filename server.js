@@ -1876,6 +1876,64 @@ app.get('/api/robot/dvf', requireAdmin, async (req, res) => {
   }
 });
 
+// Valorisation interne : calcule un prix au m² médian/moyen à partir des ventes DVF comparables
+// (même commune, même type de bien, surface proche) — une alternative gratuite et interne aux
+// outils d'estimation externes. Donne toujours une fourchette avec le détail des comparables
+// retenus, jamais un chiffre seul : l'estimation reste indicative et l'agent juge la pertinence.
+function statsPrixM2(comparables) {
+  const prix = comparables
+    .map((m) => {
+      const valeur = parseFloat(String(m.valeur || '').replace(',', '.'));
+      const surface = parseFloat(String(m.surface || '').replace(',', '.'));
+      return (valeur > 0 && surface > 0) ? valeur / surface : null;
+    })
+    .filter((x) => x != null && isFinite(x))
+    .sort((a, b) => a - b);
+  if (!prix.length) return null;
+  const mediane = prix.length % 2
+    ? prix[(prix.length - 1) / 2]
+    : (prix[prix.length / 2 - 1] + prix[prix.length / 2]) / 2;
+  const moyenne = prix.reduce((s, x) => s + x, 0) / prix.length;
+  return { nbComparables: prix.length, prixM2Median: Math.round(mediane), prixM2Moyen: Math.round(moyenne), prixM2Min: Math.round(prix[0]), prixM2Max: Math.round(prix[prix.length - 1]) };
+}
+
+app.get('/api/robot/dvf-secteur', requireAdmin, async (req, res) => {
+  const codeInsee = String(req.query.code_insee || '').trim();
+  const typeLocal = String(req.query.type_local || '').trim();
+  const surfaceCible = parseFloat(String(req.query.surface || '0').replace(',', '.')) || 0;
+  if (!/^[0-9][0-9AB][0-9]{3}$/.test(codeInsee)) return res.status(400).json({ error: 'code_insee invalide (5 caractères attendus).' });
+  const dept = codeInsee.slice(0, 2);
+  const commune = String(parseInt(codeInsee.slice(2) || '0', 10));
+  const needle = '|' + dept + '|' + commune + '||';
+  const comparables = [];
+  try {
+    const { createReadStream } = require('fs');
+    const { createInterface } = require('readline');
+    const rl = createInterface({ input: createReadStream(DVF_PATH, { encoding: 'utf8' }), crlfDelay: Infinity });
+    for await (const line of rl) {
+      if (!line.includes(needle)) continue;
+      const f = line.split('|');
+      const nature = f[9] || '';
+      if (!/vente/i.test(nature)) continue; // écarte adjudications, expropriations, etc.
+      const tl = f[36] || '';
+      if (typeLocal && tl.toLowerCase() !== typeLocal.toLowerCase()) continue;
+      const surface = parseFloat(String(f[38] || '').replace(',', '.'));
+      // Comparables pertinents : surface à ±30 % de celle du bien à estimer (si fournie).
+      if (surfaceCible && surface && (surface < surfaceCible * 0.7 || surface > surfaceCible * 1.3)) continue;
+      comparables.push({
+        date: f[8] || '', nature: nature, valeur: f[10] || '',
+        adresse: [f[13], f[14], f[15]].filter(Boolean).join(' ') || f[15] || '',
+        typeLocal: tl, surface: f[38] || '', pieces: f[39] || ''
+      });
+      if (comparables.length >= 300) break;
+    }
+    const stats = statsPrixM2(comparables);
+    res.json({ ok: true, codeInsee: codeInsee, typeLocal: typeLocal || 'tous types', comparables: comparables.slice(0, 20), stats: stats });
+  } catch (e) {
+    res.status(502).json({ error: 'Lecture DVF impossible : ' + String(e.message || e) });
+  }
+});
+
 const AUCADASTRE_URL = 'https://aucadastre.fr/api';
 const AUCADASTRE_CACHE = {};
 

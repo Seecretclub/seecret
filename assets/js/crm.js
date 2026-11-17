@@ -2312,6 +2312,57 @@
       '</div>';
   }
 
+  // Valorisation interne : estime un prix au m² à partir des ventes DVF comparables du même
+  // secteur et du même type de bien (surface à ±30 %), sans dépendre d'un outil externe payant.
+  // Toujours une fourchette avec le détail des comparables, jamais un chiffre seul.
+  function typeLocalDVF(b) {
+    const t = String(b.type || '').toLowerCase();
+    if (t.indexOf('appartement') > -1) return 'Appartement';
+    if (t.indexOf('maison') > -1) return 'Maison';
+    return '';
+  }
+
+  async function estimerValorisation(bienId) {
+    const b = robotBien(bienId);
+    if (!b) return;
+    const insee = b.codeInsee || postalToInsee(b.codePostal);
+    if (!insee) { toast('Code INSEE introuvable pour ce secteur — valorisation impossible.', 'warn'); return; }
+    const surface = b.surface_habitable_m2 || b.surface_reference_dpe_m2 || 0;
+    toast('Recherche de ventes comparables (DVF) dans le secteur…');
+    try {
+      const params = new URLSearchParams({ code_insee: insee });
+      const tl = typeLocalDVF(b);
+      if (tl) params.set('type_local', tl);
+      if (surface) params.set('surface', String(surface));
+      const r = await fetch('/api/robot/dvf-secteur?' + params.toString(), { credentials: 'same-origin' }).then((x) => x.json());
+      if (!r.ok) { toast(r.error || 'Valorisation impossible.', 'warn'); return; }
+      b.valorisation = { stats: r.stats, comparables: r.comparables || [], surfaceUtilisee: surface, typeLocal: r.typeLocal, calculeLe: new Date().toISOString() };
+      commit();
+      toast(r.stats ? r.stats.nbComparables + ' comparable(s) trouvé(s).' : 'Aucun comparable DVF trouvé dans ce secteur.', r.stats ? 'ok' : 'warn');
+    } catch (e) { toast('Valorisation impossible.', 'warn'); }
+  }
+
+  function valorisationHtml(b) {
+    const v = b.valorisation;
+    if (!v) return '<p class="se-muted" style="margin-top:10px">Lance l’estimation pour obtenir une fourchette de prix au m² à partir des ventes comparables (DVF) du secteur.</p>';
+    if (!v.stats) return '<p class="se-muted" style="margin-top:10px">Aucune vente comparable trouvée dans ce secteur' + (v.typeLocal ? ' (' + esc(v.typeLocal) + ')' : '') + '.</p>';
+    const s = v.stats;
+    const surface = v.surfaceUtilisee;
+    const html = '<div class="se-kv" style="margin-top:10px">' +
+      kv('Comparables retenus', s.nbComparables + ' vente(s) · ' + esc(v.typeLocal)) +
+      kv('Prix au m² (médiane)', s.prixM2Median.toLocaleString('fr-FR') + ' €/m²') +
+      kv('Fourchette au m²', s.prixM2Min.toLocaleString('fr-FR') + ' – ' + s.prixM2Max.toLocaleString('fr-FR') + ' €/m²') +
+      (surface ? kv('Estimation du bien (' + surface + ' m²)', Math.round(s.prixM2Min * surface).toLocaleString('fr-FR') + ' – ' + Math.round(s.prixM2Max * surface).toLocaleString('fr-FR') + ' € (médiane ' + Math.round(s.prixM2Median * surface).toLocaleString('fr-FR') + ' €)') : '') +
+      '</div>' +
+      '<p class="se-hint" style="margin-top:10px">Estimation indicative à partir de ' + s.nbComparables + ' transaction(s) DVF (source officielle, gratuite) — ne remplace pas une estimation professionnelle sur place.</p>';
+    const liste = (v.comparables || []).length
+      ? '<details style="margin-top:10px"><summary style="cursor:pointer;font-size:12px;color:var(--color-taupe)">Voir les comparables (' + v.comparables.length + ')</summary><div class="se-list" style="margin-top:8px">' +
+          v.comparables.map((c) => '<div class="se-list-item"><div style="flex:1;min-width:0"><div style="font-size:13px">' + esc(c.adresse || '—') + '</div><div class="se-hint">' + esc(c.date || '') + ' · ' + Math.round(parseFloat(String(c.valeur || '0').replace(',', '.'))).toLocaleString('fr-FR') + ' € · ' + esc(c.surface || '—') + ' m²</div></div></div>').join('') +
+        '</div></details>'
+      : '';
+    return html + liste;
+  }
+
   function viewProprietaires() {
     const biens = robotBiens().filter((b) => b.proprietaire && b.proprietaire.nom);
     const groupes = {};
@@ -2379,7 +2430,12 @@
         kv('Adresse', esc(b.adresse)) + kv('Ville', esc(b.ville || '—')) + kv('Code postal', esc(b.codePostal || '—')) +
         kv('Type', esc(b.type || '—')) + kv('Surface habitable', b.surface_habitable_m2 != null ? b.surface_habitable_m2 + ' m²' : '—') + kv('Surface réf. DPE', b.surface_reference_dpe_m2 != null ? b.surface_reference_dpe_m2 + ' m²' : '—') + kv('Terrain', b.surface_terrain_m2 != null ? b.surface_terrain_m2 + ' m²' : '—') + kv('Contenance cadastrale', b.contenance_cadastrale_m2 != null ? b.contenance_cadastrale_m2 + ' m²' : '—') +
         kv('Pièces', b.pieces || '—') + kv('Chambres', b.chambres || '—') + kv('DPE', b.dpe || '—') +
-        '</div></div>';
+        '</div></div>' +
+        '<div class="se-card" style="margin-top:16px"><h3>Valorisation interne</h3>' +
+        '<p class="se-hint">Prix au m² estimé à partir des ventes DVF comparables du secteur (même type de bien, surface à ±30 %) — gratuit, sans outil externe.</p>' +
+        '<button class="se-btn ghost sm" style="margin-top:10px" data-act="robot-valorisation" data-id="' + b.id + '">Estimer via comparables DVF</button>' +
+        valorisationHtml(b) +
+        '</div>';
     } else if (tab === 'cadastre') {
       body = '<div class="se-card"><h3>Cadastre & géolocalisation</h3><div class="se-kv" style="margin-top:12px">' +
         kv('Parcelle cadastrale', esc(b.parcelle || '—')) + kv('Coordonnées', b.coords ? b.coords[0].toFixed(5) + ', ' + b.coords[1].toFixed(5) : '—') +
@@ -4272,6 +4328,7 @@
     },
     'bodacc-verifier': () => { verifierBodacc(); },
     'robot-cascade': async (el) => { await enrichirCascade(el.getAttribute('data-id')); },
+    'robot-valorisation': async (el) => { await estimerValorisation(el.getAttribute('data-id')); },
     'robot-tache': (el) => {
       const b = robotBien(el.getAttribute('data-id'));
       if (!b) return;
