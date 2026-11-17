@@ -972,6 +972,85 @@
 
   /* ------------------------------ tableau de bord ------------------------- */
 
+  // --- Tableau de bord Jour/Semaine (étape 6 du plan de fusion) ---------------
+  // Mêmes 4 compteurs (candidatures, biens entrés, visites faites, propositions)
+  // affichés en valeur du jour ou en delta vs la période précédente ; les blocs
+  // "Au long cours" (volumétrie totale) et "La prospection" (funnel Réseau)
+  // n'apparaissent qu'en vue Semaine, comme demandé par le plan de fusion.
+  function debutJourDecale(offsetJours) {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() + offsetJours);
+    return d;
+  }
+  function dansPeriode(dateStr, debut, fin) {
+    if (!dateStr) return false;
+    const t = new Date(dateStr).getTime();
+    return !isNaN(t) && t >= debut.getTime() && t < fin.getTime();
+  }
+  function compteursPeriode(debut, fin) {
+    const biens = (state.biensServeur || []).concat(state.biens);
+    return {
+      candidatures: state.demandes.filter((d) => d.type === 'candidature' && dansPeriode(d.cree, debut, fin)).length,
+      biensEntres: biens.filter((b) => dansPeriode(b.cree, debut, fin)).length,
+      visitesFaites: state.visites.filter((v) => v.statut === 'realisee' && dansPeriode(v.date, debut, fin)).length,
+      propositions: state.offres.filter((o) => dansPeriode(o.cree, debut, fin)).length
+    };
+  }
+  function deltaHtml(actuel, precedent) {
+    const d = actuel - precedent;
+    if (d === 0) return '<span class="se-hint">= vs semaine préc.</span>';
+    return '<span class="se-hint" style="color:' + (d > 0 ? '#1E4038' : '#b42318') + '">' + (d > 0 ? '+' : '') + d + ' vs semaine préc.</span>';
+  }
+  function carteCompteurPeriode(kicker, valeur, sousTexteJour, deltaTexte, periode) {
+    return '<div class="se-card se-stat"><span class="se-kicker">' + kicker + '</span><span class="se-num">' + valeur + '</span><span class="se-sub">' + (periode === 'jour' ? sousTexteJour : deltaTexte) + '</span></div>';
+  }
+  function blocTableauPeriode() {
+    const periode = state.filtres.periodeTableau === 'semaine' ? 'semaine' : 'jour';
+    const debutJour = debutJourDecale(0), finJour = debutJourDecale(1);
+    const debutSemaine = debutJourDecale(-6), finSemaine = debutJourDecale(1);
+    const debutSemainePrec = debutJourDecale(-13);
+    const cJour = compteursPeriode(debutJour, finJour);
+    const cSemaine = compteursPeriode(debutSemaine, finSemaine);
+    const cSemainePrec = compteursPeriode(debutSemainePrec, debutSemaine);
+    const c = periode === 'jour' ? cJour : cSemaine;
+    const biensTotal = (state.biensServeur || []).concat(state.biens);
+    const clientsReseau = state.clients.filter((cl) => cl.type === 'vendeur' || cl.type === 'mixte' || cl.pipeline);
+    const prisesDeContact = clientsReseau.filter((cl) => cl.pipeline && cl.pipeline !== 'a_contacter').length;
+    const reponsesObtenues = clientsReseau.filter((cl) => cl.pipeline === 'a_relancer' || cl.pipeline === 'converti' || cl.pipeline === 'ecarte').length;
+    const conversions = clientsReseau.filter((cl) => cl.pipeline === 'converti').length;
+    return '<div class="se-card" style="margin-bottom:18px">' +
+      '<div class="se-row" style="justify-content:space-between;margin-bottom:12px">' +
+        '<h3>' + (periode === 'jour' ? 'Aujourd’hui' : 'Cette semaine') + '</h3>' +
+        '<div class="se-tabs" style="margin:0">' +
+          '<a href="#" data-act="filtre" data-id="periodeTableau:jour" class="' + (periode === 'jour' ? 'active' : '') + '">Jour</a>' +
+          '<a href="#" data-act="filtre" data-id="periodeTableau:semaine" class="' + (periode === 'semaine' ? 'active' : '') + '">Semaine</a>' +
+        '</div>' +
+      '</div>' +
+      '<div class="se-grid cols-4">' +
+        carteCompteurPeriode('Candidatures', c.candidatures, 'aujourd’hui', deltaHtml(cSemaine.candidatures, cSemainePrec.candidatures), periode) +
+        carteCompteurPeriode('Biens entrés', c.biensEntres, 'aujourd’hui', deltaHtml(cSemaine.biensEntres, cSemainePrec.biensEntres), periode) +
+        carteCompteurPeriode('Visites faites', c.visitesFaites, 'aujourd’hui', deltaHtml(cSemaine.visitesFaites, cSemainePrec.visitesFaites), periode) +
+        carteCompteurPeriode('Propositions', c.propositions, 'aujourd’hui', deltaHtml(cSemaine.propositions, cSemainePrec.propositions), periode) +
+      '</div>' +
+      (periode === 'semaine'
+        ? '<div class="se-split" style="margin-top:16px;grid-template-columns:1fr 1fr">' +
+            '<div class="se-card"><h3>Au long cours</h3><div class="se-grid cols-2" style="margin-top:10px;gap:10px">' +
+              '<div class="se-card se-stat"><span class="se-kicker">Clients au book</span><span class="se-num">' + state.clients.length + '</span></div>' +
+              '<div class="se-card se-stat"><span class="se-kicker">Biens au catalogue</span><span class="se-num">' + biensTotal.length + '</span></div>' +
+              '<div class="se-card se-stat"><span class="se-kicker">Mandats convertis</span><span class="se-num">' + conversions + '</span></div>' +
+              '<div class="se-card se-stat"><span class="se-kicker">Offres acceptées</span><span class="se-num">' + state.offres.filter((o) => o.statut === 'acceptee').length + '</span></div>' +
+            '</div></div>' +
+            '<div class="se-card"><h3>La prospection</h3><div class="se-grid cols-2" style="margin-top:10px;gap:10px">' +
+              '<div class="se-card se-stat"><span class="se-kicker">Relances envoyées</span><span class="se-num">' + prisesDeContact + '</span><span class="se-sub">Réseau</span></div>' +
+              '<div class="se-card se-stat"><span class="se-kicker">Réponses obtenues</span><span class="se-num">' + reponsesObtenues + '</span></div>' +
+              '<div class="se-card se-stat"><span class="se-kicker">Prises de contact</span><span class="se-num">' + prisesDeContact + '</span></div>' +
+              '<div class="se-card se-stat"><span class="se-kicker">Convertis</span><span class="se-num">' + conversions + '</span></div>' +
+            '</div></div>' +
+          '</div>'
+        : '');
+  }
+
   function viewTableau() {
     const nouvelles = state.demandes.filter((d) => d.statut === 'nouvelle');
     const taches = tachesOuvertes().slice(0, 4);
@@ -993,6 +1072,7 @@
 
     return head('Bonjour ' + state.agent.prenom, 'Votre journée',
       'Ce qui demande une décision, et ce qui arrive ensuite.', '') +
+      blocTableauPeriode() +
       '<div class="se-grid cols-4" style="margin-bottom:18px">' +
         '<a class="se-card se-stat se-stat-link" href="#/clients"><span class="se-kicker">Nouveaux clients</span><span class="se-num">' + nouveauxClients + '</span><span class="se-sub">7 derniers jours</span></a>' +
         '<a class="se-card se-stat se-stat-link" href="#/demandes"><span class="se-kicker">Demandes</span><span class="se-num">' + nouvelles.length + '</span><span class="se-sub">en attente</span></a>' +
