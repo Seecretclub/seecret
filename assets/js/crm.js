@@ -790,6 +790,7 @@
       'robot-proprietaires': viewProprietaires,
       'robot-proprietaire': viewProprietaire,
       'portefeuille-foncier': viewPortefeuilleFoncier,
+      bodacc: viewBodacc,
       'societe-fonciere': viewSocieteFonciere,
       'robot-opportunites': viewOpportunites,
       'robot-bien': viewRobotBien,
@@ -888,7 +889,7 @@
   }
 
   function titre(r) {
-    const map = { tableau: 'Tableau de bord', demandes: 'Candidatures', demande: 'Fiche demande', clients: 'Leads', reseau: 'Réseau', pipeline: 'Pipeline de relance', notifications: 'À prévenir', client: 'Fiche lead', biens: 'Produits', bien: 'Fiche produit', recherches: 'Recherches', recherche: 'Recherche', robot: 'Immo Data Robot', 'robot-radar': 'Radar — Biens détectés', 'robot-opportunites': 'Opportunités Clients', 'robot-bien': 'Fiche bien Radar', 'robot-dpe': 'Recherche DPE', 'robot-proprietaires': 'Propriétaires', 'robot-proprietaire': 'Fiche propriétaire', 'portefeuille-foncier': 'Portefeuille foncier', 'societe-fonciere': 'Fiche société', membres: 'Membres', 'biens-club': 'Biens du club', rapprochements: 'Rapprochements', tracking: 'Tracking', visites: 'Visites', offres: 'Propositions → Offres', verifications: 'Vérifications', taches: 'Tâches', messages: 'Messages', reglages: 'Réglages' };
+    const map = { tableau: 'Tableau de bord', demandes: 'Candidatures', demande: 'Fiche demande', clients: 'Leads', reseau: 'Réseau', pipeline: 'Pipeline de relance', notifications: 'À prévenir', client: 'Fiche lead', biens: 'Produits', bien: 'Fiche produit', recherches: 'Recherches', recherche: 'Recherche', robot: 'Immo Data Robot', 'robot-radar': 'Radar — Biens détectés', 'robot-opportunites': 'Opportunités Clients', 'robot-bien': 'Fiche bien Radar', 'robot-dpe': 'Recherche DPE', 'robot-proprietaires': 'Propriétaires', 'robot-proprietaire': 'Fiche propriétaire', 'portefeuille-foncier': 'Portefeuille foncier', 'societe-fonciere': 'Fiche société', bodacc: 'Signaux BODACC', membres: 'Membres', 'biens-club': 'Biens du club', rapprochements: 'Rapprochements', tracking: 'Tracking', visites: 'Visites', offres: 'Propositions → Offres', verifications: 'Vérifications', taches: 'Tâches', messages: 'Messages', reglages: 'Réglages' };
     return map[r.name] || 'CRM';
   }
 
@@ -1774,8 +1775,80 @@
   function tabsRobot(active) {
     const t = (route, label) => '<a href="#/' + route + '" class="' + (active === route ? 'active' : '') + '">' + label + '</a>';
     return '<div class="se-tabs" style="margin-bottom:14px">' +
-      t('robot', 'Radar') + t('robot-proprietaires', 'Propriétaires') + t('robot-opportunites', 'Signaux vendeurs') + t('portefeuille-foncier', 'Portefeuille foncier') +
+      t('robot', 'Radar') + t('robot-proprietaires', 'Propriétaires') + t('robot-opportunites', 'Signaux vendeurs') + t('portefeuille-foncier', 'Portefeuille foncier') + t('bodacc', 'Signaux BODACC') +
     '</div>';
+  }
+
+  /* --------------------------- Signaux BODACC ------------------------------ */
+  // Canal de prospection supplémentaire, en plus d'Immo Data Robot : croise les SIREN déjà repérés
+  // par le Radar (biens détectés + Portefeuille foncier) avec le BODACC, l'annuaire légal public et
+  // gratuit des procédures collectives. Une société/SCI propriétaire d'un bien qui apparaît en
+  // liquidation ou redressement est un signal de vente potentiellement forcée — légal, public,
+  // jamais exploité nativement par les CRM généralistes du marché (voir étude de marché).
+  function sirensAVerifier() {
+    const out = {};
+    robotBiens().forEach((b) => {
+      const p = b.proprietaire || {};
+      if (p.siren && (p.type === 'sci' || p.type === 'societe')) {
+        out[p.siren] = out[p.siren] || { siren: p.siren, nom: p.nom || '', biens: [] };
+        out[p.siren].biens.push(b);
+      }
+    });
+    (state.portefeuilleFoncier || []).forEach((s) => {
+      if (s.siren) {
+        out[s.siren] = out[s.siren] || { siren: s.siren, nom: s.denomination || '', biens: [] };
+      }
+    });
+    return Object.values(out);
+  }
+
+  async function verifierBodacc() {
+    const cibles = sirensAVerifier().filter((c) => !(state.bodaccAlertes && state.bodaccAlertes[c.siren]));
+    if (!cibles.length) { toast('Toutes les sociétés connues ont déjà été vérifiées au BODACC.'); return; }
+    state.bodaccAlertes = state.bodaccAlertes || {};
+    toast('Vérification BODACC de ' + cibles.length + ' société(s)/SCI…');
+    for (let i = 0; i < cibles.length; i += 3) {
+      const lot = cibles.slice(i, i + 3);
+      await Promise.all(lot.map(async (c) => {
+        try {
+          const r = await fetch('/api/robot/bodacc?siren=' + c.siren, { credentials: 'same-origin' }).then((x) => x.json());
+          state.bodaccAlertes[c.siren] = (r.ok && Array.isArray(r.annonces)) ? r.annonces : [];
+        } catch (e) { state.bodaccAlertes[c.siren] = state.bodaccAlertes[c.siren] || []; }
+      }));
+      save(); render();
+    }
+    const procedures = Object.values(state.bodaccAlertes).reduce((n, a) => n + a.length, 0);
+    toast(procedures ? procedures + ' annonce(s) BODACC trouvée(s) sur les sociétés suivies.' : 'Aucune procédure trouvée sur les sociétés suivies.', procedures ? 'warn' : 'ok');
+  }
+
+  function viewBodacc() {
+    const cibles = sirensAVerifier();
+    const alertes = state.bodaccAlertes || {};
+    const verifiees = cibles.filter((c) => alertes[c.siren]);
+    const avecProcedure = verifiees.filter((c) => (alertes[c.siren] || []).length > 0);
+    const rows = avecProcedure.length
+      ? '<div class="se-list" style="margin-top:10px">' + avecProcedure.map((c) => {
+          const annonces = alertes[c.siren] || [];
+          const derniere = annonces[0] || {};
+          return '<div class="se-list-item" style="align-items:flex-start">' +
+            '<div style="flex:1;min-width:0">' +
+              '<div style="font-size:14px;font-weight:600">' + esc(c.nom || c.siren) + ' <span class="se-badge warn">' + esc(derniere.natureJugement || derniere.familleavis || 'Procédure BODACC') + '</span></div>' +
+              '<div class="se-hint">SIREN ' + esc(c.siren) + (derniere.tribunal ? ' · ' + esc(derniere.tribunal) : '') + (derniere.dateparution ? ' · publié le ' + dFR(derniere.dateparution) : '') + ' · ' + annonces.length + ' annonce(s)</div>' +
+              (c.biens.length ? '<div class="se-hint" style="margin-top:4px">Bien(s) suivi(s) : ' + c.biens.map((b) => '<a href="#/robot-bien/' + b.id + '">' + esc(b.adresse || 'bien') + '</a>').join(', ') + '</div>' : '') +
+            '</div>' +
+            (c.biens[0] ? '<button class="se-btn ghost sm" data-act="robot-tache" data-id="' + c.biens[0].id + '">Créer une tâche</button>' : '') +
+          '</div>';
+        }).join('') + '</div>'
+      : '<p class="se-muted" style="margin-top:10px">' + (verifiees.length ? 'Aucune procédure collective en cours sur les sociétés vérifiées.' : 'Aucune société vérifiée pour l’instant.') + '</p>';
+    return head('Prospection', 'Signaux BODACC', 'Procédures collectives (liquidation, redressement) touchant les sociétés et SCI déjà repérées par le Radar — source publique et gratuite, data.gouv.fr.', '') +
+      tabsRobot('bodacc') +
+      '<div class="se-card" style="margin-bottom:14px">' +
+        '<div class="se-row" style="justify-content:space-between;align-items:center">' +
+          '<div><h3>Vérification BODACC</h3><p class="se-hint" style="margin-top:4px">' + cibles.length + ' société(s)/SCI connue(s) · ' + verifiees.length + ' déjà vérifiée(s)</p></div>' +
+          '<button class="se-btn" data-act="bodacc-verifier">Vérifier au BODACC</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="se-card"><h3>Procédures collectives détectées (' + avecProcedure.length + ')</h3>' + rows + '</div>';
   }
 
   function secteursPrioritaires() {
@@ -3994,6 +4067,7 @@
       const b = robotBien(el.getAttribute('data-id'));
       if (b) { b.favori = !b.favori; commit(); render(); toast(b.favori ? 'Ajouté aux favoris.' : 'Retiré des favoris.', 'ok'); }
     },
+    'bodacc-verifier': () => { verifierBodacc(); },
     'robot-tache': (el) => {
       const b = robotBien(el.getAttribute('data-id'));
       if (!b) return;
