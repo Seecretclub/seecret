@@ -2618,16 +2618,30 @@ function erreurDelaiDepasse(fournisseur) {
   return Object.assign(new Error(fournisseur + ' n’a pas répondu à temps (plus de 30s) — réessayez.'), { code: 'TIMEOUT' });
 }
 
+const attendre = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Un modèle « surchargé » (503, pic de demande côté Google/Anthropic) est en
+// général rétabli en quelques secondes — on réessaie automatiquement une ou
+// deux fois avant de renvoyer l'erreur à l'utilisateur, pour lui éviter de
+// retaper lui-même dans ce cas très courant sur un modèle récent.
+async function fetchAvecRetry(url, options, tentatives) {
+  for (let i = 0; ; i++) {
+    const resp = await fetch(url, options);
+    if (resp.status !== 503 || i >= (tentatives - 1)) return resp;
+    await attendre(1500 * (i + 1));
+  }
+}
+
 async function callAnthropic(messages) {
   if (!ANTHROPIC_API_KEY) throw Object.assign(new Error('ANTHROPIC_API_KEY non configurée sur ce serveur.'), { code: 'NO_KEY' });
   let resp;
   try {
-    resp = await fetch(ANTHROPIC_API_BASE + '/v1/messages', {
+    resp = await fetchAvecRetry(ANTHROPIC_API_BASE + '/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: ANTHROPIC_MODEL, max_tokens: 1024, system: ASSISTANT_SYSTEM, tools: ASSISTANT_TOOLS_ANTHROPIC, messages: messages }),
       signal: AbortSignal.timeout(DELAI_IA_MS)
-    });
+    }, 3);
   } catch (e) { if (e && e.name === 'TimeoutError') throw erreurDelaiDepasse('Anthropic'); throw e; }
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) throw Object.assign(new Error((data && data.error && data.error.message) || ('Anthropic ' + resp.status)), { code: 'API_ERROR' });
@@ -2638,12 +2652,12 @@ async function callGemini(contents) {
   if (!GEMINI_API_KEY) throw Object.assign(new Error('GEMINI_API_KEY non configurée sur ce serveur.'), { code: 'NO_KEY' });
   let resp;
   try {
-    resp = await fetch(GEMINI_API_BASE + '/v1beta/models/' + encodeURIComponent(GEMINI_MODEL) + ':generateContent', {
+    resp = await fetchAvecRetry(GEMINI_API_BASE + '/v1beta/models/' + encodeURIComponent(GEMINI_MODEL) + ':generateContent', {
       method: 'POST',
       headers: { 'x-goog-api-key': GEMINI_API_KEY, 'Content-Type': 'application/json' },
       body: JSON.stringify({ system_instruction: { parts: [{ text: ASSISTANT_SYSTEM }] }, contents: contents, tools: ASSISTANT_TOOLS_GEMINI }),
       signal: AbortSignal.timeout(DELAI_IA_MS)
-    });
+    }, 3);
   } catch (e) { if (e && e.name === 'TimeoutError') throw erreurDelaiDepasse('Gemini'); throw e; }
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) throw Object.assign(new Error((data && data.error && data.error.message) || ('Gemini ' + resp.status)), { code: 'API_ERROR' });
@@ -2660,19 +2674,23 @@ async function callGemini(contents) {
 // (largement supporté, y compris sur iOS) et on le transcrit ici.
 async function transcrireAudioGemini(base64Audio, mimeType) {
   if (!GEMINI_API_KEY) throw Object.assign(new Error('La dictée audio nécessite une clé Gemini configurée sur le serveur (GEMINI_API_KEY).'), { code: 'NO_KEY' });
-  const resp = await fetch(GEMINI_API_BASE + '/v1beta/models/' + encodeURIComponent(GEMINI_MODEL) + ':generateContent', {
-    method: 'POST',
-    headers: { 'x-goog-api-key': GEMINI_API_KEY, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{
-        role: 'user',
-        parts: [
-          { inline_data: { mime_type: mimeType || 'audio/webm', data: base64Audio } },
-          { text: 'Transcris fidèlement cet enregistrement audio en français, mot pour mot. Réponds uniquement avec le texte transcrit, sans guillemets, sans commentaire, sans rien ajouter. Si rien d’intelligible n’est dit, réponds avec une chaîne vide.' }
-        ]
-      }]
-    })
-  });
+  let resp;
+  try {
+    resp = await fetchAvecRetry(GEMINI_API_BASE + '/v1beta/models/' + encodeURIComponent(GEMINI_MODEL) + ':generateContent', {
+      method: 'POST',
+      headers: { 'x-goog-api-key': GEMINI_API_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          role: 'user',
+          parts: [
+            { inline_data: { mime_type: mimeType || 'audio/webm', data: base64Audio } },
+            { text: 'Transcris fidèlement cet enregistrement audio en français, mot pour mot. Réponds uniquement avec le texte transcrit, sans guillemets, sans commentaire, sans rien ajouter. Si rien d’intelligible n’est dit, réponds avec une chaîne vide.' }
+          ]
+        }]
+      }),
+      signal: AbortSignal.timeout(DELAI_IA_MS)
+    }, 3);
+  } catch (e) { if (e && e.name === 'TimeoutError') throw erreurDelaiDepasse('Gemini'); throw e; }
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) throw Object.assign(new Error((data && data.error && data.error.message) || ('Gemini ' + resp.status)), { code: 'API_ERROR' });
   const parts = (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) || [];
