@@ -1352,7 +1352,7 @@ app.patch('/api/recherches/:id', requireAdmin, (req, res) => {
   const rec = db.recherches.find((r) => r.id === req.params.id);
   if (!rec) return res.status(404).json({ error: 'Recherche introuvable' });
   const body = req.body || {};
-  ['titre', 'type', 'delai', 'financement'].forEach((k) => { if (typeof body[k] === 'string') rec[k] = body[k]; });
+  ['titre', 'type', 'delai', 'financement', 'dpe'].forEach((k) => { if (typeof body[k] === 'string') rec[k] = body[k]; });
   ['prixMax', 'piecesMin', 'surfaceMin', 'surfaceMax', 'apport'].forEach((k) => { if (body[k] !== undefined) rec[k] = Math.max(0, Number(body[k]) || 0); });
   if (Array.isArray(body.quartiers)) rec.quartiers = body.quartiers.map(String);
   if (Array.isArray(body.types)) rec.types = body.types.map(String);
