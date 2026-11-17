@@ -197,6 +197,9 @@
   let celiaOuvert = false;
   let celiaEcoute = false;
   let celiaReco = null;
+  // Transcript vocal en cours de dictée, affiché en direct dans le grand
+  // bandeau « Je vous écoute » (il n'y a plus de <input> pendant l'écoute).
+  let celiaTranscript = '';
   state.docsParLead = state.docsParLead || {};
   state.tachesVerif = state.tachesVerif || [];
   state.biensServeur = state.biensServeur || [];
@@ -849,6 +852,27 @@
       '<span>' + label + '</span>' + (badge ? '<span class="se-count">' + badge + '</span>' : '') + '</a>';
   }
 
+  // Barre d'onglets mobile (téléphone) : une seule rangée fixe, 4 destinations
+  // clés + "Plus", façon appli (ex. Appimo) — par opposition à la sidebar
+  // desktop qui, elle, garde toutes les sections en détail. Le reste du CRM
+  // reste accessible via moreSheet(). Hauteur fixe et prévisible (contrairement
+  // à l'ancienne sidebar empilée sur mobile), ce qui permet aussi à la bulle
+  // Célia de se positionner au-dessus sans jamais chevaucher un lien.
+  function tab(route, active, icon, label, badge) {
+    return '<a href="#/' + route + '" class="se-tab ' + (active === route ? 'active' : '') + '">' + ICONS[icon] +
+      '<span>' + label + '</span>' + (badge ? '<span class="se-count">' + badge + '</span>' : '') + '</a>';
+  }
+
+  function tabbarMobile(r) {
+    return '<nav class="se-tabbar">' +
+      tab('tableau', r.name, 'home', 'Accueil') +
+      tab('clients', r.name, 'users', 'Leads') +
+      tab('reseau', r.name, 'chat', 'Pipeline', (state.clients.filter((c) => (c.pipeline || 'a_contacter') === 'a_contacter' && (c.type === 'vendeur' || c.type === 'mixte' || c.pipeline)).length) || '') +
+      tab('biens', r.name, 'building', 'Biens') +
+      '<a href="#" class="se-tab" data-act="more">' + ICONS.grid + '<span>Plus</span></a>' +
+    '</nav>';
+  }
+
   function shell(r, content) {
     const a = state.agent;
     return '<div class="se-app">' +
@@ -908,6 +932,7 @@
         '<div class="se-view">' + content + '</div>' +
       '</div>' +
     '</div>' +
+    tabbarMobile(r) +
     celiaWidget();
   }
 
@@ -3729,25 +3754,29 @@
     reco.maxAlternatives = 1;
     celiaReco = reco;
     celiaEcoute = true;
+    celiaTranscript = '';
     render();
     reco.onresult = (e) => {
+      // Pendant l'écoute, le panneau n'a plus de <input> (remplacé par le
+      // grand bandeau « Je vous écoute »), donc le texte vit dans cette
+      // variable plutôt que dans le DOM.
       let texte = '';
       for (let i = 0; i < e.results.length; i++) texte += e.results[i][0].transcript;
-      const input = document.querySelector('.se-celia-panel form[data-form="celia"] input[name="texte"]');
-      if (input) input.value = texte;
+      celiaTranscript = texte;
+      render();
       if (e.results[e.results.length - 1].isFinal) reco.stop();
     };
     reco.onerror = () => { celiaEcoute = false; celiaReco = null; render(); };
     reco.onend = () => {
-      // On capture le texte dicté AVANT le render() qui suit : il détache le
-      // <form> et son <input> du DOM, donc un événement "submit" simulé sur
-      // l'ancien nœud ne remonterait plus jusqu'au gestionnaire délégué.
-      // On appelle donc directement envoyerMessageCelia() avec le texte capturé,
-      // sans dépendre d'un événement DOM.
-      const input = document.querySelector('.se-celia-panel form[data-form="celia"] input[name="texte"]');
-      const texte = input ? input.value.trim() : '';
+      // On capture le texte dicté AVANT de remettre celiaTranscript à vide,
+      // car render() (appelé juste après) détache du DOM tout ce qui existait
+      // (bandeau d'écoute compris) — on appelle donc directement
+      // envoyerMessageCelia() avec le texte capturé, sans dépendre d'un
+      // événement DOM simulé sur un nœud qui n'existerait déjà plus.
+      const texte = celiaTranscript.trim();
       celiaEcoute = false;
       celiaReco = null;
+      celiaTranscript = '';
       render();
       if (texte) envoyerMessageCelia(texte);
     };
@@ -3756,8 +3785,12 @@
 
   function celiaWidget() {
     if (!celiaOuvert) {
-      return '<button class="se-celia-btn" data-act="celia-toggle" aria-label="Ouvrir Célia">' +
-        '<span class="se-celia-btn-dot"></span>' + ICONS.chat +
+      // Un seul tap sur la bulle ouvre Célia ET lance directement l'écoute si
+      // la reconnaissance vocale est disponible (voir l'action « celia-toggle »)
+      // — pas d'étape intermédiaire où il faudrait rouvrir le panneau puis
+      // chercher un petit bouton micro séparé.
+      return '<button class="se-celia-btn" data-act="celia-toggle" aria-label="Parler à Célia">' +
+        '<span class="se-celia-btn-dot"></span>' + ICONS.mic +
       '</button>';
     }
     const msgs = state.celiaMessages || [];
@@ -3782,11 +3815,20 @@
         (state.celiaEnCours ? '<div class="se-bubble agent"><span class="se-muted">…</span></div>' : '') +
       '</div>' +
       '<div class="se-celia-foot">' +
-        '<form data-form="celia">' +
-          (reconnaissanceDisponible() ? '<button type="button" class="se-celia-mic' + (celiaEcoute ? ' actif' : '') + '" data-act="celia-micro" title="' + (celiaEcoute ? 'Arrêter l’écoute' : 'Parler à Célia') + '" ' + (state.celiaEnCours ? 'disabled' : '') + '>' + ICONS.mic + '</button>' : '') +
-          '<input class="se-input" name="texte" placeholder="' + (celiaEcoute ? 'Je vous écoute…' : 'Écrivez ou parlez…') + '" autocomplete="off" ' + (state.celiaEnCours ? 'disabled' : '') + '/>' +
-          '<button class="se-btn sm" type="submit" ' + (state.celiaEnCours ? 'disabled' : '') + '>Envoyer</button>' +
-        '</form>' +
+        (celiaEcoute ?
+          // Grande zone de tap unique pendant l'écoute : pas de petit bouton à
+          // viser, tout le bandeau arrête l'écoute et envoie ce qui a été dit.
+          '<button type="button" class="se-celia-stop" data-act="celia-micro">' +
+            '<span class="se-celia-stop-dot"></span>' + ICONS.mic +
+            '<span>' + (celiaTranscript ? esc(celiaTranscript) : 'Je vous écoute… touchez pour envoyer') + '</span>' +
+          '</button>'
+        :
+          '<form data-form="celia">' +
+            (reconnaissanceDisponible() ? '<button type="button" class="se-celia-mic" data-act="celia-micro" title="Parler à Célia" ' + (state.celiaEnCours ? 'disabled' : '') + '>' + ICONS.mic + '</button>' : '') +
+            '<input class="se-input" name="texte" placeholder="Écrivez ou parlez…" autocomplete="off" ' + (state.celiaEnCours ? 'disabled' : '') + '/>' +
+            '<button class="se-btn sm" type="submit" ' + (state.celiaEnCours ? 'disabled' : '') + '>Envoyer</button>' +
+          '</form>'
+        ) +
       '</div>' +
     '</div>';
   }
@@ -4010,9 +4052,20 @@
 
   function moreSheet() {
     const item = (route, icon, label, badge, href) => '<a class="se-list-item" href="' + (href || ('#/' + route)) + '" style="text-decoration:none;color:inherit;padding:14px 4px">' + icon + '<span style="flex:1;margin-left:10px">' + label + '</span>' + (badge ? '<span class="se-badge offer">' + badge + '</span>' : '') + '</a>';
+    const groupe = (titre) => '<div class="se-nav-label" style="padding:14px 4px 4px">' + titre + '</div>';
     return '<h3>Menu</h3><p class="se-muted">Tout le CRM.</p><div class="se-list">' +
+      groupe('Prospection') +
+      item('recherches', ICONS.search, 'Recherches') +
+      item('robot', ICONS.robot, 'Immo Data Robot', matchings().filter((m) => m.statut === 'nouveau').length) +
+      item('notifications', ICONS.inbox, 'À prévenir', notifications().length) +
+      groupe('Le Club') +
+      item('demandes', ICONS.inbox, 'Candidatures', demandesNouvelles()) +
+      item('membres', ICONS.users, 'Membres') +
+      item('biens-club', ICONS.building, 'Biens du Club') +
+      groupe('Intelligence') +
       item('rapprochements', ICONS.tag, 'Rapprochements') +
       item('tracking', ICONS.search, 'Tracking') +
+      groupe('Suivi') +
       item('visites', ICONS.calendar, 'Visites') +
       item('offres', ICONS.tag, 'Offres', offresNouvelles()) +
       item('taches', ICONS.check, 'Tâches') +
@@ -4490,7 +4543,18 @@
     },
     'bodacc-verifier': () => { verifierBodacc(); },
     'robot-cascade': async (el) => { await enrichirCascade(el.getAttribute('data-id')); },
-    'celia-toggle': () => { celiaOuvert = !celiaOuvert; render(); setTimeout(() => { const box = document.querySelector('[data-celia-scroll]'); if (box) box.scrollTop = box.scrollHeight; }, 30); },
+    'celia-toggle': () => {
+      const ouverture = !celiaOuvert; // true si on passe de fermé à ouvert
+      celiaOuvert = !celiaOuvert;
+      if (!ouverture && celiaReco) celiaReco.stop(); // fermer pendant l'écoute arrête proprement
+      render();
+      if (ouverture) {
+        // Un seul tap sur la bulle doit suffire à parler : on lance l'écoute
+        // directement à l'ouverture (si disponible), sans étape intermédiaire.
+        if (reconnaissanceDisponible() && !celiaEcoute) setTimeout(() => basculerEcoute(), 60);
+      }
+      setTimeout(() => { const box = document.querySelector('[data-celia-scroll]'); if (box) box.scrollTop = box.scrollHeight; }, 30);
+    },
     'celia-reset': () => { state.celiaMessages = []; state.celiaHistorique = []; commit(); },
     'celia-micro': () => basculerEcoute(),
     'celia-vocal-toggle': () => basculerVocal(),

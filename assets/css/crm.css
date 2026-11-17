@@ -311,11 +311,27 @@
   50% { box-shadow: 0 0 0 9px rgba(192,57,43,0); }
 }
 
+/* Grand bandeau « Je vous écoute » pendant la dictée : toute la largeur est
+   une cible de tap (plus simple à toucher qu'un petit bouton micro), et un
+   seul tap (n'importe où) arrête l'écoute et envoie ce qui a été dicté. */
+.se-celia-stop {
+  width: 100%; display: flex; align-items: center; gap: 10px; border: none; cursor: pointer;
+  background: var(--color-alert, #c0392b); color: #fff; border-radius: 14px; padding: 13px 16px;
+  font-size: 13.5px; text-align: left; animation: se-celia-pulse 1.3s ease-in-out infinite;
+}
+.se-celia-stop svg { width: 18px; height: 18px; flex: 0 0 auto; }
+.se-celia-stop span:last-child { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
+.se-celia-stop-dot { width: 8px; height: 8px; border-radius: 999px; background: #fff; flex: 0 0 auto; }
+
 @media (max-width: 860px) {
-  .se-celia-btn { bottom: max(90px, calc(74px + env(safe-area-inset-bottom) + 16px)); }
+  /* --se-tabbar-h (définie dans app.css) donne la hauteur exacte, fixe, de la
+     barre d'onglets mobile : la bulle Célia se cale juste au-dessus, sans
+     jamais la chevaucher (contrairement à l'ancienne sidebar empilée, dont la
+     hauteur variait selon le nombre de rangées). */
+  .se-celia-btn { bottom: calc(var(--se-tabbar-h) + env(safe-area-inset-bottom, 0px) + 14px); }
   .se-celia-panel {
     right: 12px; left: 12px; width: auto; max-width: none;
-    bottom: max(90px, calc(74px + env(safe-area-inset-bottom) + 16px));
+    bottom: calc(var(--se-tabbar-h) + env(safe-area-inset-bottom, 0px) + 14px);
     max-height: min(70vh, calc(100vh - 170px));
   }
 }
