@@ -2115,11 +2115,10 @@
             '<span class="se-hint" id="dpe-status"></span>' +
           '</div>' +
           '<details style="margin-top:10px"><summary style="cursor:pointer;font-size:13px;color:var(--color-taupe)">Critères avancés</summary>' +
-            '<div class="se-form-grid" style="margin-top:10px;grid-template-columns:repeat(4,1fr)">' +
+            '<p class="se-hint" style="margin-top:8px">Le type de bien et le tri se règlent juste en dessous, dans « Filtres &amp; tri » — ils s’appliquent à tout ce qui est chargé, sans relancer de recherche.</p>' +
+            '<div class="se-form-grid" style="margin-top:10px;grid-template-columns:repeat(2,1fr)">' +
               '<div class="se-field"><label>Surface min (m²)</label><input class="se-input" name="surface_min" type="number" placeholder="40"/></div>' +
               '<div class="se-field"><label>Surface max (m²)</label><input class="se-input" name="surface_max" type="number" placeholder="100"/></div>' +
-              '<div class="se-field"><label>Type de bien</label><select class="se-select" name="type"><option value="tout">Tous</option><option value="appartement">Appartement</option><option value="maison">Maison</option><option value="immeuble">Immeuble</option></select></div>' +
-              '<div class="se-field"><label>Tri</label><select class="se-select" name="tri"><option value="recent">DPE le plus récent</option><option value="ancien">DPE le plus ancien</option><option value="surface_desc">Surface décroissante</option></select></div>' +
             '</div>' +
           '</details>' +
         '</form>' +
