@@ -497,6 +497,195 @@ function validerEmail(email) {
   return { ok: true };
 }
 
+// ---- Données de démonstration ----
+// Au lancement du produit, le CRM et le catalogue membre sont vides (aucune
+// vraie candidature encore) : pour pouvoir montrer la plateforme et recueillir
+// des réactions, on peuple une fois des clients/biens de démo réalistes,
+// couvrant tout le parcours (candidature en attente, avant-première, visite
+// ouverte, sous offre, vendu). Chaque enregistrement est marqué `demo: true`
+// pour rester identifiable et purgeable séparément des vraies données (voir
+// DELETE /api/admin/demo). Ne s'exécute qu'une fois (db.demoSeeded), jamais
+// sur une base qui a déjà été seedée, pour ne jamais dupliquer au redémarrage.
+function joursAvant(n) { return new Date(Date.now() - n * 24 * 60 * 60 * 1000).toISOString(); }
+
+function seedDemoData(db) {
+  if (db.demoSeeded) return;
+  db.demoSeeded = true;
+
+  const lead = (over) => Object.assign({
+    id: uid('l'), tel: '', budgetMax: 0, quartiers: [], piecesMin: 0, surfaceMin: 0, surfaceMax: 0,
+    delai: '', typeBien: '', apport: 0, financement: '', courtier: false, bienAVendre: false,
+    role: 'membre', source: 'Candidature (démo)', demo: true
+  }, over);
+  const bien = (over) => Object.assign({
+    id: uid('mb'), codePostal: '', chambres: 0, sdb: 0, etage: '', dpe: '', etat: '',
+    exterieur: '', surfaceExterieur: 0, delai: '', dejaEnVente: 'non', mandat: '', motif: '',
+    description: '', photos: [], atouts: [], annexes: [], ges: '', charges: 0, ascenseur: false,
+    lat: null, lon: null, statutDemande: null, suiveurs: 0, agent: DEFAULT_AGENT_NOM, demo: true
+  }, over);
+  const recherche = (over) => Object.assign({
+    id: uid('r'), types: [], type: '', quartiers: [], prixMax: 0, piecesMin: 0, surfaceMin: 0,
+    surfaceMax: 0, delai: '', apport: 0, financement: '', courtier: false, bienAVendre: false,
+    etageMin: 0, etageMax: 0, etat: '', dpe: '', annexes: [], prixVenteEstime: 0, statut: 'active',
+    alertes: true, demo: true
+  }, over);
+
+  // L1 — Acquéreuse acceptée, recherche active (pas encore de bien suivi)
+  const l1 = lead({
+    prenom: 'Claire', nom: 'Fontaine', email: 'claire.fontaine@demo.seecret.fr', tel: '0612345678',
+    ville: 'Paris', projet: 'acheteur', statut: 'accepte', cree: joursAvant(18),
+    budgetMax: 850000, quartiers: ['Le Marais', 'Bastille'], piecesMin: 3, surfaceMin: 60,
+    delai: '3 à 6 mois', typeBien: 'Appartement', apport: 200000, financement: 'Prêt bancaire en cours', courtier: true
+  });
+  const r1 = recherche({
+    clientId: l1.id, leadId: l1.id, titre: 'Appartement 3 pièces et +', types: ['Appartement'],
+    type: 'Appartement', quartiers: l1.quartiers, prixMax: 850000, piecesMin: 3, surfaceMin: 60,
+    surfaceMax: 95, delai: '3 à 6 mois', apport: 200000, financement: l1.financement, cree: joursAvant(18)
+  });
+
+  // L2 — Vendeuse, bien validé en avant-première (pas encore en vente)
+  const l2 = lead({
+    prenom: 'Sophie', nom: 'Marchal', email: 'sophie.marchal@demo.seecret.fr', tel: '0623456789',
+    ville: 'Paris', projet: 'vendeur', statut: 'accepte', cree: joursAvant(30)
+  });
+  const b1 = bien({
+    leadId: l2.id, email: l2.email, nom: 'Sophie Marchal', titre: 'Trois pièces lumineux rue de Turenne',
+    adresse: '14 rue de Turenne',
+    codePostal: '75003', ville: 'Paris', type: 'Appartement', quartier: 'Le Marais', surface: 72,
+    pieces: 3, chambres: 2, sdb: 1, etage: '3e étage', dpe: 'C', ges: 'D', etat: 'Bon état',
+    exterieur: 'Balcon', surfaceExterieur: 6, prix: 920000, delai: '6 à 12 mois',
+    motif: 'Agrandissement familial', description: 'Bel appartement traversant, lumineux, dans une rue calme du Marais.',
+    atouts: ['Parquet d’origine', 'Lumineux', 'Calme'], charges: 280,
+    exclusivite: { statut: 'verifie_exclusif', liens: [] }, validation: 'valide', statut: 'avant-premiere',
+    suiveurs: 4, cree: joursAvant(25)
+  });
+
+  // L3 — Vendeur, bien ouvert aux visites, sous offre en cours
+  const l3 = lead({
+    prenom: 'Marc', nom: 'Lemoine', email: 'marc.lemoine@demo.seecret.fr', tel: '0634567890',
+    ville: 'Paris', projet: 'vendeur', statut: 'accepte', cree: joursAvant(45)
+  });
+  const b2 = bien({
+    leadId: l3.id, email: l3.email, nom: 'Marc Lemoine', titre: 'Deux pièces refait à neuf, rue Oberkampf',
+    adresse: '8 rue Oberkampf',
+    codePostal: '75011', ville: 'Paris', type: 'Appartement', quartier: 'Oberkampf', surface: 54,
+    pieces: 2, chambres: 1, sdb: 1, etage: '5e étage', dpe: 'B', ges: 'C', etat: 'Refait à neuf',
+    prix: 610000, delai: 'Dès que possible', dejaEnVente: 'non', mandat: 'Mandat simple signé',
+    motif: 'Départ en province', description: 'Appartement refait à neuf, cuisine ouverte, exposé sud.',
+    atouts: ['Lumineux', 'Cuisine ouverte'], charges: 150, ascenseur: true,
+    exclusivite: { statut: 'verifie_exclusif', liens: [] }, validation: 'valide', statut: 'sous-offre',
+    suiveurs: 9, cree: joursAvant(40)
+  });
+
+  // L4 — Acquéreur, auteur d'une offre sur le bien de Marc + d'une visite sur celui d'Hélène
+  const l4 = lead({
+    prenom: 'Julien', nom: 'Perret', email: 'julien.perret@demo.seecret.fr', tel: '0645678901',
+    ville: 'Paris', projet: 'acheteur', statut: 'accepte', cree: joursAvant(20),
+    budgetMax: 650000, quartiers: ['Oberkampf', 'Belleville'], piecesMin: 2, surfaceMin: 45,
+    delai: 'Immédiat', apport: 150000, financement: 'Financement validé'
+  });
+  const r4 = recherche({
+    clientId: l4.id, leadId: l4.id, titre: 'Appartement 2 pièces et +', types: ['Appartement'],
+    type: 'Appartement', quartiers: l4.quartiers, prixMax: 650000, piecesMin: 2, surfaceMin: 45,
+    delai: 'Immédiat', apport: 150000, financement: l4.financement, cree: joursAvant(20)
+  });
+  const offre1 = {
+    id: uid('o'), bienId: b2.id, leadId: l4.id, email: l4.email, nom: 'Julien Perret',
+    montant: 590000, message: 'Offre au prix moins négociation mineure.', statut: 'en_attente',
+    demo: true, cree: joursAvant(3)
+  };
+  const demandeOffre1 = {
+    id: uid('d'), type: 'offre', leadId: l4.id, bienId: b2.id, email: l4.email, nom: 'Julien Perret',
+    montant: 590000, offreId: offre1.id, bienAdresse: b2.adresse, role: 'offre', statut: 'nouvelle',
+    source: 'Espace membre (démo)', demo: true, cree: joursAvant(3)
+  };
+
+  // L5 — Mixte, candidature en attente de validation (démontre la file d'attente)
+  const l5 = lead({
+    prenom: 'Nadia', nom: 'Belkacem', email: 'nadia.belkacem@demo.seecret.fr', tel: '0656789012',
+    ville: 'Lyon', projet: 'mixte', statut: 'en_attente', cree: joursAvant(2),
+    budgetMax: 600000, quartiers: ['11e arrondissement, Paris'], piecesMin: 3, surfaceMin: 65,
+    delai: '6 à 12 mois', typeBien: 'Appartement', apport: 120000, financement: 'À étudier'
+  });
+  const b3 = bien({
+    leadId: l5.id, email: l5.email, nom: 'Nadia Belkacem', titre: 'Maison familiale, Croix-Rousse',
+    adresse: '', codePostal: '', ville: 'Lyon',
+    type: 'Maison', quartier: 'Croix-Rousse', surface: 110, pieces: 5, chambres: 3, sdb: 2,
+    prix: 480000, delai: '6 à 12 mois', motif: 'Mutation professionnelle vers Paris',
+    exclusivite: { statut: 'scan_en_cours', liens: [] }, validation: 'en_attente', statut: 'brouillon',
+    suiveurs: 0, cree: joursAvant(2)
+  });
+  const r5 = recherche({
+    clientId: l5.id, leadId: l5.id, titre: 'Appartement 3 pièces et +', types: ['Appartement'],
+    type: 'Appartement', quartiers: l5.quartiers, prixMax: 600000, piecesMin: 3, surfaceMin: 65,
+    delai: '6 à 12 mois', apport: 120000, financement: l5.financement, cree: joursAvant(2)
+  });
+  const demandeCandidature5 = {
+    id: uid('d'), type: 'candidature', nom: 'Nadia Belkacem', email: l5.email, leadId: l5.id,
+    clientId: l5.id, role: 'mixte', montant: 0, message: 'Profil : Acquéreur et Vendeur. Dossier complet en cours d’examen.',
+    source: 'Site (démo)', statut: 'nouvelle', demo: true, cree: joursAvant(2)
+  };
+  const tacheCandidature5 = {
+    id: uid('t'), type: 'demande', titre: 'Candidature de Nadia Belkacem', demandeId: demandeCandidature5.id,
+    leadId: l5.id, email: l5.email, nom: 'Nadia Belkacem', statut: 'en_attente', demo: true,
+    cree: joursAvant(2), traiteeAt: null
+  };
+
+  // L6 — Vendeur, bien déjà vendu (historique / succès)
+  const l6 = lead({
+    prenom: 'Antoine', nom: 'Roussel', email: 'antoine.roussel@demo.seecret.fr', tel: '0667890123',
+    ville: 'Paris', projet: 'vendeur', statut: 'accepte', cree: joursAvant(90)
+  });
+  const b4 = bien({
+    leadId: l6.id, email: l6.email, nom: 'Antoine Roussel', titre: 'Deux pièces vendu, rue des Martyrs',
+    adresse: '22 rue des Martyrs',
+    codePostal: '75009', ville: 'Paris', type: 'Appartement', quartier: 'Pigalle / SOPI', surface: 48,
+    pieces: 2, chambres: 1, sdb: 1, etage: '2e étage', dpe: 'D', ges: 'E', prix: 540000,
+    motif: 'Investissement revendu', exclusivite: { statut: 'verifie_exclusif', liens: [] },
+    validation: 'valide', statut: 'vendu', suiveurs: 12, cree: joursAvant(85)
+  });
+
+  // L7 — Vendeuse, bien ouvert aux visites (pas encore d'offre)
+  const l7 = lead({
+    prenom: 'Hélène', nom: 'Girard', email: 'helene.girard@demo.seecret.fr', tel: '0678901234',
+    ville: 'Paris', projet: 'vendeur', statut: 'accepte', cree: joursAvant(15)
+  });
+  const b5 = bien({
+    leadId: l7.id, email: l7.email, nom: 'Hélène Girard', titre: 'Loft atypique rez-de-jardin, Charonne',
+    adresse: '5 rue de Charonne',
+    codePostal: '75011', ville: 'Paris', type: 'Loft', quartier: 'Bastille / Charonne', surface: 95,
+    pieces: 3, chambres: 2, sdb: 2, etage: 'RDC', dpe: 'E', ges: 'E', prix: 780000,
+    delai: 'Dès que possible', dejaEnVente: 'oui', mandat: 'Mandat exclusif',
+    motif: 'Investissement revendu', description: 'Loft atypique en rez-de-jardin, volumes exceptionnels.',
+    atouts: ['Volumes', 'Rez-de-jardin'], charges: 310,
+    exclusivite: { statut: 'verifie_exclusif', liens: [] }, validation: 'valide', statut: 'ouvert',
+    suiveurs: 6, cree: joursAvant(12)
+  });
+  const demandeVisite4 = {
+    id: uid('d'), type: 'visite', leadId: l4.id, bienId: b5.id, email: l4.email, nom: 'Julien Perret',
+    message: 'Créneau souhaité : samedi matin', creneau: 'Samedi matin', statut: 'nouvelle',
+    source: 'Espace membre (démo)', demo: true, cree: joursAvant(1)
+  };
+  const tacheVisite4 = {
+    id: uid('t'), type: 'demande', titre: 'Demande de visite de Julien Perret', demandeId: demandeVisite4.id,
+    leadId: l4.id, email: l4.email, nom: 'Julien Perret', statut: 'en_attente', demo: true,
+    cree: joursAvant(1), traiteeAt: null
+  };
+
+  db.leads.push(l1, l2, l3, l4, l5, l6, l7);
+  db.recherches.push(r1, r4, r5);
+  db.biens.push(b1, b2, b3, b4, b5);
+  db.offres.push(offre1);
+  db.demandes.push(demandeOffre1, demandeCandidature5, demandeVisite4);
+  db.tasks.push(tacheCandidature5, tacheVisite4);
+
+  logActivite(db, { leadId: l2.id, bienId: b1.id, type: 'mise_au_catalogue', auteur: 'Agence (démo)' });
+  logActivite(db, { leadId: l3.id, bienId: b2.id, type: 'offre_faite', auteur: 'Julien Perret (acquéreur, démo)' });
+  logActivite(db, { leadId: l5.id, bienId: null, type: 'dossier_transmis', auteur: 'Nadia Belkacem (démo)' });
+  logActivite(db, { leadId: l6.id, bienId: b4.id, type: 'vente_conclue', auteur: 'Agence (démo)' });
+  logActivite(db, { leadId: l7.id, bienId: b5.id, type: 'visite_demandee', auteur: 'Julien Perret (acquéreur, démo)' });
+}
+
 function emailAccuseReception(prenom) {
   const hello = prenom ? 'Bonjour ' + prenom + ',' : 'Bonjour,';
   return [
@@ -2335,6 +2524,37 @@ app.post('/api/agents/inviter', requireSuperadmin, (req, res) => {
   res.json({ ok: true, agent: { id: agent.id, prenom: agent.prenom, nom: agent.nom, email: agent.email, role: agent.role } });
 });
 
+// Purge des données de démonstration (clients/biens/demandes/offres/tâches/
+// activités marqués `demo: true` par seedDemoData) — à utiliser une fois que
+// la plateforme a de vraies candidatures et que la démo n'est plus utile.
+// Réservé au super-admin ; n'affecte jamais une donnée réelle.
+app.delete('/api/admin/demo', requireSuperadmin, (req, res) => {
+  const db = readDb();
+  const leadIdsDemo = db.leads.filter((l) => l.demo).map((l) => l.id);
+  const avant = {
+    leads: db.leads.length, biens: db.biens.length, recherches: db.recherches.length,
+    demandes: db.demandes.length, tasks: db.tasks.length, offres: db.offres.length, activites: db.activites.length
+  };
+  db.leads = db.leads.filter((l) => !l.demo);
+  db.biens = db.biens.filter((b) => !b.demo);
+  db.recherches = db.recherches.filter((r) => !r.demo);
+  db.demandes = db.demandes.filter((d) => !d.demo);
+  db.tasks = db.tasks.filter((t) => !t.demo);
+  db.offres = db.offres.filter((o) => !o.demo);
+  db.activites = db.activites.filter((a) => leadIdsDemo.indexOf(a.leadId) === -1);
+  db.demoSeeded = true; // ne jamais re-seeder automatiquement après une purge volontaire
+  writeDb(db);
+  res.json({
+    ok: true,
+    supprimes: {
+      leads: avant.leads - db.leads.length, biens: avant.biens - db.biens.length,
+      recherches: avant.recherches - db.recherches.length, demandes: avant.demandes - db.demandes.length,
+      tasks: avant.tasks - db.tasks.length, offres: avant.offres - db.offres.length,
+      activites: avant.activites - db.activites.length
+    }
+  });
+});
+
 app.get('/api/leads', requireAdmin, (req, res) => {
   const db = readDb();
   const leads = leadsVisibles(req, db).map((l) => {
@@ -3277,7 +3497,11 @@ app.get('/crm.html', (req, res, next) => {
 app.use(express.static(__dirname));
 
 app.listen(PORT, () => {
-  try { writeDb(readDb()); } catch (e) { /* migration leadId */ }
+  try {
+    const db = readDb();
+    seedDemoData(db);
+    writeDb(db);
+  } catch (e) { /* migration leadId / seed démo */ }
   console.log('Seecret backend démarré sur http://localhost:' + PORT);
   console.log('  CRM : http://localhost:' + PORT + '/crm.html');
   console.log('  Adhésion : http://localhost:' + PORT + '/candidature.html');
