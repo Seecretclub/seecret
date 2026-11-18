@@ -6038,7 +6038,30 @@
         return;
       }
       if (id) { const i = state.biens.findIndex((b) => b.id === id); state.biens[i] = Object.assign(existing, obj); }
-      else state.biens.push(obj);
+      else {
+        // Un nouveau bien vit désormais d'emblée côté serveur (et non plus
+        // seulement dans le localStorage de l'agent) : avant ce correctif,
+        // aucune route de création n'existait, donc "Valider" échouait en
+        // 404 sur un bien jamais synchronisé, et un bien validé ne pouvait
+        // jamais apparaître dans le catalogue de la plateforme.
+        const proprio = client(obj.proprietaireId);
+        if (proprio && proprio.serverId) {
+          try {
+            const r = await fetch('/api/biens', {
+              method: 'POST', headers: { 'content-type': 'application/json' },
+              body: JSON.stringify(Object.assign({}, obj, { proprietaireId: proprio.serverId }))
+            });
+            const res = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(res.error || 'Erreur serveur');
+            obj.serverId = res.bien.id;
+          } catch (e) {
+            toast('Enregistré en local seulement (' + (e.message || 'erreur serveur') + ') — ne pourra pas être validé ni publié tant qu’il n’est pas synchronisé.', 'warn');
+          }
+        } else {
+          toast('Propriétaire non synchronisé : ce bien reste local pour l’instant et ne pourra pas être validé ni publié.', 'warn');
+        }
+        state.biens.push(obj);
+      }
       commit();
       if (id) {
         modal = null;

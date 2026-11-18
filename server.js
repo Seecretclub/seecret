@@ -1321,13 +1321,23 @@ async function lancerScanExclusivite(bienId) {
   return ex;
 }
 
+// Même convention de libellé que le QUARTIERS de crm.js (agent), pour que le
+// catalogue membre (app.js) affiche "Paris 4ᵉ" etc. sans dupliquer de données
+// de référence incohérentes entre le CRM et la plateforme.
+const QUARTIERS_LABELS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+  .reduce((acc, n) => { acc['p' + n] = 'Paris ' + n + (n === 1 ? 'ᵉʳ' : 'ᵉ'); return acc; }, {});
+QUARTIERS_LABELS.boulogne = 'Boulogne-Billancourt';
+QUARTIERS_LABELS.neuilly = 'Neuilly-sur-Seine';
+QUARTIERS_LABELS.vincennes = 'Vincennes';
+function labelQuartier(q) { return QUARTIERS_LABELS[q] || ''; }
+
 function bienPublic(b) {
   const c = completionBien(b);
   return {
     id: b.id, titre: b.titre || '', adresse: b.adresse || '', codePostal: b.codePostal || '', ville: b.ville || '',
-    type: b.type || 'Appartement', quartier: b.quartier || '', transaction: b.transaction || 'Vente',
-    surface: b.surface || 0, pieces: b.pieces || 0, chambres: b.chambres || 0, sdb: b.sdb || 0,
-    etage: b.etage || '', ascenseur: !!b.ascenseur, anneeConstruction: b.anneeConstruction || 0,
+    type: b.type || 'Appartement', quartier: b.quartier || '', label: labelQuartier(b.quartier), transaction: b.transaction || 'Vente',
+    surface: b.surface || 0, pieces: b.pieces || 0, chambres: b.chambres != null ? b.chambres : 0, sdb: b.sdb != null ? b.sdb : 0,
+    etage: b.etage != null ? b.etage : '', ascenseur: !!b.ascenseur, anneeConstruction: b.anneeConstruction || 0,
     dpe: b.dpe || '', ges: b.ges || '', etat: b.etat || '',
     exterieur: b.exterieur || '', surfaceExterieur: b.surfaceExterieur || 0,
     annexes: Array.isArray(b.annexes) ? b.annexes : [], prix: b.prix || 0, charges: b.charges || 0,
@@ -1348,6 +1358,24 @@ function nomComplet(lead) {
 app.get('/api/mon-bien', requireAuth, (req, res) => {
   const b = bienDuMembre(req.db, req.lead);
   res.json({ ok: true, bien: bienPublic(b) });
+});
+
+// ---- Catalogue (membres) : biens validés en CRM, visibles sur la plateforme ----
+// Avant cette route, le catalogue côté plateforme (espace.html/app.js) ne
+// montrait que des données de démonstration codées en dur, sans aucun lien
+// avec les biens réellement saisis et validés dans le CRM : un bien marqué
+// "validé" par un agent ne pouvait jamais apparaître ici.
+app.get('/api/catalogue', requireAuth, (req, res) => {
+  const db = req.db;
+  // Même recherche que bienDuMembre(), mais sans créer de brouillon ici —
+  // consulter le catalogue ne doit pas avoir d'effet de bord sur "mon bien".
+  const monBien = db.biens.find((x) => x.leadId === req.lead.id || (x.email || '').toLowerCase() === (req.lead.email || '').toLowerCase());
+  const biens = db.biens.filter((b) =>
+    b.validation === 'valide' &&
+    b.statut !== 'vendu' && b.statut !== 'brouillon' &&
+    (!monBien || b.id !== monBien.id)
+  );
+  res.json({ ok: true, biens: biens.map(bienPublic) });
 });
 
 app.patch('/api/mon-bien', requireAuth, (req, res) => {
@@ -1654,12 +1682,60 @@ app.patch('/api/leads/:id', requireAdmin, (req, res) => {
   res.json({ ok: true, lead: lead });
 });
 
+// Avant ce correctif, un nouveau bien créé dans le CRM (formulaire "Nouveau
+// bien") ne vivait que dans le localStorage de l'agent : aucune route POST
+// n'existait, seul un PATCH existait pour un bien déjà connu du serveur.
+// Concrètement, un bien jamais synchronisé ne pouvait ni être validé (le
+// PATCH .../valider échouait en 404) ni, une fois le catalogue connecté au
+// CRM, apparaître sur la plateforme. On lui donne une vraie création serveur,
+// sur le modèle de POST /api/recherches.
+app.post('/api/biens', requireAdmin, (req, res) => {
+  const db = readDb();
+  const body = req.body || {};
+  const leadId = String(body.proprietaireId || body.leadId || '');
+  const lead = leadId ? db.leads.find((l) => l.id === leadId) : null;
+  if (leadId && !lead) return res.status(400).json({ error: 'Propriétaire introuvable — enregistrez d’abord le client.' });
+  if (lead && roleOf(req.lead) !== 'superadmin' && !leadVisibleParAgent(lead, req.lead.id)) {
+    return res.status(403).json({ error: 'Ce client est attribué à un autre agent.' });
+  }
+  const etageN = (() => { const n = Number(body.etage); return (body.etage === null || body.etage === '' || isNaN(n)) ? null : n; })();
+  const bien = {
+    id: uid('b'), leadId: lead ? lead.id : null, email: lead ? lead.email : '', nom: lead ? nomComplet(lead) : '',
+    ref: String(body.ref || ''), titre: String(body.titre || 'Bien').trim(),
+    adresse: String(body.adresse || '').trim(), ville: String(body.ville || ''), codePostal: String(body.codePostal || ''),
+    type: String(body.type || 'Appartement'), quartier: String(body.quartier || ''), transaction: 'Vente',
+    surface: Math.max(0, Number(body.surface) || 0), pieces: Math.max(0, Number(body.pieces) || 0),
+    chambres: Math.max(0, Number(body.chambres) || 0), sdb: Math.max(0, Number(body.sdb) || 0),
+    etage: etageN, ascenseur: !!body.ascenseur, anneeConstruction: Math.max(0, Number(body.anneeConstruction) || 0),
+    dpe: String(body.dpe || ''), ges: String(body.ges || ''), etat: String(body.etat || ''),
+    exterieur: String(body.exterieur || ''), surfaceExterieur: Math.max(0, Number(body.surfaceExterieur) || 0),
+    annexes: Array.isArray(body.annexes) ? body.annexes.map(String) : [],
+    prix: Math.max(0, Number(body.prix) || 0), charges: Math.max(0, Number(body.charges) || 0),
+    description: String(body.description || ''),
+    photos: Array.isArray(body.photos) ? body.photos.map(String).slice(0, 12) : [],
+    atouts: Array.isArray(body.atouts) ? body.atouts.map(String) : [],
+    exclusivite: { statut: 'scan_en_cours', liens: [] },
+    validation: 'en_attente', statut: String(body.statut || 'brouillon'), statutDemande: null,
+    agent: nomComplet(req.lead) || DEFAULT_AGENT_NOM, cree: nowISO()
+  };
+  db.biens.push(bien);
+  if (lead) logActivite(db, { leadId: lead.id, bienId: bien.id, type: 'bien_cree', auteur: nomComplet(req.lead) || 'Agent' });
+  writeDb(db);
+  res.json({ ok: true, bien: bien });
+});
+
 app.patch('/api/biens/:id', requireAdmin, (req, res) => {
   const db = readDb();
   const bien = db.biens.find((b) => b.id === req.params.id);
   if (!bien) return res.status(404).json({ error: 'Bien introuvable' });
   const body = req.body || {};
-  ['ref', 'titre', 'adresse', 'ville', 'codePostal', 'type', 'quartier', 'etage', 'dpe', 'ges', 'etat', 'statut', 'description', 'exterieur'].forEach((k) => { if (typeof body[k] === 'string') bien[k] = body[k]; });
+  ['ref', 'titre', 'adresse', 'ville', 'codePostal', 'type', 'quartier', 'dpe', 'ges', 'etat', 'statut', 'description', 'exterieur'].forEach((k) => { if (typeof body[k] === 'string') bien[k] = body[k]; });
+  // L'étage est un nombre comparable (0 = RDC) depuis #62 : un simple "typeof === 'string'"
+  // ignorait silencieusement toute mise à jour envoyée par le CRM, y compris le cas RDC.
+  if (body.etage !== undefined) {
+    const n = Number(body.etage);
+    bien.etage = (body.etage === null || body.etage === '' || isNaN(n)) ? null : n;
+  }
   ['surface', 'pieces', 'chambres', 'sdb', 'prix', 'charges', 'surfaceExterieur'].forEach((k) => { if (body[k] !== undefined) bien[k] = Math.max(0, Number(body[k]) || 0); });
   if (Array.isArray(body.annexes)) bien.annexes = body.annexes.map(String);
   if (Array.isArray(body.atouts)) bien.atouts = body.atouts.map(String);
