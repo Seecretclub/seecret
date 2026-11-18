@@ -3036,9 +3036,9 @@
     const membres = state.clients.filter((c) => c.serveurStatut === 'accepte' || c.statut === 'actif' || c.statut === 'client');
     return head('Le Club', 'Membres', membres.length + ' membre(s) validé(s).', '') +
       '<div class="se-card" style="padding:8px 16px">' +
-        '<table class="se-table"><thead><tr><th>Membre</th><th>Email</th><th>Profil</th><th>Accès</th><th></th></tr></thead><tbody>' +
+        '<div class="se-table-wrap"><table class="se-table"><thead><tr><th>Membre</th><th>Email</th><th>Profil</th><th>Accès</th><th></th></tr></thead><tbody>' +
         membres.map((c) => '<tr><td><b style="font-weight:500">' + esc(nomClient(c)) + '</b></td><td class="se-hint">' + esc(c.email) + '</td><td>' + (c.type === 'vendeur' ? 'Vendeur' : c.type === 'acquereur' ? 'Acquéreur' : 'Mixte') + '</td><td>' + badgeClient(c.statut) + '</td><td><a class="se-btn ghost sm" href="#/client/' + c.id + '">Ouvrir</a></td></tr>').join('') +
-        '</tbody></table>' +
+        '</tbody></table></div>' +
       '</div>';
   }
 
@@ -3621,7 +3621,7 @@
         '<span class="se-hint">' + list.length + ' résultat(s)</span>' +
       '</div></div>' +
       '<div class="se-card" style="padding:8px 16px">' +
-        '<table class="se-table"><thead><tr><th>Client</th><th>Type</th><th>Budget / critères</th><th>Statut</th><th>Température</th><th>Agent</th><th></th></tr></thead><tbody>' +
+        '<div class="se-table-wrap"><table class="se-table"><thead><tr><th>Client</th><th>Type</th><th>Budget / critères</th><th>Statut</th><th>Température</th><th>Agent</th><th></th></tr></thead><tbody>' +
         list.map((c) => '<tr>' +
           '<td><a href="#/client/' + c.id + '" style="color:inherit;text-decoration:none"><b style="font-weight:500">' + esc(nomClient(c)) + '</b> ' + badgeDemo(c) + '<div class="se-hint">' + esc(c.email) + '</div></a></td>' +
           '<td>' + (c.type === 'acquereur' ? 'Acquéreur' : c.type === 'vendeur' ? 'Vendeur' : 'Les deux') + '</td>' +
@@ -3631,7 +3631,7 @@
           '<td class="se-hint">' + esc(c.agent || '') + '</td>' +
           '<td><a class="se-btn ghost sm" href="#/client/' + c.id + '">Ouvrir</a></td>' +
         '</tr>').join('') +
-        '</tbody></table>' +
+        '</tbody></table></div>' +
       '</div>';
   }
 
@@ -4014,7 +4014,7 @@
       '</div></div>';
     return head('Négociation', 'Propositions → Offres', 'De la présentation du bien jusqu’à la décision sur l’offre.') +
       board +
-      '<div class="se-card" style="padding:8px 16px;margin-top:18px"><h3 style="padding:8px 0 0">Offres (4e étape)</h3><table class="se-table"><thead><tr><th>Bien</th><th>Client</th><th>Montant</th><th>Écart</th><th>Date</th><th>Statut</th><th></th></tr></thead><tbody>' +
+      '<div class="se-card" style="padding:8px 16px;margin-top:18px"><h3 style="padding:8px 0 0">Offres (4e étape)</h3><div class="se-table-wrap"><table class="se-table"><thead><tr><th>Bien</th><th>Client</th><th>Montant</th><th>Écart</th><th>Date</th><th>Statut</th><th></th></tr></thead><tbody>' +
       list.map((o) => {
         const b = bien(o.bienId);
         const c = client(o.clientId);
@@ -4026,7 +4026,7 @@
           '<td>' + (o.statut === 'recue' || o.statut === 'en_attente' || o.statut === 'contre'
             ? '<div class="se-row" style="gap:6px"><button class="se-btn ghost sm" data-act="offre-refusee" data-id="' + o.id + '">Refuser</button><button class="se-btn sm" data-act="offre-acceptee" data-id="' + o.id + '">Accepter</button></div>'
             : '') + '</td></tr>';
-      }).join('') + '</tbody></table></div>';
+      }).join('') + '</tbody></table></div></div>';
   }
 
   /* ---------------------------------- tâches ------------------------------ */
