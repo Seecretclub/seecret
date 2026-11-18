@@ -2189,8 +2189,11 @@ async function appelSocieteinfo(nomComplet, societe, siren) {
       ? base + '/' + encodeURIComponent(siren) + '?' + new URLSearchParams({ key: process.env.SOCIETEINFO_API_KEY, withemail: 'true' }).toString()
       : base + '?' + new URLSearchParams({ key: process.env.SOCIETEINFO_API_KEY, name: societe, withemail: 'true' }).toString();
     const r = await fetch(url, { signal: AbortSignal.timeout(15000) });
-    if (r.status === 402 || r.status === 429) return { statut: 'epuise' };
     const data = await r.json().catch(() => ({}));
+    // Vérifié en conditions réelles : un quota dépassé renvoie un HTTP 403 avec
+    // success:false et errorCode "API_MAX_MATCH_EXCEEDED" — PAS un 402/429.
+    if (r.status === 402 || r.status === 429 || (data && data.errorCode === 'API_MAX_MATCH_EXCEEDED')) return { statut: 'epuise' };
+    if (!r.ok) return { statut: 'erreur' };
     const cible = normaliserNom(nomComplet);
     const contacts = Array.isArray(data.contacts) ? data.contacts : [];
     let hit = contacts.find((c) => normaliserNom(((c.firstName || '') + ' ' + (c.lastName || '')).trim()) === cible && String(c.level_code || '').toUpperCase() === 'DIRIGEANT');
@@ -2202,23 +2205,32 @@ async function appelSocieteinfo(nomComplet, societe, siren) {
   } catch (e) { return { statut: 'erreur' }; }
 }
 
+// Vérifié en conditions réelles le 2026-11-18 : l'endpoint réel est /batch
+// (/v1/enrich/all répond "Missing Authentication Token", signe d'une route
+// inexistante). Le code erreur 403 signale un quota dépassé (pas 402/429).
+// Le téléphone retourné est une simple chaîne (champ "phone"), pas un tableau
+// d'objets comme l'email.
 async function appelDropcontact(prenom, nomFamille, societe) {
   if (!fournisseurConfigure('DROPCONTACT_API_KEY')) return { statut: 'non_configure' };
   try {
-    const lancement = await fetch('https://api.dropcontact.io/v1/enrich/all', {
+    const lancement = await fetch('https://api.dropcontact.io/batch', {
       method: 'POST',
       headers: { 'X-Access-Token': process.env.DROPCONTACT_API_KEY, 'Content-Type': 'application/json' },
       body: JSON.stringify({ data: [{ first_name: prenom, last_name: nomFamille, company: societe || '' }] }),
       signal: AbortSignal.timeout(15000)
     });
-    if (lancement.status === 402 || lancement.status === 429) return { statut: 'epuise' };
+    if (lancement.status === 403 || lancement.status === 429) return { statut: 'epuise' };
+    if (!lancement.ok) return { statut: 'erreur' };
     const lancementData = await lancement.json().catch(() => ({}));
     const requestId = lancementData.request_id;
     if (!requestId) return { statut: 'vide' };
-    // Dropcontact répond de façon asynchrone : on interroge brièvement le résultat.
-    for (let i = 0; i < 5; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-      const resultat = await fetch('https://api.dropcontact.io/v1/enrich/all/' + requestId, {
+    // Vérifié en conditions réelles : Dropcontact répond "Request not ready
+    // yet, try again in 30 seconds" pendant ~30s avant de livrer le résultat
+    // (observé jusqu'à 33s sur un cas réel) — 5×2s (10s) était bien trop court
+    // et faisait conclure à tort "rien trouvé". On patiente jusqu'à ~36s.
+    for (let i = 0; i < 12; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      const resultat = await fetch('https://api.dropcontact.io/batch/' + requestId, {
         headers: { 'X-Access-Token': process.env.DROPCONTACT_API_KEY },
         signal: AbortSignal.timeout(15000)
       });
@@ -2226,7 +2238,7 @@ async function appelDropcontact(prenom, nomFamille, societe) {
       if (resultatData && resultatData.data && resultatData.data.length) {
         const c = resultatData.data[0];
         const email = c.email && c.email.length ? c.email[0].email : '';
-        const telephone = c.phone && c.phone.length ? c.phone[0].number : '';
+        const telephone = c.phone || c.mobile_phone || '';
         if (email || telephone) return { statut: 'trouve', email: email || '', telephone: telephone || '', source: 'Dropcontact' };
         if (resultatData.success === true) return { statut: 'vide' };
       }
@@ -2235,13 +2247,21 @@ async function appelDropcontact(prenom, nomFamille, societe) {
   } catch (e) { return { statut: 'erreur' }; }
 }
 
+// Vérifié en conditions réelles le 2026-11-18 : le paramètre "data" est
+// obligatoire (sinon 400 "data field must have value") — on y met le nom
+// complet. "phoneFull" nécessite un plan supérieur et fait échouer tout
+// l'appel avec un 400 explicite si le plan ne l'inclut pas ; on ne le
+// demande donc plus par défaut (le champ "phone" de base reste disponible).
 async function appelDatagma(prenom, nomFamille, societe) {
   if (!fournisseurConfigure('DATAGMA_API_KEY')) return { statut: 'non_configure' };
   try {
-    const params = new URLSearchParams({ apiId: process.env.DATAGMA_API_KEY, firstName: prenom, lastName: nomFamille, company: societe || '', phoneFull: 'true' });
+    const nomComplet = (prenom + ' ' + nomFamille).trim();
+    const params = new URLSearchParams({ apiId: process.env.DATAGMA_API_KEY, data: nomComplet, firstName: prenom, lastName: nomFamille, company: societe || '' });
     const r = await fetch('https://gateway.datagma.net/api/ingress/v2/full?' + params.toString(), { signal: AbortSignal.timeout(15000) });
     if (r.status === 402 || r.status === 429) return { statut: 'epuise' };
     const data = await r.json().catch(() => ({}));
+    if (r.status === 404 || data.code === 5) return { statut: 'vide' };
+    if (!r.ok) return { statut: 'erreur' };
     if (data.email || data.phone) return { statut: 'trouve', email: data.email || '', telephone: data.phone || '', source: 'Datagma' };
     return { statut: 'vide' };
   } catch (e) { return { statut: 'erreur' }; }
