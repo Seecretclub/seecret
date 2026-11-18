@@ -1812,6 +1812,7 @@
     if (state.robotPriorite) biens = biens.filter((b) => prioriteRobot(b).level === state.robotPriorite);
     if (f.type) biens = biens.filter((b) => b.type === f.type);
     if (f.surfaceMin) biens = biens.filter((b) => (b.surface_habitable_m2 || 0) >= Number(f.surfaceMin));
+    if (f.surfaceMax) biens = biens.filter((b) => (b.surface_habitable_m2 || 0) <= Number(f.surfaceMax));
     if (f.piecesMin) biens = biens.filter((b) => (b.pieces || 0) >= Number(f.piecesMin));
     if (f.etageMin) biens = biens.filter((b) => typeof b.etageEstime === 'number' && b.etageEstime >= Number(f.etageMin));
     if (f.epoque) biens = biens.filter((b) => epoqueCorrespond(anneeComparable(b), f.epoque) === true);
@@ -1848,6 +1849,7 @@
       '<div class="se-form-grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-top:10px">' +
         '<div class="se-field"><label>Type de bien</label>' + sel('type', [['', 'Tous']].concat(types.map((t) => [t, t])), f.type || '') + '</div>' +
         '<div class="se-field"><label>Surface min (m²)</label><input class="se-input" type="number" data-rf="surfaceMin" value="' + esc(f.surfaceMin || '') + '" placeholder="0"/></div>' +
+        '<div class="se-field"><label>Surface max (m²)</label><input class="se-input" type="number" data-rf="surfaceMax" value="' + esc(f.surfaceMax || '') + '" placeholder="0"/></div>' +
         '<div class="se-field"><label>Pièces min</label><input class="se-input" type="number" data-rf="piecesMin" value="' + esc(f.piecesMin || '') + '" placeholder="0"/></div>' +
         '<div class="se-field"><label>Étage min</label><input class="se-input" type="number" data-rf="etageMin" value="' + esc(f.etageMin || '') + '" placeholder="0"/></div>' +
         '<div class="se-field"><label>Propriétaire</label>' + sel('proprio', [['tous', 'Tous'], ['oui', 'Identifié'], ['non', 'Non identifié']], f.proprio || 'tous') + '</div>' +
@@ -2161,12 +2163,7 @@
             '<button class="se-btn" type="button" data-act="dpe-search">Rechercher</button>' +
             '<span class="se-hint" id="dpe-status"></span>' +
           '</div>' +
-          '<details style="margin-top:10px"><summary style="cursor:pointer;font-size:13px;color:var(--color-taupe)">Critères avancés</summary>' +
-            '<div class="se-form-grid" style="margin-top:10px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">' +
-              '<div class="se-field"><label>Surface min (m²)</label><input class="se-input" name="surface_min" type="number" placeholder="40"/></div>' +
-              '<div class="se-field"><label>Surface max (m²)</label><input class="se-input" name="surface_max" type="number" placeholder="100"/></div>' +
-            '</div>' +
-          '</details>' +
+          '<p class="se-hint" style="margin-top:8px">Type de bien, surface, étage, époque… se règlent une seule fois ci-dessous, dans « Filtres &amp; tri » : ils affinent aussi bien la recherche (Rechercher) que l’affichage de ce qui est déjà chargé.</p>' +
         '</form>' +
         '<hr style="margin:16px 0;border:none;border-top:1px solid var(--color-stroke-faint)"/>' +
         barreFiltresRobot() +
@@ -5386,6 +5383,18 @@
         const v = String(fd.get(k) || '').trim();
         if (v) params.set(k, v);
       });
+      // Page Radar fusionnée (#/robot) : ce formulaire n'a plus ses propres
+      // champs Surface/Type (volontairement retirés, cf. « Filtres & tri »
+      // juste en dessous) — on réutilise alors les réglages de ce panneau
+      // pour que « Rechercher » aille chercher plus loin avec les mêmes
+      // critères, au lieu de les ignorer. Le formulaire du tab DPE garde ses
+      // propres champs et n'est donc jamais concerné par ce repli.
+      if (!form || !form.elements.namedItem('surface_min')) {
+        const rf = state.robotFiltres || {};
+        if (!params.has('surface_min') && rf.surfaceMin) params.set('surface_min', String(rf.surfaceMin));
+        if (!params.has('surface_max') && rf.surfaceMax) params.set('surface_max', String(rf.surfaceMax));
+        if (!params.has('type') && rf.type) params.set('type', String(rf.type));
+      }
       if (classes.length) params.set('classes', classes.join(','));
       if (!params.has('ville') && !params.has('code_postal')) { toast('Saisissez une adresse, une ville ou un code postal.', 'warn'); return; }
       const status = document.getElementById('dpe-status');
