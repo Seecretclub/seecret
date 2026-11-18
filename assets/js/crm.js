@@ -188,6 +188,10 @@
     return {
       v: 1,
       agent: { prenom: 'Léa', nom: 'Marchand', email: 'lea@seecret.club', tel: '06 71 22 90 14', agence: 'Seecret — Paris centre' },
+      // Identité réelle de la personne connectée (serveur, via /api/auth/me) —
+      // distincte de `agent` ci-dessus qui n'est qu'un profil d'affichage local.
+      // null jusqu'au premier appel réussi à syncIdentite().
+      moi: null,
       clients, biens, recherches, demandes, visites, offres, taches,
       threads: {
         c1: [
@@ -812,6 +816,36 @@
 
   const libelleDoc = (t) => ({ identite: 'Pièce d’identité', financement: 'Justification de financement', bien: 'Titre de propriété' }[t] || t);
 
+  // Identité réelle (rôle + id serveur) de la personne connectée. Permet à
+  // l'interface de savoir si elle doit proposer la gestion des agents
+  // (super-admin) ou simplement travailler sur « mes clients » (agent) —
+  // le filtrage réel et contraignant se fait côté serveur, ceci ne sert
+  // qu'à adapter l'affichage.
+  async function syncIdentite() {
+    try {
+      const r = await fetch('/api/auth/me', { headers: { accept: 'application/json' } });
+      if (!r.ok) return;
+      const data = await r.json();
+      if (data && data.membre) {
+        state.moi = { id: data.membre.id, role: data.membre.role, prenom: data.membre.prenom, nom: data.membre.nom, email: data.membre.email };
+        if (state.moi.role === 'superadmin') syncAgents();
+        render();
+      }
+    } catch (e) { /* pas bloquant : l'interface reste utilisable sans */ }
+  }
+
+  // Liste des comptes agents — réservé au super-admin (les routes serveur
+  // le vérifient aussi ; ceci n'est que pour l'affichage).
+  async function syncAgents() {
+    try {
+      const r = await fetch('/api/agents', { headers: { accept: 'application/json' } });
+      if (!r.ok) return;
+      const data = await r.json();
+      state.agents = (data && data.agents) || [];
+      render();
+    } catch (e) { /* non bloquant */ }
+  }
+
   async function syncServeur() {
     try {
       const [rl, rd, rt, rb, rr, ra, ro] = await Promise.all([
@@ -836,7 +870,7 @@
           Object.assign(c, {
             serverId: l.id, serveurStatut: l.statut,
             documents: l.documents || 0, documentsValides: l.documentsValides || 0,
-            bienInfo: l.bienInfo || null
+            bienInfo: l.bienInfo || null, agentId: l.agentId || null
           });
           if (l.statut === 'accepte' && c.statut === 'prospect') c.statut = 'actif';
         } else {
@@ -850,7 +884,8 @@
             apport: l.apport || 0, financement: l.financement || '', courtier: !!l.courtier, bienAVendre: !!l.bienAVendre,
             notes: '', tags: [], agent: 'Gabriel Taieb', cree: l.cree || nowISO(),
             documents: l.documents || 0, documentsValides: l.documentsValides || 0,
-            pipeline: l.pipeline || '', adresseBien: l.adresseBien || '', siren: l.siren || '', parcelle: l.parcelle || '', dirigeants: l.dirigeants || []
+            pipeline: l.pipeline || '', adresseBien: l.adresseBien || '', siren: l.siren || '', parcelle: l.parcelle || '', dirigeants: l.dirigeants || [],
+            agentId: l.agentId || null
           });
         }
       });
@@ -966,7 +1001,8 @@
       verifications: viewVerifications,
       taches: viewTaches,
       messages: viewMessages,
-      reglages: viewReglages
+      reglages: viewReglages,
+      agents: viewAgents
     };
 
     const view = (r.name === 'messages' && r.param) ? viewThread : (views[r.name] || viewTableau);
@@ -1058,6 +1094,7 @@
           nav('verifications', r.name, 'check', 'Vérifications', verifEnAttente() || '') +
           nav('messages', r.name, 'chat', 'Messages') +
           nav('reglages', r.name, 'tools', 'Réglages') +
+          (state.moi && state.moi.role === 'superadmin' ? nav('agents', r.name, 'users', 'Agents') : '') +
         '</nav>' +
         '<nav class="se-nav">' +
           '<a href="#" class="se-more" data-act="more">' + ICONS.grid + '<span>Plus</span></a>' +
@@ -1085,7 +1122,7 @@
   }
 
   function titre(r) {
-    const map = { tableau: 'Tableau de bord', demandes: 'Candidatures', demande: 'Fiche demande', clients: 'Leads', reseau: 'Réseau', pipeline: 'Pipeline de relance', notifications: 'À prévenir', client: 'Fiche lead', biens: 'Produits', bien: 'Fiche produit', recherches: 'Recherches', recherche: 'Recherche', robot: 'Immo Data Robot', 'robot-radar': 'Radar — Biens détectés', 'robot-opportunites': 'Opportunités Clients', 'robot-bien': 'Fiche bien Radar', 'robot-dpe': 'Recherche DPE', 'robot-proprietaires': 'Propriétaires', 'robot-proprietaire': 'Fiche propriétaire', 'portefeuille-foncier': 'Portefeuille foncier', 'societe-fonciere': 'Fiche société', bodacc: 'Signaux BODACC', membres: 'Membres', 'biens-club': 'Biens du club', rapprochements: 'Rapprochements', tracking: 'Tracking', visites: 'Visites', offres: 'Propositions → Offres', verifications: 'Vérifications', taches: 'Tâches', messages: 'Messages', reglages: 'Réglages' };
+    const map = { tableau: 'Tableau de bord', demandes: 'Candidatures', demande: 'Fiche demande', clients: 'Leads', reseau: 'Réseau', pipeline: 'Pipeline de relance', notifications: 'À prévenir', client: 'Fiche lead', biens: 'Produits', bien: 'Fiche produit', recherches: 'Recherches', recherche: 'Recherche', robot: 'Immo Data Robot', 'robot-radar': 'Radar — Biens détectés', 'robot-opportunites': 'Opportunités Clients', 'robot-bien': 'Fiche bien Radar', 'robot-dpe': 'Recherche DPE', 'robot-proprietaires': 'Propriétaires', 'robot-proprietaire': 'Fiche propriétaire', 'portefeuille-foncier': 'Portefeuille foncier', 'societe-fonciere': 'Fiche société', bodacc: 'Signaux BODACC', membres: 'Membres', 'biens-club': 'Biens du club', rapprochements: 'Rapprochements', tracking: 'Tracking', visites: 'Visites', offres: 'Propositions → Offres', verifications: 'Vérifications', taches: 'Tâches', messages: 'Messages', reglages: 'Réglages', agents: 'Agents' };
     return map[r.name] || 'CRM';
   }
 
@@ -3572,7 +3609,14 @@
             kv('Secteurs', (c.quartiers || []).map(qLabel).join(', ') || '—') +
             kv('Critères', c.type === 'vendeur' ? '—' : (c.piecesMin || 0) + '+ pièces · ' + (c.surfaceMin || 0) + '+ m² · ' + (c.typeBien || 'tout')) +
             kv('Créé le', dFR(c.cree)) +
-          '</div>' + (c.notes ? '<div class="se-note" style="margin-top:14px">' + esc(c.notes) + '</div>' : '') + '</div>' +
+          '</div>' + (c.notes ? '<div class="se-note" style="margin-top:14px">' + esc(c.notes) + '</div>' : '') +
+          (state.moi && state.moi.role === 'superadmin' && c.serverId ? (
+            '<div class="se-field" style="margin-top:12px"><label>Agent attribué</label>' +
+            '<select class="se-select" data-act="client-reattribuer" data-id="' + esc(c.serverId) + '">' +
+              '<option value="">Non attribué (visible par vous seul)</option>' +
+              (state.agents || []).filter((a) => a.role !== 'superadmin').map((a) => '<option value="' + esc(a.id) + '"' + (c.agentId === a.id ? ' selected' : '') + '>' + esc((a.prenom + ' ' + a.nom).trim() || a.email) + '</option>').join('') +
+            '</select></div>'
+          ) : '') + '</div>' +
 
           carteOpportunitesRadar(c) +
 
@@ -4213,10 +4257,10 @@
 
   function celiaWidget() {
     if (!celiaOuvert) {
-      // Un seul tap sur la bulle ouvre Célia ET lance directement l'écoute si
-      // la reconnaissance vocale est disponible (voir l'action « celia-toggle »)
-      // — pas d'étape intermédiaire où il faudrait rouvrir le panneau puis
-      // chercher un petit bouton micro séparé.
+      // Un tap sur la bulle ouvre Célia en mode texte (pas d'écoute micro
+      // automatique : la transcription vocale a un coût réel à chaque appel,
+      // elle ne se lance que si l'agent le demande explicitement via le
+      // bouton micro du panneau — voir l'action « celia-micro »).
       return '<button class="se-celia-btn" data-act="celia-toggle" aria-label="Parler à Célia">' +
         '<span class="se-celia-btn-dot"></span>' + ICONS.mic +
       '</button>';
@@ -4246,7 +4290,15 @@
               m.actions.map((a) => (a.lien ? '<a class="se-badge open" href="' + a.lien + '">' + esc(a.resume) + '</a>' : '<span class="se-badge open">' + esc(a.resume) + '</span>')).join('') +
             '</div>' : '') +
           '</div>'
-        )).join('') : '<p class="se-muted">Dites-lui par exemple : « Je sors de chez Mme Intel, 12 rue de Seine, elle veut vendre. Envoie-lui la candidature et programme un rappel pour le 28. »' + (reconnaissanceDisponible() ? ' — au micro ou au clavier.' : '') + '</p>') +
+        )).join('') :
+          // Message d'accueil affiché tant qu'aucun échange n'a eu lieu — à
+          // l'ouverture, pas de son ni d'écoute : juste ce message, le champ
+          // texte prêt à recevoir, et le micro disponible à côté si l'agent
+          // préfère dicter.
+          '<div class="se-bubble agent">' +
+            'Que puis-je pour vous' + ((state.moi && state.moi.prenom) ? ', ' + esc(state.moi.prenom) : '') + ' ?' +
+          '</div>' +
+          '<p class="se-muted">Par exemple : « Je sors de chez Mme Intel, 12 rue de Seine, elle veut vendre. Envoie-lui la candidature et programme un rappel pour le 28. »' + (reconnaissanceDisponible() ? ' — au clavier, ou au micro si vous préférez dicter.' : '') + '</p>') +
         ((state.celiaAttente && state.celiaAttente.length) ?
           // L'action proposée reste affichée (bulle ci-dessus) jusqu'à ce
           // que l'agent valide ou refuse explicitement — jamais automatique.
@@ -4316,6 +4368,37 @@
             '<a class="se-btn ghost block" style="margin-top:12px" href="espace.html">Espace membre</a>' +
             '<a class="se-btn ghost block" style="margin-top:8px" href="index.html">Site public</a>' +
           '</div>' +
+        '</div>' +
+      '</div>';
+  }
+
+  /* --------------------------------- agents -------------------------------- */
+  // Réservé au super-admin (côté serveur, requireSuperadmin). Au 18/11/2026
+  // personne n'a encore été invité (usage solo) — cette page sert à préparer
+  // le passage à plusieurs agents sans avoir à retoucher le reste du CRM
+  // plus tard : chaque agent invité ne verra que les clients qui lui sont
+  // attribués ci-dessous (ou qu'il crée lui-même), et verra tous les biens
+  // de la plateforme pour y chercher des correspondances avec ses clients.
+  function viewAgents() {
+    const agents = (state.agents || []).filter((a) => a.role !== 'superadmin');
+    return head('Équipe', 'Agents', 'Chaque agent ne voit que ses propres clients, mais tous les biens de la plateforme.') +
+      '<div class="se-grid cols-2" style="align-items:start">' +
+        '<div class="se-card"><h3>Inviter un agent</h3>' +
+        '<p class="se-hint" style="margin-top:4px">Il recevra un email avec un code de connexion. Il apparaît ci-contre dès l’envoi, avec le statut « Invitation en attente » jusqu’à sa première connexion.</p>' +
+        '<form data-form="invite-agent" class="se-form-grid" style="margin-top:12px">' +
+          '<div class="se-field"><label>Prénom</label><input class="se-input" name="prenom"/></div>' +
+          '<div class="se-field"><label>Nom</label><input class="se-input" name="nom"/></div>' +
+          '<div class="se-field full"><label>Email</label><input class="se-input" type="email" name="email" required/></div>' +
+          '<div class="se-field full"><button class="se-btn" type="submit">Envoyer l’invitation</button></div>' +
+        '</form></div>' +
+        '<div class="se-card"><h3>Équipe (' + agents.length + ')</h3>' +
+        (agents.length ? '<div class="se-list" style="margin-top:8px">' + agents.map((a) => (
+          '<div class="se-row" style="justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--color-ligne)">' +
+            '<div><div style="font-size:14px">' + esc((a.prenom + ' ' + a.nom).trim() || a.email) + '</div>' +
+            '<div class="se-sub">' + esc(a.email) + ' · ' + (a.nbClients || 0) + ' client(s) · ' + (a.derniereConnexion ? 'connecté le ' + dFR(a.derniereConnexion) : 'jamais connecté') + '</div></div>' +
+            '<span class="se-badge ' + (a.actif ? 'open' : 'warn') + '">' + (a.actif ? 'Actif' : 'Invitation en attente') + '</span>' +
+          '</div>'
+        )).join('') + '</div>' : '<p class="se-muted" style="margin-top:10px">Aucun agent pour l’instant — vous gérez seul toute la plateforme.</p>') +
         '</div>' +
       '</div>';
   }
@@ -5038,17 +5121,10 @@
     'celia-toggle': () => {
       const ouverture = !celiaOuvert; // true si on passe de fermé à ouvert
       celiaOuvert = !celiaOuvert;
-      if (!ouverture && celiaRecorder && celiaRecorder.state !== 'inactive') celiaRecorder.stop(); // fermer pendant l'écoute arrête proprement
-      const doitEcouter = ouverture && reconnaissanceDisponible() && !celiaEcoute;
+      // Fermer pendant une écoute en cours l'arrête proprement (sans envoyer
+      // ce qui a déjà été dicté : l'agent a changé d'avis en refermant).
+      if (!ouverture && celiaRecorder && celiaRecorder.state !== 'inactive') celiaRecorder.stop();
       render();
-      if (doitEcouter) {
-        // Important : on appelle basculerEcoute() ICI, de façon synchrone dans le
-        // gestionnaire de clic (pas via setTimeout). Chrome exige que le
-        // démarrage du micro soit directement rattaché au geste de l'utilisateur
-        // ("user activation") ; décalé dans un setTimeout, même de quelques
-        // dizaines de ms, Chrome refuse silencieusement la demande.
-        basculerEcoute();
-      }
       setTimeout(() => { const box = document.querySelector('[data-celia-scroll]'); if (box) box.scrollTop = box.scrollHeight; }, 30);
     },
     'celia-reset': () => { state.celiaMessages = []; state.celiaHistorique = []; state.celiaAttente = null; commit(); },
@@ -5360,7 +5436,22 @@
     fn(el, el.getAttribute('data-id'), e);
   });
 
-  document.addEventListener('change', (e) => {
+  document.addEventListener('change', async (e) => {
+    if (e.target.matches('[data-act="client-reattribuer"]')) {
+      const select = e.target;
+      const serverId = select.getAttribute('data-id');
+      const agentId = select.value || null;
+      select.disabled = true;
+      try {
+        const r = await fetch('/api/leads/' + serverId, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ agentId }) });
+        const res = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(res.error || 'Erreur serveur');
+        const c = state.clients.find((x) => x.serverId === serverId);
+        if (c) c.agentId = agentId;
+        toast(agentId ? 'Client attribué.' : 'Client désattribué (visible par vous seul).', 'ok');
+      } catch (e2) { toast('Erreur : ' + (e2.message || 'serveur'), 'warn'); }
+      select.disabled = false;
+    }
     if (e.target.classList.contains('sel-tous')) {
       document.querySelectorAll('.sel-acq').forEach((b) => { b.checked = e.target.checked; });
     }
@@ -5400,6 +5491,19 @@
     const data = new FormData(form);
     const chiffres = (v) => Number(String(v || '').replace(/[^\d.-]/g, '')) || 0;
 
+    if (kind === 'invite-agent') {
+      const body = { prenom: String(data.get('prenom') || '').trim(), nom: String(data.get('nom') || '').trim(), email: String(data.get('email') || '').trim() };
+      try {
+        const r = await fetch('/api/agents/inviter', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+        const res = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(res.error || 'Erreur serveur');
+        form.reset();
+        toast('Invitation envoyée à ' + body.email + '.', 'ok');
+        syncAgents();
+      } catch (e) { toast('Erreur : ' + (e.message || 'serveur'), 'warn'); }
+      return;
+    }
+
     if (kind === 'client') {
       const id = form.getAttribute('data-id');
       const existing = id ? client(id) : null;
@@ -5427,7 +5531,28 @@
         return;
       }
       if (id) { const i = state.clients.findIndex((c) => c.id === id); state.clients[i] = Object.assign(existing, obj); }
-      else state.clients.push(obj);
+      else {
+        // Un nouveau client vit désormais d'emblée côté serveur (et non plus
+        // seulement dans le localStorage du navigateur) : c'est ce qui permet
+        // au super-admin de le réattribuer plus tard à un agent, et à un
+        // agent de ne voir que ses propres clients. `projet` (acquereur/
+        // vendeur/mixte) est le champ serveur équivalent à `type` ici — ne
+        // pas confondre avec le `type` serveur qui désigne le propriétaire
+        // (personne/SCI) pour les leads venus du Radar.
+        try {
+          const r = await fetch('/api/leads', {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(Object.assign({}, obj, {
+              projet: obj.type === 'vendeur' ? 'vendeur' : obj.type === 'mixte' ? 'mixte' : 'acquereur',
+              type: undefined
+            }))
+          });
+          const res = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(res.error || 'Erreur serveur');
+          obj.serverId = res.lead.id;
+        } catch (e) { toast('Enregistré en local seulement (' + (e.message || 'erreur serveur') + ') — invisible des autres agents pour l’instant.', 'warn'); }
+        state.clients.push(obj);
+      }
       modal = null;
       commit();
       toast('Client enregistré.', 'ok');
@@ -5552,7 +5677,24 @@
         return;
       }
       if (id) { const i = state.recherches.findIndex((r) => r.id === id); state.recherches[i] = Object.assign(existing, obj); }
-      else state.recherches.push(obj);
+      else {
+        // Même logique que pour un nouveau client : la recherche est créée
+        // d'emblée côté serveur, rattachée au lead serveur du client (et non
+        // à son id local), pour être visible par le bon agent et par le
+        // super-admin — pas seulement dans ce navigateur.
+        const c = client(obj.clientId);
+        if (c && c.serverId) {
+          try {
+            const r = await fetch('/api/recherches', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(Object.assign({}, obj, { clientId: c.serverId })) });
+            const res = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(res.error || 'Erreur serveur');
+            obj.serverId = res.recherche.id;
+          } catch (e) { toast('Enregistrée en local seulement (' + (e.message || 'erreur serveur') + ').', 'warn'); }
+        } else {
+          toast('Client non synchronisé — recherche enregistrée en local seulement.', 'warn');
+        }
+        state.recherches.push(obj);
+      }
       modal = null;
       commit();
       toast('Recherche enregistrée.', 'ok');
@@ -5707,6 +5849,7 @@
   /* -------------------------------- démarrage ------------------------------ */
 
   render();
+  syncIdentite();
   syncServeur();
   setInterval(() => { if (!modal) syncServeur(); }, 15000);
 })();

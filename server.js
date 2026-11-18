@@ -143,13 +143,13 @@ function decoupe(dossier) {
 app.get('/api/candidatures', requireAdmin, (req, res) => {
   const db = readDb();
   // On ne diffuse jamais les clés publiques ni l'historique de connexions.
-  const leads = db.leads.map((l) => {
+  const leads = leadsVisibles(req, db).map((l) => {
     const copy = Object.assign({}, l);
     delete copy.passkeys;
     delete copy.connexions;
     return copy;
   });
-  res.json({ leads: leads, recherches: db.recherches, biens: db.biens, demandes: db.demandes });
+  res.json({ leads: leads, recherches: recherchesVisibles(req, db), biens: db.biens, demandes: db.demandes });
 });
 
 // Comparables du book d'estimation (ventes DVF + annonces du marché).
@@ -351,20 +351,87 @@ function publicLead(lead) {
 
 // Rôles : 'membre' par défaut, 'admin' / 'superadmin' pour l'agence.
 // Les emails super-admin peuvent être fournis via ADMIN_EMAILS (séparés par des virgules).
+// Rôles internes à l'agence (en plus de 'membre', le rôle par défaut des
+// clients/leads de l'espace membre public) :
+//   - 'agent'      : un agent de l'agence, voit UNIQUEMENT ses propres clients
+//                    (ceux qui lui sont attribués, cf. lead.agentId), mais voit
+//                    TOUS les biens de la plateforme (robotBiens + catalogue)
+//                    pour pouvoir croiser avec ses propres clients.
+//   - 'admin'      : alias historique d'agent (gardé pour compat, traité pareil).
+//   - 'superadmin' : Gabriel (ou toute adresse listée dans ADMIN_EMAILS) — voit
+//                    et modifie tout, sans aucune restriction par agentId.
+// Au 18/11/2026, aucun compte 'agent' n'existe encore en production (usage
+// solo) : ce système est posé maintenant pour ne pas avoir à retoucher toute
+// la couche de permissions plus tard, mais il n'a aucun effet tant qu'aucun
+// lead n'a role === 'agent' — le superadmin voit tout exactement comme avant.
+const ROLES_STAFF = ['agent', 'admin', 'superadmin'];
+
 function roleOf(lead) {
   if (!lead) return 'membre';
   const admins = String(process.env.ADMIN_EMAILS || '').toLowerCase().split(',').map((s) => s.trim()).filter(Boolean);
   if (admins.indexOf((lead.email || '').toLowerCase()) > -1) return 'superadmin';
-  return ['admin', 'superadmin', 'membre'].indexOf(lead.role) > -1 ? lead.role : 'membre';
+  return ROLES_STAFF.concat('membre').indexOf(lead.role) > -1 ? lead.role : 'membre';
+}
+
+function estAgentSimple(role) { return role === 'agent' || role === 'admin'; }
+
+// Après connexion, un client est redirigé vers son espace membre public ;
+// un agent ou le super-admin vers le CRM interne — même mécanisme de
+// connexion (lien magique / code / passkey) que l'espace membre, seule la
+// destination change.
+function redirectPostLogin(lead) {
+  const role = roleOf(lead);
+  return (role === 'agent' || role === 'admin' || role === 'superadmin') ? '/crm.html' : '/espace.html';
 }
 
 function requireAdmin(req, res, next) {
   requireAuth(req, res, () => {
     const role = roleOf(req.lead);
-    if (role !== 'admin' && role !== 'superadmin') {
+    if (ROLES_STAFF.indexOf(role) === -1) {
       return res.status(403).json({ error: 'Accès réservé à l’agence' });
     }
     next();
+  });
+}
+
+function requireSuperadmin(req, res, next) {
+  requireAdmin(req, res, () => {
+    if (roleOf(req.lead) !== 'superadmin') {
+      return res.status(403).json({ error: 'Accès réservé au super-admin' });
+    }
+    next();
+  });
+}
+
+// Un lead/client est visible par l'agent courant s'il lui est explicitement
+// attribué (agentId), ou si l'agent est lui-même l'auteur de sa création
+// (creePar, renseigné automatiquement à la création — cf. POST /api/leads).
+// Un lead non attribué (agentId vide) n'est visible que par le super-admin,
+// le temps qu'il le répartisse — jamais par un agent au hasard.
+function leadVisibleParAgent(lead, agentLeadId) {
+  return (lead.agentId || lead.creePar) === agentLeadId;
+}
+
+// Filtre la liste des leads selon le rôle de la requête courante. Ne change
+// RIEN pour 'superadmin' (tout est visible, comme aujourd'hui) — ne fait
+// quoi que ce soit que pour un rôle 'agent'/'admin', et ignore les comptes
+// internes eux-mêmes (role agent/admin/superadmin) qui ne sont pas des
+// clients à afficher dans la liste de clientèle.
+function leadsVisibles(req, db) {
+  const role = roleOf(req.lead);
+  const clientsSeuls = db.leads.filter((l) => ROLES_STAFF.indexOf(l.role) === -1);
+  if (role === 'superadmin') return clientsSeuls;
+  return clientsSeuls.filter((l) => leadVisibleParAgent(l, req.lead.id));
+}
+
+// Même principe pour les recherches : une recherche est visible si son
+// client (clientId/leadId) est visible.
+function recherchesVisibles(req, db) {
+  const role = roleOf(req.lead);
+  if (role === 'superadmin') return db.recherches;
+  return db.recherches.filter((r) => {
+    const lead = db.leads.find((l) => l.id === (r.clientId || r.leadId));
+    return lead && leadVisibleParAgent(lead, req.lead.id);
   });
 }
 
@@ -597,7 +664,7 @@ app.post('/api/auth/verify-code', (req, res) => {
   const token = createSession(db, lead, req);
   writeDb(db);
   setCookie(res, req, SESSION_COOKIE, token, SESSION_TTL);
-  res.json({ ok: true, redirect: '/espace.html' });
+  res.json({ ok: true, redirect: redirectPostLogin(lead) });
 });
 
 // 1c) Connexion auto par le lien magique (?token=...) — sans code ni Passkey.
@@ -619,7 +686,7 @@ app.post('/api/auth/verify-token', (req, res) => {
   const sessionToken = createSession(db, lead, req);
   writeDb(db);
   setCookie(res, req, SESSION_COOKIE, sessionToken, SESSION_TTL);
-  res.json({ ok: true, redirect: '/espace.html' });
+  res.json({ ok: true, redirect: redirectPostLogin(lead) });
 });
 
 // 2) Le lien est valide → on prépare la création du Passkey.
@@ -699,7 +766,7 @@ app.post('/api/auth/complete-enrollment', async (req, res) => {
     flows.delete(getCookie(req, FLOW_COOKIE));
     clearCookie(res, req, FLOW_COOKIE);
     setCookie(res, req, SESSION_COOKIE, sessionToken, SESSION_TTL);
-    res.json({ ok: true, redirect: '/espace.html' });
+    res.json({ ok: true, redirect: redirectPostLogin(lead) });
   } catch (e) {
     console.error('complete-enrollment :', e.message);
     res.status(400).json({ error: 'Réponse WebAuthn invalide' });
@@ -763,7 +830,7 @@ app.post('/api/auth/login', async (req, res) => {
     flows.delete(getCookie(req, FLOW_COOKIE));
     clearCookie(res, req, FLOW_COOKIE);
     setCookie(res, req, SESSION_COOKIE, sessionToken, SESSION_TTL);
-    res.json({ ok: true, redirect: '/espace.html' });
+    res.json({ ok: true, redirect: redirectPostLogin(lead) });
   } catch (e) {
     console.error('login :', e.message);
     res.status(400).json({ error: 'Connexion impossible' });
@@ -1304,7 +1371,15 @@ app.patch('/api/leads/:id', requireAdmin, (req, res) => {
   const db = readDb();
   const lead = db.leads.find((l) => l.id === req.params.id);
   if (!lead) return res.status(404).json({ error: 'Lead introuvable' });
+  const role = roleOf(req.lead);
+  if (role !== 'superadmin' && !leadVisibleParAgent(lead, req.lead.id)) {
+    return res.status(403).json({ error: 'Ce client est attribué à un autre agent.' });
+  }
   const body = req.body || {};
+  // Seul le super-admin peut réattribuer un client à un autre agent.
+  if (role === 'superadmin' && typeof body.agentId !== 'undefined') {
+    lead.agentId = body.agentId ? String(body.agentId) : null;
+  }
   ['prenom', 'nom', 'email', 'tel', 'ville', 'typeBien', 'source', 'notes', 'financement'].forEach((k) => { if (typeof body[k] === 'string') lead[k] = body[k]; });
   ['budgetMin', 'budgetMax', 'piecesMin', 'surfaceMin', 'surfaceMax', 'apport'].forEach((k) => { if (body[k] !== undefined) lead[k] = Math.max(0, Number(body[k]) || 0); });
   if (Array.isArray(body.quartiers)) lead.quartiers = body.quartiers.map(String);
@@ -1347,10 +1422,45 @@ app.patch('/api/biens/:id', requireAdmin, (req, res) => {
   res.json({ ok: true, bien: bien });
 });
 
+// Avant ce correctif, une recherche nouvellement créée dans le CRM ne
+// vivait que dans le localStorage du navigateur (jamais de POST serveur,
+// seul un PATCH existait, pour une recherche déjà connue du serveur) — donc
+// invisible depuis un autre poste/agent, et hors de portée du filtrage par
+// agent ci-dessus. On lui donne une vraie création côté serveur.
+app.post('/api/recherches', requireAdmin, (req, res) => {
+  const db = readDb();
+  const body = req.body || {};
+  const clientId = String(body.clientId || '');
+  const client = db.leads.find((l) => l.id === clientId);
+  if (!client) return res.status(400).json({ error: 'Client introuvable — enregistrez d’abord le client.' });
+  if (roleOf(req.lead) !== 'superadmin' && !leadVisibleParAgent(client, req.lead.id)) {
+    return res.status(403).json({ error: 'Ce client est attribué à un autre agent.' });
+  }
+  const rec = {
+    id: uid('r'), clientId: clientId, titre: String(body.titre || 'Recherche').trim(),
+    type: String(body.type || ''), types: Array.isArray(body.types) ? body.types.map(String) : [],
+    prixMax: Math.max(0, Number(body.prixMax) || 0), piecesMin: Math.max(0, Number(body.piecesMin) || 0),
+    surfaceMin: Math.max(0, Number(body.surfaceMin) || 0), surfaceMax: Math.max(0, Number(body.surfaceMax) || 0),
+    dpe: String(body.dpe || ''), delai: String(body.delai || ''), financement: String(body.financement || ''),
+    apport: Math.max(0, Number(body.apport) || 0), courtier: !!body.courtier, bienAVendre: !!body.bienAVendre,
+    quartiers: Array.isArray(body.quartiers) ? body.quartiers.map(String) : [],
+    statut: 'active', alertes: true, cree: nowISO()
+  };
+  db.recherches.push(rec);
+  writeDb(db);
+  res.json({ ok: true, recherche: rec });
+});
+
 app.patch('/api/recherches/:id', requireAdmin, (req, res) => {
   const db = readDb();
   const rec = db.recherches.find((r) => r.id === req.params.id);
   if (!rec) return res.status(404).json({ error: 'Recherche introuvable' });
+  if (roleOf(req.lead) !== 'superadmin') {
+    const client = db.leads.find((l) => l.id === (rec.clientId || rec.leadId));
+    if (!client || !leadVisibleParAgent(client, req.lead.id)) {
+      return res.status(403).json({ error: 'Cette recherche appartient à un client attribué à un autre agent.' });
+    }
+  }
   const body = req.body || {};
   ['titre', 'type', 'delai', 'financement', 'dpe'].forEach((k) => { if (typeof body[k] === 'string') rec[k] = body[k]; });
   ['prixMax', 'piecesMin', 'surfaceMin', 'surfaceMax', 'apport'].forEach((k) => { if (body[k] !== undefined) rec[k] = Math.max(0, Number(body[k]) || 0); });
@@ -1411,7 +1521,7 @@ app.post('/api/biens/:id/exclusivite-scan', requireAdmin, async (req, res) => {
 
 app.get('/api/recherches', requireAdmin, (req, res) => {
   const db = readDb();
-  res.json({ ok: true, recherches: db.recherches });
+  res.json({ ok: true, recherches: recherchesVisibles(req, db) });
 });
 
 // ---- Offres (Silent Offer) ----
@@ -2080,42 +2190,116 @@ app.post('/api/notifications', requireAdmin, (req, res) => {
   res.json({ ok: true, count: db.notificationsTraitees.length });
 });
 
-// Transformer une prospection en Lead CRM
+// Création d'un client CRM — à la fois pour « transformer une prospection
+// DPE en Lead » (robot-ajouter) et pour le formulaire « Nouveau client »
+// classique, qui jusqu'ici ne créait le client QUE dans le localStorage du
+// navigateur (jamais côté serveur) : invisible pour un autre agent ou poste,
+// et hors de portée du filtrage par agentId mis en place ci-dessus.
 app.post('/api/leads', requireAdmin, (req, res) => {
   const db = readDb();
   const body = req.body || {};
   const nom = String(body.nom || '').trim();
-  if (!nom) return res.status(400).json({ error: 'Identité du propriétaire inconnue — impossible de créer un Lead nominatif.' });
+  const prenom = String(body.prenom || '').trim();
+  if (!nom && !prenom) return res.status(400).json({ error: 'Un nom (ou prénom) est nécessaire.' });
   const email = String(body.email || '').trim().toLowerCase();
   const siren = String(body.siren || '').trim();
   const tel = String(body.tel || '').trim();
   const adresseBien = String(body.adresseBien || body.adresse || '').trim();
-  // Anti-doublons : email, SIREN, nom complet, ou bien (adresse normalisée + parcelle)
+  // Anti-doublons : email ou SIREN déjà connus (un nom seul n'est plus
+  // bloquant — deux clients homonymes sont courants en agence).
   if (email && db.leads.some((l) => (l.email || '').toLowerCase() === email)) {
     return res.status(409).json({ error: 'Un lead avec cet email existe déjà.' });
   }
   if (siren && db.leads.some((l) => (l.siren || '') === siren)) {
     return res.status(409).json({ error: 'Une société avec ce SIREN existe déjà.' });
   }
-  if (db.leads.some((l) => ((l.nom || '') + ' ' + (l.prenom || '')).trim().toLowerCase() === nom.toLowerCase())) {
-    return res.status(409).json({ error: 'Un lead avec ce nom existe déjà.' });
-  }
+  const role = roleOf(req.lead);
+  // Un agent qui crée un client en devient automatiquement propriétaire
+  // (« enregistré de lui-même »). Le super-admin peut, lui, attribuer
+  // directement le client à l'agent de son choix via agentId ; à défaut le
+  // client reste non attribué (visible seulement par le super-admin, comme
+  // les clients déjà existants avant ce système).
+  const agentId = estAgentSimple(role) ? req.lead.id : (body.agentId ? String(body.agentId) : null);
   const lead = {
-    id: uid('l'), prenom: String(body.prenom || ''), nom: nom, email: email, tel: tel,
+    id: uid('l'), prenom: prenom, nom: nom, email: email, tel: tel,
     ville: String(body.ville || ''), projet: 'prospect', role: 'membre', type: String(body.type || 'personne'),
     siren: siren, dirigeants: Array.isArray(body.dirigeants) ? body.dirigeants : [],
-    source: 'Immo Data Robot', statut: 'prospect', budgetMax: 0, quartiers: [], piecesMin: 0, surfaceMin: 0,
+    source: String(body.source || 'Immo Data Robot'), statut: String(body.statut || 'prospect'),
+    budgetMin: Math.max(0, Number(body.budgetMin) || 0), budgetMax: Math.max(0, Number(body.budgetMax) || 0),
+    quartiers: Array.isArray(body.quartiers) ? body.quartiers.map(String) : [],
+    piecesMin: Math.max(0, Number(body.piecesMin) || 0), surfaceMin: Math.max(0, Number(body.surfaceMin) || 0),
+    surfaceMax: Math.max(0, Number(body.surfaceMax) || 0), delai: String(body.delai || ''),
+    financement: String(body.financement || ''), apport: Math.max(0, Number(body.apport) || 0),
+    courtier: !!body.courtier, bienAVendre: !!body.bienAVendre, typeBien: String(body.typeBien || ''),
     notes: String(body.notes || ''), adresseBien: adresseBien, parcelle: String(body.parcelle || ''),
-    dpe: String(body.dpe || ''), cree: nowISO()
+    dpe: String(body.dpe || ''), creePar: req.lead.id, agentId: agentId, cree: nowISO()
   };
   db.leads.push(lead);
   writeDb(db);
   res.json({ ok: true, lead: lead });
 });
 
+// ---- Gestion des comptes agents (super-admin uniquement) ----
+// Au 18/11/2026, aucun agent n'est encore employé (usage solo) — ces routes
+// posent les fondations pour plus tard sans rien changer à l'usage actuel :
+// seul un compte dont le rôle est explicitement 'agent' ou 'admin' est
+// concerné par le filtrage par agentId mis en place ci-dessus.
+app.get('/api/agents', requireSuperadmin, (req, res) => {
+  const db = readDb();
+  const agents = db.leads.filter((l) => estAgentSimple(l.role) || roleOf(l) === 'superadmin').map((l) => ({
+    id: l.id, prenom: l.prenom || '', nom: l.nom || '', email: l.email || '',
+    role: roleOf(l), cree: l.cree || null, derniereConnexion: l.derniereConnexion || null,
+    actif: !!l.derniereConnexion || roleOf(l) === 'superadmin',
+    nbClients: db.leads.filter((c) => !estAgentSimple(c.role) && roleOf(c) !== 'superadmin' && (c.agentId || c.creePar) === l.id).length
+  }));
+  res.json({ ok: true, agents: agents });
+});
+
+app.post('/api/agents/inviter', requireSuperadmin, (req, res) => {
+  const db = readDb();
+  const email = String((req.body && req.body.email) || '').trim().toLowerCase();
+  const prenom = String((req.body && req.body.prenom) || '').trim();
+  const nom = String((req.body && req.body.nom) || '').trim();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/.test(email)) return res.status(400).json({ error: 'Adresse email invalide' });
+  if (!prenom && !nom) return res.status(400).json({ error: 'Le nom de l’agent est nécessaire' });
+  let agent = db.leads.find((l) => (l.email || '').toLowerCase() === email);
+  if (agent) {
+    if (estAgentSimple(agent.role)) return res.status(409).json({ error: 'Cet agent a déjà un compte' });
+    agent.role = 'agent';
+    agent.statut = 'accepte';
+    if (prenom) agent.prenom = prenom;
+    if (nom) agent.nom = nom;
+  } else {
+    agent = {
+      id: uid('l'), prenom: prenom, nom: nom, email: email, tel: '', ville: '',
+      projet: 'agent', role: 'agent', statut: 'accepte', source: 'Invitation agence',
+      quartiers: [], cree: nowISO()
+    };
+    db.leads.push(agent);
+  }
+  const token = crypto.randomBytes(32).toString('hex');
+  const code = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+  db.magicLinks.push({
+    id: sha256(token), codeHash: sha256(code), leadId: agent.id, email: email,
+    cree: nowISO(), expire: Date.now() + MAGIC_TTL, utilise: false, codeUtilise: false
+  });
+  writeDb(db);
+  const lien = originOf(req) + '/espace.html?token=' + token;
+  console.log('[TEST] Invitation agent ' + email + ' → code: ' + code + ' · lien: ' + lien);
+  if (mailer) {
+    mailer.sendMail({
+      from: '"Seecret" <' + FROM_EMAIL + '>', to: email,
+      subject: 'Votre accès agent Seecret', html: emailHTML(prenom, code, lien)
+    }).catch((err) => console.error('[email] invitation agent échouée :', err.message));
+  } else {
+    console.warn('[email] SMTP non configuré — aucun email d’invitation envoyé pour ' + email + '.');
+  }
+  res.json({ ok: true, agent: { id: agent.id, prenom: agent.prenom, nom: agent.nom, email: agent.email, role: agent.role } });
+});
+
 app.get('/api/leads', requireAdmin, (req, res) => {
   const db = readDb();
-  const leads = db.leads.map((l) => {
+  const leads = leadsVisibles(req, db).map((l) => {
     const c = Object.assign({}, l);
     delete c.passkeys;
     delete c.connexions;
@@ -2136,6 +2320,9 @@ app.patch('/api/leads/:id/statut', requireAdmin, (req, res) => {
   const db = readDb();
   const lead = db.leads.find((l) => l.id === req.params.id);
   if (!lead) return res.status(404).json({ error: 'Lead introuvable' });
+  if (roleOf(req.lead) !== 'superadmin' && !leadVisibleParAgent(lead, req.lead.id)) {
+    return res.status(403).json({ error: 'Ce client est attribué à un autre agent.' });
+  }
   const statut = String((req.body && req.body.statut) || 'accepte');
   lead.statut = statut;
   writeDb(db);
@@ -2146,6 +2333,9 @@ app.get('/api/leads/:id/documents', requireAdmin, (req, res) => {
   const db = readDb();
   const lead = db.leads.find((l) => l.id === req.params.id);
   if (!lead) return res.status(404).json({ error: 'Lead introuvable' });
+  if (roleOf(req.lead) !== 'superadmin' && !leadVisibleParAgent(lead, req.lead.id)) {
+    return res.status(403).json({ error: 'Ce client est attribué à un autre agent.' });
+  }
   res.json({ ok: true, documents: (lead.documents || []).slice().reverse(), types: TYPES_DOC });
 });
 
@@ -3028,7 +3218,12 @@ app.patch('/api/rappels/:id', requireAdmin, (req, res) => {
   res.json({ ok: true, rappel: rappel });
 });
 
-// Accès au CRM : réservé aux administrateurs. Les autres sont renvoyés à la connexion.
+// Accès au CRM : réservé à l'agence (agent/admin/superadmin). Les autres
+// sont renvoyés à l'espace membre public. Avant correctif, ce garde ne
+// listait que 'admin'/'superadmin' — oublié lors de l'ajout du rôle
+// 'agent', ce qui aurait renvoyé tout agent invité vers l'espace membre au
+// lieu du CRM malgré un rôle correct partout ailleurs (trouvé en testant un
+// compte agent de bout en bout, pas seulement via l'API).
 app.get('/crm.html', (req, res, next) => {
   const token = getCookie(req, SESSION_COOKIE);
   if (!token) return res.redirect('/espace.html');
@@ -3037,7 +3232,7 @@ app.get('/crm.html', (req, res, next) => {
   const session = db.sessions.find((s) => s.id === sha256(token));
   const lead = session ? db.leads.find((l) => l.id === session.leadId) : null;
   const role = roleOf(lead);
-  if (role !== 'admin' && role !== 'superadmin') return res.redirect('/espace.html');
+  if (ROLES_STAFF.indexOf(role) === -1) return res.redirect('/espace.html');
   next();
 });
 
