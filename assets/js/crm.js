@@ -1764,6 +1764,20 @@
     const dvf = (b.dvfMutations && b.dvfMutations.length) ? 1 : 0;
     const nb = matchings().filter((m) => m.bienId === b.id).length;
     const energivore = (b.dpe === 'F' || b.dpe === 'G') ? 1 : 0;
+    // Trois signaux comportementaux déjà collectés (visibles sous forme de
+    // tags/signaux ailleurs dans l'écran) mais qui, jusqu'ici, ne comptaient
+    // pour rien dans le score de priorité lui-même — "Détention ancienne"
+    // valait 0 point en dur, et le DPE récent / les permis d'urbanisme
+    // n'étaient tout simplement pas pris en compte. Résultat : deux biens
+    // pouvaient avoir la même priorité affichée alors que l'un montrait un
+    // vrai signe de projet de vente (DPE tout juste commandé, permis de
+    // démolition déposé) et l'autre non. On les intègre ici pour que le
+    // score reflète vraiment "qui approcher en premier".
+    const detention = dureeDetentionInfo(b);
+    const joursDpe = joursDepuis(b.dpeDate);
+    const dpeRecent = joursDpe != null && joursDpe <= 180;
+    const permis = permisPourBien(b) || [];
+    const permisForts = permis.some((p) => p.family === 'demolition' || p.family === 'construction');
 
     const idContribs = [
       { label: 'Propriétaire identifié', points: prop.nom ? 40 : 0, max: 40 },
@@ -1780,7 +1794,9 @@
       { label: 'Passoire thermique (F/G)', points: energivore ? 30 : 0, max: 30 },
       { label: 'Historique DVF (mutations)', points: dvf ? 25 : 0, max: 25 },
       { label: 'Acquéreurs compatibles', points: nb > 0 ? Math.min(25, nb * 5) : 0, max: 25 },
-      { label: 'Détention ancienne', points: 0, max: 20 }
+      { label: 'Détention ancienne', points: detention ? (detention.niveau === 'forte' ? 20 : detention.niveau === 'moyenne' ? 10 : 0) : 0, max: 20 },
+      { label: 'DPE réalisé récemment', points: dpeRecent ? (joursDpe <= 60 ? 25 : 15) : 0, max: 25 },
+      { label: 'Permis d’urbanisme en cours', points: permisForts ? 20 : (permis.length ? 10 : 0), max: 20 }
     ];
 
     const identification = pctScore(idContribs);
