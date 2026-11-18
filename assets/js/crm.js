@@ -1148,6 +1148,55 @@
     const st = ST_CLIENT[s] || ST_CLIENT.prospect;
     return '<span class="se-badge ' + st.cls + '">' + st.label + '</span>';
   }
+
+  // Température d'un client (chaud/tiède/froid) : un repère visuel rapide
+  // pour savoir qui relancer en priorité, basé sur des signaux déjà présents
+  // dans le CRM plutôt qu'une case à cocher de plus à remplir à la main :
+  //   - une offre en cours (ni refusée ni retirée) : signal d'achat fort
+  //   - une visite récente (< 14 jours) ou à venir : intérêt concret
+  //   - financement avancé (apport renseigné, courtier, ou financement défini)
+  //   - une urgence déclarée dans le champ « délai »
+  //   - l'ancienneté depuis le dernier contact (activité, visite, offre ou
+  //     demande la plus récente — à défaut, la date de création du dossier)
+  // Un dossier archivé n'affiche pas de température : ce n'est plus un sujet
+  // à relancer. Ce n'est qu'un indice, pas un jugement — l'agent reste juge.
+  function temperatureClient(c) {
+    if (!c || c.statut === 'archive') return null;
+    const activites = (state.activites || []).filter((a) => a.leadId === c.serverId);
+    const visites = (state.visites || []).filter((v) => v.clientId === c.id);
+    const offres = (state.offres || []).filter((o) => o.clientId === c.id);
+    const demandes = (state.demandes || []).filter((d) => d.clientId === c.id);
+    const dates = []
+      .concat(activites.map((a) => a.at))
+      .concat(visites.map((v) => v.date))
+      .concat(offres.map((o) => o.cree))
+      .concat(demandes.map((d) => d.cree))
+      .filter(Boolean);
+    const dernierContact = dates.length ? dates.slice().sort().slice(-1)[0] : c.cree;
+    const joursDepuis = dernierContact ? Math.floor((Date.now() - new Date(dernierContact).getTime()) / 86400000) : 999;
+
+    let score = 0;
+    if (offres.some((o) => o.statut !== 'refusee')) score += 3;
+    if (visites.some((v) => v.date && Math.abs(new Date(v.date).getTime() - Date.now()) <= 14 * 86400000)) score += 2;
+    if (c.type !== 'vendeur' && (c.courtier || Number(c.apport) > 0 || c.financement)) score += 1;
+    if (/imm[eé]diat|urgent|asap|1\s*mois/i.test(c.delai || '')) score += 2;
+    if (c.statut === 'client') score += 1;
+
+    if (score >= 3 || joursDepuis <= 2) return 'chaud';
+    if (score >= 1 || joursDepuis <= 14) return 'tiede';
+    return 'froid';
+  }
+  const TEMP_CLIENT = {
+    chaud: { label: 'Chaud', cls: 'temp-chaud' },
+    tiede: { label: 'Tiède', cls: 'temp-tiede' },
+    froid: { label: 'Froid', cls: 'temp-froid' }
+  };
+  function badgeTemperature(c) {
+    const t = temperatureClient(c);
+    if (!t) return '';
+    const st = TEMP_CLIENT[t];
+    return '<span class="se-badge ' + st.cls + '" title="Température du dossier — basée sur l’activité récente, les offres et visites, et l’urgence déclarée.">' + st.label + '</span>';
+  }
   function scoreTag(v) {
     const cls = v >= 70 ? '' : v >= 45 ? 'mid' : 'low';
     return '<span class="se-score ' + cls + '"><span class="se-score-bar"><i style="width:' + v + '%"></i></span>' + v + ' %</span>';
@@ -2470,7 +2519,11 @@
           '</div>' +
           '<div class="se-hint">' + (rec.titre ? esc(rec.titre) : 'Recherche') + (rec.prixMax ? ' · budget ' + euro(rec.prixMax) : '') + '</div>' +
           '<div class="se-hint" style="line-height:1.5">' + explicationMatching(m, rb || {}, rec) + '</div>' +
-          '<div style="display:flex;flex-wrap:wrap;gap:6px">' + statuts + '</div>' +
+          '<div style="display:flex;flex-wrap:wrap;gap:6px">' + statuts +
+            (m.relancesCreees
+              ? '<span class="se-hint">Relances programmées</span>'
+              : (cli ? '<button class="se-btn ghost sm" data-act="matching-relancer" data-key="' + m.key + '">Programmer les relances (J+1/J+3/J+7)</button>' : '')) +
+          '</div>' +
         '</div>';
       }).join('');
       return '<div class="se-card" style="margin-bottom:12px">' +
@@ -3492,7 +3545,9 @@
     const carte = (c) => {
       const tel = String(c.tel || '').replace(/[^0-9]/g, '');
       return '<div class="se-pipe-card">' +
-        '<div class="se-pipe-nom">' + esc(nomClient(c)) + '</div>' +
+        '<div class="se-row" style="justify-content:space-between;align-items:flex-start;gap:6px">' +
+          '<div class="se-pipe-nom">' + esc(nomClient(c)) + '</div>' + badgeTemperature(c) +
+        '</div>' +
         '<div class="se-hint">' + typeLead(c) + (c.siren ? ' · SIREN ' + esc(c.siren) : '') + '</div>' +
         (c.adresseBien ? '<div class="se-hint">' + esc(c.adresseBien) + '</div>' : (c.ville ? '<div class="se-hint">' + esc(c.ville) + '</div>' : '')) +
         (c.tel || c.email ? '<div class="se-hint">' + esc(c.tel || '') + (c.tel && c.email ? ' · ' : '') + esc(c.email || '') + '</div>' : '<div class="se-hint muted">Aucun contact</div>') +
@@ -3542,12 +3597,13 @@
         '<span class="se-hint">' + list.length + ' résultat(s)</span>' +
       '</div></div>' +
       '<div class="se-card" style="padding:8px 16px">' +
-        '<table class="se-table"><thead><tr><th>Client</th><th>Type</th><th>Budget / critères</th><th>Statut</th><th>Agent</th><th></th></tr></thead><tbody>' +
+        '<table class="se-table"><thead><tr><th>Client</th><th>Type</th><th>Budget / critères</th><th>Statut</th><th>Température</th><th>Agent</th><th></th></tr></thead><tbody>' +
         list.map((c) => '<tr>' +
           '<td><a href="#/client/' + c.id + '" style="color:inherit;text-decoration:none"><b style="font-weight:500">' + esc(nomClient(c)) + '</b><div class="se-hint">' + esc(c.email) + '</div></a></td>' +
           '<td>' + (c.type === 'acquereur' ? 'Acquéreur' : c.type === 'vendeur' ? 'Vendeur' : 'Les deux') + '</td>' +
           '<td>' + (c.type === 'vendeur' ? '<span class="se-hint">propriétaire</span>' : euro(c.budgetMin) + ' – ' + euro(c.budgetMax) + '<div class="se-hint">' + c.piecesMin + '+ pièces · ' + c.surfaceMin + '+ m² · ' + (c.quartiers || []).map(qLabel).join(', ') + '</div>') + '</td>' +
           '<td>' + badgeClient(c.statut) + '</td>' +
+          '<td>' + (badgeTemperature(c) || '<span class="se-hint">—</span>') + '</td>' +
           '<td class="se-hint">' + esc(c.agent || '') + '</td>' +
           '<td><a class="se-btn ghost sm" href="#/client/' + c.id + '">Ouvrir</a></td>' +
         '</tr>').join('') +
@@ -3588,7 +3644,7 @@
         '<span class="se-avatar">' + esc((c.prenom.charAt(0) + c.nom.charAt(0)).toUpperCase()) + '</span>' +
         '<div style="flex:1"><div class="kicker" style="color:var(--color-taupe)">' + (c.type === 'acquereur' ? 'Acquéreur' : c.type === 'vendeur' ? 'Vendeur' : 'Acquéreur & vendeur') + ' · ' + esc(c.source) + '</div>' +
         '<h1 class="display" style="font-size:30px;margin:4px 0 2px">' + esc(nomClient(c)) + '</h1>' +
-        '<div class="se-row" style="gap:8px">' + badgeClient(c.statut) + (c.tags || []).map((t) => '<span class="se-pill">' + esc(t) + '</span>').join('') + '</div></div>' +
+        '<div class="se-row" style="gap:8px">' + badgeClient(c.statut) + badgeTemperature(c) + (c.tags || []).map((t) => '<span class="se-pill">' + esc(t) + '</span>').join('') + '</div></div>' +
         '<div class="se-actions">' +
           ((biensPossedes.some((x) => x.validation === 'en_attente')) ? '<button class="se-btn soft" data-act="bien-valider" data-id="' + biensPossedes.find((x) => x.validation === 'en_attente').id + '">Valider ce bien</button>' : '') +
           (biensPossedes.length ? '<a class="se-btn ghost" href="#/bien/' + biensPossedes[0].id + '">Voir son Bien</a>' : '') +
@@ -3951,11 +4007,28 @@
 
   /* ---------------------------------- tâches ------------------------------ */
 
+  // Relances automatiques J+1/J+3/J+7 : à chaque nouveau client (créé à la
+  // main ou via le Robot DPE) ou à chaque mise en relation acquéreur/vendeur
+  // détectée sur la plateforme, trois rappels sont programmés d'emblée pour
+  // qu'un contact ne tombe jamais dans l'oubli — ce sont des tâches comme les
+  // autres (visibles, modifiables, décochables dans l'onglet Tâches), jamais
+  // un message envoyé automatiquement à l'insu de l'agent.
+  function programmerRelances(clientId, titre, contexte) {
+    state.taches = state.taches || [];
+    [1, 3, 7].forEach((j) => {
+      const echeance = new Date(Date.now() + j * 86400000).toISOString().slice(0, 10);
+      state.taches.push({
+        id: uid('t'), titre: 'Relancer ' + titre + ' (J+' + j + (contexte ? ' — ' + contexte : '') + ')',
+        clientId: clientId, echeance: echeance, fait: false, auto: true
+      });
+    });
+  }
+
   function taskRow(t) {
     const late = !t.fait && t.echeance && new Date(t.echeance) < new Date(new Date().toDateString());
     return '<div class="se-task ' + (t.fait ? 'done' : '') + '">' +
       '<input type="checkbox" data-act="tache-toggle" data-id="' + t.id + '"' + (t.fait ? ' checked' : '') + ' style="cursor:pointer"/>' +
-      '<span style="flex:1"><span class="se-task-titre">' + esc(t.titre) + '</span>' +
+      '<span style="flex:1"><span class="se-task-titre">' + esc(t.titre) + (t.auto ? ' <span class="se-hint">· auto</span>' : '') + '</span>' +
       '<span class="se-hint ' + (late ? 'late' : '') + '">' + (t.echeance ? dansX(t.echeance) : 'sans date') + (t.clientId ? ' · ' + esc(nomClient(client(t.clientId))) : '') + '</span></span>' +
     '</div>';
   }
@@ -4853,7 +4926,16 @@
           siren: d.siren || '', dirigeants: d.dirigeants || [], ville: d.ville || '', adresseBien: d.adresseBien || d.adresse || '',
           parcelle: d.ref || d.parcelle || '', dpe: d.dpe || '', notes: 'Prospection Immo Data Robot'
         }) }).then((x) => x.json());
-        if (r.ok) { toast('Prospect vendeur ajouté aux Leads.', 'ok'); syncServeur(); location.hash = '#/clients'; }
+        if (r.ok) {
+          await syncServeur();
+          // L'id local d'un lead venu du serveur est préfixé 'srv-' (voir
+          // syncServeur) : on peut donc programmer les relances dès que la
+          // synchronisation a rattaché le lead fraîchement créé.
+          programmerRelances('srv-' + r.lead.id, ((d.prenom || '') + ' ' + (d.nom || '')).trim(), 'prospection DPE');
+          commit();
+          toast('Prospect vendeur ajouté aux Leads. 3 relances programmées (J+1, J+3, J+7).', 'ok');
+          location.hash = '#/clients';
+        }
         else toast(r.error || 'Ajout impossible.', 'warn');
       } catch (e) { toast(e.message || 'Ajout impossible.', 'warn'); }
     },
@@ -5216,6 +5298,25 @@
       const m = (state.matchings || []).find((x) => x.key === key);
       if (m) { m.statut = statut; commit(); render(); }
     },
+    // Extension demandée des relances J+1/J+3/J+7 : quand un acquéreur et un
+    // bien repéré par le robot se correspondent sur la plateforme, l'agent
+    // peut programmer les mêmes rappels que pour un nouveau client — un choix
+    // explicite (pas automatique) puisqu'un rapprochement n'a pas la même
+    // certitude qu'une création de fiche.
+    'matching-relancer': (el) => {
+      const key = el.getAttribute('data-key');
+      const m = (state.matchings || []).find((x) => x.key === key);
+      if (!m || m.relancesCreees) return;
+      const rec = (state.recherchesServeur || []).concat(state.recherches).find((r) => r.id === m.rechercheId);
+      const cli = rec ? clientDeRecherche(rec) : client(m.clientId);
+      const rb = robotBien(m.bienId);
+      if (!cli) { toast('Client introuvable pour cette correspondance.', 'warn'); return; }
+      programmerRelances(cli.id, nomClient(cli), 'correspondance avec ' + ((rb && rb.adresse) || 'un bien'));
+      m.relancesCreees = true;
+      commit();
+      render();
+      toast('3 relances programmées (J+1, J+3, J+7).', 'ok');
+    },
     'radar-zone': (el) => {
       const q = el.getAttribute('data-id');
       const c = COORDS_CRM[q];
@@ -5552,10 +5653,11 @@
           obj.serverId = res.lead.id;
         } catch (e) { toast('Enregistré en local seulement (' + (e.message || 'erreur serveur') + ') — invisible des autres agents pour l’instant.', 'warn'); }
         state.clients.push(obj);
+        programmerRelances(obj.id, nomClient(obj));
       }
       modal = null;
       commit();
-      toast('Client enregistré.', 'ok');
+      toast('Client enregistré.' + (id ? '' : ' 3 relances programmées (J+1, J+3, J+7).'), 'ok');
       location.hash = '#/client/' + obj.id;
       return;
     }
