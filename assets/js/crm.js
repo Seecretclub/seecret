@@ -1077,7 +1077,7 @@
       bien: viewBien,
       recherches: viewRecherches,
       recherche: viewRecherche,
-      robot: viewRobot,
+      robot: viewRobotDashboard,
       'robot-radar': viewRobot,
       'robot-proprietaires': viewProprietaires,
       'robot-proprietaire': viewProprietaire,
@@ -1675,95 +1675,6 @@
     return out;
   }
 
-  function viewRadar() {
-    const filtre = state.filtres.radar || 'tout';
-    const opps = opportunites();
-    const pm2 = prixMoyenM2();
-    const biens = (state.biensServeur || []).concat(state.biens);
-    const ilYA7J = Date.now() - 7 * 86400000;
-    const nouvelles = biens.filter((b) => b.cree && new Date(b.cree).getTime() > ilYA7J).length;
-    const matchs = state.demandes.filter((d) => d.statut === 'nouvelle').length;
-    const nbZones = Object.keys(tensionQuartiers()).length;
-    const oppHtml = opps.length
-      ? opps.slice(0, 12).map((o) => '<div class="se-list-item" style="align-items:flex-start">' +
-          '<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:500">' + (o.bien ? esc(o.bien.titre || 'Bien') : 'Quartier ' + qLabel(o.quartier)) + '</div>' +
-          '<div class="se-hint" style="margin-top:2px">' + esc(o.label) + '</div>' +
-          (o.bien ? '<div class="se-sub" style="margin-top:2px">' + euro(o.bien.prix) + (o.bien.surface ? ' · ' + o.bien.surface + ' m²' : '') + '</div>' : '') + '</div>' +
-          (o.bien && o.bien.proprietaireId ? '<button class="se-btn ghost sm" data-act="bien-envoyer" data-bien="' + o.bien.id + '" data-client="' + o.bien.proprietaireId + '">Contacter</button>' : '') +
-        '</div>').join('')
-      : '<p class="se-muted" style="margin-top:8px">Aucune opportunité détectée pour l’instant.</p>';
-    return head('Prospection', 'Radar', 'Intelligence de marché · tension, opportunités, veille immobilière.', '') +
-      '<div class="se-tabs" style="margin-bottom:14px">' +
-        '<a href="#" data-act="filtre" data-id="radar:biens" class="' + (filtre === 'biens' ? 'active' : '') + '">Afficher les Biens</a>' +
-        '<a href="#" data-act="filtre" data-id="radar:recherches" class="' + (filtre === 'recherches' ? 'active' : '') + '">Afficher les Recherches</a>' +
-        '<a href="#" data-act="filtre" data-id="radar:tout" class="' + (filtre === 'tout' ? 'active' : '') + '">Afficher tout</a>' +
-      '</div>' +
-      '<div class="se-split" style="grid-template-columns:1fr 340px;align-items:start;gap:16px">' +
-        '<div id="radar-map" style="height:540px;border-radius:16px;overflow:hidden;border:1px solid var(--color-stroke-faint)"></div>' +
-        '<div class="se-card" style="max-height:540px;overflow:auto"><h3>Opportunités détectées</h3>' + oppHtml + '</div>' +
-      '</div>' +
-      '<div class="se-grid cols-4" style="margin-top:16px">' +
-        '<div class="se-card se-stat"><span class="se-kicker">Prix moyen / m²</span><span class="se-num">' + euro(pm2) + '</span><span class="se-sub">portefeuille actif</span></div>' +
-        '<div class="se-card se-stat"><span class="se-kicker">Nouvelles annonces</span><span class="se-num">' + nouvelles + '</span><span class="se-sub">cette semaine</span></div>' +
-        '<div class="se-card se-stat"><span class="se-kicker">Matchs en attente</span><span class="se-num">' + matchs + '</span><span class="se-sub">à traiter</span></div>' +
-        '<div class="se-card se-stat"><span class="se-kicker">Secteurs analysés</span><span class="se-num">' + nbZones + '</span><span class="se-sub">tension calculée</span></div>' +
-      '</div>' +
-      '<div class="se-card" style="margin-top:14px"><h3>Secteur à analyser</h3><div class="se-chips" style="margin-top:8px">' +
-        Object.keys(COORDS_CRM).map((q) => '<button class="se-chip" data-act="radar-zone" data-id="' + q + '">' + qLabel(q) + '</button>').join('') +
-      '</div></div>';
-  }
-
-  function initRadar() {
-    const el = document.getElementById('radar-map');
-    if (!el || typeof L === 'undefined') return;
-    const filtre = state.filtres.radar || 'tout';
-    const map = L.map(el, { scrollWheelZoom: false }).setView([48.8566, 2.3522], 11);
-    window.__radarMap = map;
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(map);
-
-    const tension = tensionQuartiers();
-    const vals = Object.keys(tension).map((q) => tension[q].demandes - tension[q].offres);
-    const min = Math.min.apply(null, vals.concat([0]));
-    const max = Math.max.apply(null, vals.concat([0]));
-    const heat = [];
-    Object.keys(tension).forEach((q) => {
-      const c = COORDS_CRM[q];
-      if (!c) return;
-      const t = tension[q].demandes - tension[q].offres;
-      const norm = (max > min) ? (t - min) / (max - min) : 0.5;
-      heat.push([c[0], c[1], 0.25 + norm * 0.75]);
-    });
-    if (typeof L.heatLayer === 'function' && heat.length) {
-      L.heatLayer(heat, { radius: 38, blur: 22, maxZoom: 12, gradient: { 0.2: '#2563eb', 0.45: '#38bdf8', 0.6: '#f2c46e', 0.8: '#ef4444', 1: '#b91c1c' } }).addTo(map);
-    }
-
-    const markers = [];
-    if (filtre !== 'recherches') {
-      (state.biensServeur || []).concat(state.biens).forEach((b) => {
-        const c = coordBien(b);
-        if (c) markers.push({ c: c, type: 'bien', b: b });
-      });
-    }
-    if (filtre !== 'biens') {
-      (state.recherchesServeur || []).concat(state.recherches).forEach((r) => {
-        coordRecherche(r).forEach((c) => markers.push({ c: c, type: 'recherche', r: r }));
-      });
-    }
-
-    markers.forEach((m) => {
-      const col = m.type === 'bien' ? '#2563eb' : '#16a34a';
-      const marker = L.circleMarker(m.c, { radius: m.type === 'bien' ? 9 : 7, color: '#fff', weight: 2, fillColor: col, fillOpacity: 0.9 });
-      const jours = m.type === 'bien' ? joursEnLigne(m.b) : 0;
-      const popup = m.type === 'bien'
-        ? '<div class="radar-pop"><b>' + esc(m.b.titre || 'Bien') + '</b><div>' + euro(m.b.prix) + (m.b.surface ? ' · ' + m.b.surface + ' m²' : '') + '</div><div style="color:var(--color-taupe)">' + jours + ' j en ligne · ' + esc(m.b.statut || '') + '</div></div>'
-        : '<div class="radar-pop"><b>' + esc(m.r.titre || 'Recherche') + '</b><div>Budget ' + euro(m.r.prixMax || 0) + '</div></div>';
-      marker.bindPopup(popup);
-      marker.addTo(map);
-    });
-
-    if (markers.length) map.fitBounds(L.latLngBounds(markers.map((m) => m.c)).pad(0.15));
-  }
-
   function robotStats(res) {
     if (!res || !res.features) return { parcelles: 0, proprietaires: 0, sci: 0, contacts: 0 };
     let proprietaires = 0, sci = 0, contacts = 0;
@@ -2156,7 +2067,7 @@
     const res = state.robot || null;
     const stats = robotStatsDetectes();
     return head('Prospection', 'Radar', 'Intelligence de prospection · tableau sectoriel, parcelles, propriétaires, SCI, DPE.', '') +
-      tabsRobot('robot') +
+      tabsRobot('robot-radar') +
       secteurDashboardHtml() +
       '<div class="se-card" style="margin-bottom:14px">' +
         '<h3>Recherche &amp; filtres</h3>' +
@@ -2234,7 +2145,7 @@
   function tabsRobot(active) {
     const t = (route, label) => '<a href="#/' + route + '" class="' + (active === route ? 'active' : '') + '">' + label + '</a>';
     return '<div class="se-tabs" style="margin-bottom:14px">' +
-      t('robot', 'Radar') + t('robot-proprietaires', 'Propriétaires') + t('robot-opportunites', 'Signaux vendeurs') + t('portefeuille-foncier', 'Portefeuille foncier') + t('bodacc', 'Signaux BODACC') +
+      t('robot', 'Vue d’ensemble') + t('robot-radar', 'Radar') + t('robot-proprietaires', 'Propriétaires') + t('robot-opportunites', 'Signaux vendeurs') + t('portefeuille-foncier', 'Portefeuille foncier') + t('bodacc', 'Signaux BODACC') +
     '</div>';
   }
 
@@ -2500,8 +2411,9 @@
     return head('Prospection', 'Immo Data Robot', 'Le Radar détecte les biens. Le CRM connaît les clients. Le Robot rapproche les deux.', '') +
       tabsRobot('robot') +
       '<div class="se-card" style="margin-bottom:14px">' +
-        '<h3>Recherche cadastrale</h3>' +
-        '<form class="se-form-grid" data-form="robot-search" style="margin-top:12px;grid-template-columns:repeat(3,1fr)">' +
+        '<h3>Recherche cadastrale (moteur Python)</h3>' +
+        '<p class="se-hint" style="margin-top:4px">Différente de la recherche DPE de l’onglet « Radar » : celle-ci passe par le moteur Python dédié (cadastre + dossier propriétaire), quand il est configuré et lancé.</p>' +
+        '<form class="se-form-grid" data-form="robot-search" style="margin-top:12px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">' +
           '<div class="se-field"><label>Adresse</label><input class="se-input" name="adresse" placeholder="12 boulevard Flandrin"/></div>' +
           '<div class="se-field"><label>Ville</label><input class="se-input" name="ville" placeholder="Paris"/></div>' +
           '<div class="se-field"><label>Code postal</label><input class="se-input" name="code_postal" placeholder="75116"/></div>' +
@@ -2532,7 +2444,7 @@
         '<div class="se-card se-stat"><span class="se-kicker">Correspondances</span><span class="se-num">' + ms.length + '</span><span class="se-sub">couples bien × recherche</span></div>' +
         '<div class="se-card se-stat"><span class="se-kicker">Pipeline</span><span class="se-num">' + Object.keys(ST_MATCHING).length + '</span><span class="se-sub">statuts commerciaux</span></div>' +
       '</div>' +
-      '<div class="se-split" style="grid-template-columns:1fr 340px;align-items:start;gap:16px;margin-top:16px">' +
+      '<div class="se-split" style="margin-top:16px">' +
         '<div class="se-card"><h3>Secteurs prioritaires</h3>' +
           '<div class="se-list" style="margin-top:8px">' + secteursPrioritaires().slice(0, 8).map((s) => {
             const pct = s.biens ? Math.round(s.proprietaires / s.biens * 100) : 0;
