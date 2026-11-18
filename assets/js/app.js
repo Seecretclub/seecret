@@ -72,11 +72,19 @@
 
   const PRIX_M2 = { 1: 13800, 2: 11200, 3: 12500, 4: 12400, 5: 13300, 6: 14600, 7: 14300, 8: 12000, 9: 10500, 10: 10800, 11: 9800, 12: 9400, 13: 9200, 14: 9000, 15: 10200, 16: 11500, 17: 10100, 18: 8900, 19: 8300, 20: 7900 };
 
+  // mandat/sous-compromis manquaient ici : tant que le catalogue n'affichait
+  // que des biens de démonstration (toujours avant-premiere/ouvert/sous-offre),
+  // ça ne se voyait pas. Avec de vrais biens venus du CRM (qui connaît aussi
+  // mandat et sous-compromis, cf. ST_BIEN de crm.js), un bien en mandat
+  // retombait sur le label par défaut "Brouillon" — trompeur pour un membre,
+  // qui pouvait croire le bien non réel alors qu'il est bien validé.
   const STATUTS = {
     brouillon: { label: 'Brouillon', cls: 'muted' },
+    mandat: { label: 'Mandat signé', cls: '' },
     'avant-premiere': { label: 'Avant-première', cls: '' },
     ouvert: { label: 'Ouvert aux visites', cls: 'open' },
     'sous-offre': { label: 'Sous offre', cls: 'offer' },
+    'sous-compromis': { label: 'Sous compromis', cls: 'offer' },
     vendu: { label: 'Vendu', cls: 'muted' }
   };
 
@@ -171,7 +179,13 @@
         agent: { nom: 'Gabriel Taieb', role: 'Agent Seecret · Paris centre' }
       },
       monBien: null,
-      biens: seedBiens(),
+      // Avant ce correctif, le catalogue n'affichait que des biens de
+      // démonstration codés en dur, sans aucun lien avec le CRM : un bien
+      // validé par un agent n'apparaissait jamais ici. demarrer() le
+      // remplace par le vrai catalogue (/api/catalogue) une fois le membre
+      // authentifié ; vide par défaut pour ne jamais montrer de faux biens
+      // à un vrai membre avant ou en l'absence de connexion.
+      biens: [],
       suivis: ['b3'],
       visites: [],
       offres: [],
@@ -1077,6 +1091,7 @@
       state.profil.nom = me.membre.nom || state.profil.nom;
       state.profil.email = me.membre.email || '';
       try { const b = await API.get('/api/mon-bien'); state.monBien = Object.assign({ mien: true }, b.bien); } catch (e) { /* pas de bien */ }
+      try { const c = await API.get('/api/catalogue'); state.biens = c.biens || []; } catch (e) { /* catalogue indisponible */ }
       try { const r = await API.get('/api/mon-recherche'); state.recherche = Object.assign({}, state.recherche, r.recherche); } catch (e) { /* pas de recherche */ }
       try { const d = await API.get('/api/documents'); state.docs = d.documents || []; } catch (e) { /* pas de docs */ }
       try { const n = await API.get('/api/mes-notifications'); state.mesNotifications = n.notifications || []; } catch (e) { /* pas de notifications */ }
