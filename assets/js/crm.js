@@ -322,6 +322,37 @@
   // critère étage que de le faire échouer sur une donnée qu'on n'a pas.
   const etageComparable = (b) => (typeof b.etageEstime === 'number' ? b.etageEstime : null);
 
+  // Époque de construction comparable : un bien du portefeuille a une année
+  // libre (anneeConstruction, saisie à la main) ; un bien du Radar a l'année
+  // ADEME exacte (anneeConstruction) ou, à défaut, une période ADEME en texte
+  // (periodeConstruction, ex. « 1948-1974 ») dont on extrait la première
+  // année à titre indicatif. Donnée inconnue → null, ignorée comme l'étage.
+  const EPOQUES = [
+    { id: 'avant-1950', label: 'Ancien (avant 1950)', min: null, max: 1949 },
+    { id: '1950-2000', label: '1950 à 2000', min: 1950, max: 2000 },
+    { id: 'apres-2000', label: 'Récent (après 2000)', min: 2001, max: null }
+  ];
+  function anneeComparable(b) {
+    if (b.anneeConstruction != null && b.anneeConstruction !== '') {
+      const n = parseInt(b.anneeConstruction, 10);
+      if (!isNaN(n)) return n;
+    }
+    if (b.periodeConstruction) {
+      const m = /\d{4}/.exec(String(b.periodeConstruction));
+      if (m) return parseInt(m[0], 10);
+    }
+    return null;
+  }
+  // true/false si comparable, null si l'époque demandée ou l'année du bien
+  // est inconnue (dans ce cas : ni bonus ni exclusion, même logique que l'étage).
+  function epoqueCorrespond(annee, epoqueId) {
+    const ep = EPOQUES.find((e) => e.id === epoqueId);
+    if (!ep || annee == null) return null;
+    if (ep.min != null && annee < ep.min) return false;
+    if (ep.max != null && annee > ep.max) return false;
+    return true;
+  }
+
   function scoreBien(b, c) {
     let s = 0;
     // Secteur 25%
@@ -336,13 +367,18 @@
     // Type(s) 10%
     const typesVoulus = (c.types && c.types.length) ? c.types : (c.type ? [c.type] : []);
     if (typesVoulus.length) { if (typesVoulus.indexOf(b.type) > -1) s += 10; } else s += 10;
-    // Chambres / salles de bain / étage 10% au total
-    if (c.chambresMin) { if ((b.chambres || 0) >= c.chambresMin) s += 4; } else s += 4;
-    if (c.sdbMin) { if ((b.sdb || 0) >= c.sdbMin) s += 3; } else s += 3;
+    // Chambres / salles de bain / étage / époque 10% au total
+    if (c.chambresMin) { if ((b.chambres || 0) >= c.chambresMin) s += 3; } else s += 3;
+    if (c.sdbMin) { if ((b.sdb || 0) >= c.sdbMin) s += 2; } else s += 2;
     const etage = etageComparable(b);
     if (c.etageMin || c.etageMax) {
       if (etage == null) { /* donnée inconnue : ni bonus ni pénalité */ }
-      else if ((!c.etageMin || etage >= c.etageMin) && (!c.etageMax || etage <= c.etageMax)) s += 3;
+      else if ((!c.etageMin || etage >= c.etageMin) && (!c.etageMax || etage <= c.etageMax)) s += 2;
+    } else s += 2;
+    if (c.epoque) {
+      const ok = epoqueCorrespond(anneeComparable(b), c.epoque);
+      if (ok === true) s += 3;
+      // ok === null ou false : ni bonus ni pénalité (donnée inconnue ou hors cible, cf. correspond())
     } else s += 3;
     return Math.round(s);
   }
@@ -362,6 +398,7 @@
       if (c.etageMin && etage < c.etageMin) return false;
       if (c.etageMax && etage > c.etageMax) return false;
     }
+    if (c.epoque && epoqueCorrespond(anneeComparable(b), c.epoque) === false) return false;
     return true;
   }
 
@@ -734,8 +771,15 @@
           (!rec.etageMax || rb.etageEstime <= rec.etageMax)) s += 5;
       else inconnus.push('Étage');
     } else { inconnus.push('Étage'); }
+    // Époque de construction 5 — comparée à l'année ADEME exacte, ou à
+    // défaut à la période ADEME (cf. anneeComparable).
+    if (rec.epoque) {
+      tot += 5;
+      if (epoqueCorrespond(anneeComparable(rb), rec.epoque) === true) s += 5;
+      else inconnus.push('Époque de construction');
+    } else { inconnus.push('Époque de construction'); }
     const score = tot ? Math.round(s / tot * 100) : 0;
-    const couverture = Math.round((1 - inconnus.length / 7) * 100);
+    const couverture = Math.round((1 - inconnus.length / 8) * 100);
     return { score, couverture, inconnus };
   }
 
@@ -1264,7 +1308,7 @@
       titre: b.titre || 'Bien sans titre', adresse: b.adresse || '', ville: b.ville || '', codePostal: b.codePostal || '',
       type: b.type || 'Appartement', quartier: b.quartier || '',
       surface: b.surface || 0, pieces: b.pieces || 0, chambres: b.chambres || 0, sdb: b.sdb || 0,
-      etage: b.etage || '', dpe: b.dpe || '', ges: b.ges || '', etat: b.etat || '', prix: b.prix || 0, charges: b.charges || 0,
+      etage: b.etage || '', dpe: b.dpe || '', ges: b.ges || '', etat: b.etat || '', anneeConstruction: b.anneeConstruction || null, prix: b.prix || 0, charges: b.charges || 0,
       ascenseur: !!b.ascenseur, exterieur: b.exterieur || '', surfaceExterieur: b.surfaceExterieur || 0,
       delai: b.delai || '', dejaEnVente: b.dejaEnVente || '', motif: b.motif || '',
       statut: b.statut || 'brouillon', etapeProposition: b.etapeProposition || '', proprietaireId: lead ? lead.id : null,
@@ -1283,7 +1327,7 @@
       titre: r.titre || 'Recherche', type: r.type || '', types: r.types || [],
       prixMax: r.prixMax || 0, piecesMin: r.piecesMin || 0, surfaceMin: r.surfaceMin || 0, surfaceMax: r.surfaceMax || 0, delai: r.delai || '',
       apport: r.apport || 0, financement: r.financement || '', courtier: !!r.courtier, bienAVendre: !!r.bienAVendre,
-      etageMin: r.etageMin || 0, etageMax: r.etageMax || 0, etat: r.etat || '', dpe: r.dpe || '', annexes: r.annexes || [], prixVenteEstime: r.prixVenteEstime || 0,
+      etageMin: r.etageMin || 0, etageMax: r.etageMax || 0, etat: r.etat || '', dpe: r.dpe || '', epoque: r.epoque || '', annexes: r.annexes || [], prixVenteEstime: r.prixVenteEstime || 0,
       quartiers: r.quartiers || [], statut: r.statut || 'active', alertes: true,
       cree: r.cree || nowISO(), serveur: true
     };
@@ -1769,6 +1813,8 @@
     if (f.type) biens = biens.filter((b) => b.type === f.type);
     if (f.surfaceMin) biens = biens.filter((b) => (b.surface_habitable_m2 || 0) >= Number(f.surfaceMin));
     if (f.piecesMin) biens = biens.filter((b) => (b.pieces || 0) >= Number(f.piecesMin));
+    if (f.etageMin) biens = biens.filter((b) => typeof b.etageEstime === 'number' && b.etageEstime >= Number(f.etageMin));
+    if (f.epoque) biens = biens.filter((b) => epoqueCorrespond(anneeComparable(b), f.epoque) === true);
     if (f.proprio === 'oui') biens = biens.filter((b) => b.proprietaire && b.proprietaire.nom);
     if (f.proprio === 'non') biens = biens.filter((b) => !(b.proprietaire && b.proprietaire.nom));
     if (f.sci) biens = biens.filter((b) => b.proprietaire && b.proprietaire.type === 'sci');
@@ -1798,13 +1844,14 @@
     const types = ['Appartement', 'Maison', 'Duplex', 'Immeuble', 'Terrain'];
     const sel = (name, opts, cur) => '<select class="se-select" data-rf="' + name + '">' + opts.map((o) => '<option value="' + o[0] + '"' + (String(cur) === String(o[0]) ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select>';
     const chk = (name, label) => '<label class="se-check" style="cursor:pointer"><input type="checkbox" data-rf="' + name + '"' + (f[name] ? ' checked' : '') + ' style="margin-right:6px"/>' + label + '</label>';
-    return '<div class="se-card" style="margin-bottom:16px">' +
-      '<h3>Filtres & tri</h3>' +
-      '<div class="se-form-grid" style="grid-template-columns:repeat(4,1fr);margin-top:10px">' +
+    return '<h4 style="margin:0 0 2px">Filtres & tri</h4>' +
+      '<div class="se-form-grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-top:10px">' +
         '<div class="se-field"><label>Type de bien</label>' + sel('type', [['', 'Tous']].concat(types.map((t) => [t, t])), f.type || '') + '</div>' +
         '<div class="se-field"><label>Surface min (m²)</label><input class="se-input" type="number" data-rf="surfaceMin" value="' + esc(f.surfaceMin || '') + '" placeholder="0"/></div>' +
         '<div class="se-field"><label>Pièces min</label><input class="se-input" type="number" data-rf="piecesMin" value="' + esc(f.piecesMin || '') + '" placeholder="0"/></div>' +
+        '<div class="se-field"><label>Étage min</label><input class="se-input" type="number" data-rf="etageMin" value="' + esc(f.etageMin || '') + '" placeholder="0"/></div>' +
         '<div class="se-field"><label>Propriétaire</label>' + sel('proprio', [['tous', 'Tous'], ['oui', 'Identifié'], ['non', 'Non identifié']], f.proprio || 'tous') + '</div>' +
+        '<div class="se-field"><label>Époque (ancien/récent)</label>' + sel('epoque', [['', 'Toutes']].concat(EPOQUES.map((e) => [e.id, e.label])), f.epoque || '') + '</div>' +
       '</div>' +
       '<div class="se-row" style="gap:16px;margin-top:10px;flex-wrap:wrap">' +
         chk('sci', 'SCI') + chk('societe', 'Société') + chk('contacts', 'Coordonnées disponibles') + chk('avecMatch', 'Avec correspondance client') +
@@ -1815,8 +1862,7 @@
         '<span class="se-hint">Tri :</span>' +
         sel('tri', [['date', 'Date de détection'], ['fiabilite', 'Fiabilité'], ['surface', 'Surface'], ['clients', 'Clients correspondants']], f.tri || 'date') +
         '<button class="se-btn ghost sm" data-act="robot-reset-filtres">Réinitialiser</button>' +
-      '</div>' +
-    '</div>';
+      '</div>';
   }
 
   function pctScore(cs) {
@@ -2104,7 +2150,8 @@
       tabsRobot('robot') +
       secteurDashboardHtml() +
       '<div class="se-card" style="margin-bottom:14px">' +
-        '<h3>Recherche de biens</h3>' +
+        '<h3>Recherche &amp; filtres</h3>' +
+        '<p class="se-hint" style="margin-top:4px">Lancer une recherche charge les biens correspondants ; les filtres et le tri ci-dessous s’appliquent ensuite à tout ce qui est chargé, sans relancer de recherche.</p>' +
         '<form data-form="dpe-search" style="margin-top:12px">' +
           '<div class="se-row" style="gap:10px;align-items:flex-end;flex-wrap:wrap">' +
             '<div class="se-field" style="flex:1;min-width:200px"><label>Adresse ou ville</label><input class="se-input" name="ville" placeholder="75011 Paris"/></div>' +
@@ -2115,15 +2162,15 @@
             '<span class="se-hint" id="dpe-status"></span>' +
           '</div>' +
           '<details style="margin-top:10px"><summary style="cursor:pointer;font-size:13px;color:var(--color-taupe)">Critères avancés</summary>' +
-            '<p class="se-hint" style="margin-top:8px">Le type de bien et le tri se règlent juste en dessous, dans « Filtres &amp; tri » — ils s’appliquent à tout ce qui est chargé, sans relancer de recherche.</p>' +
-            '<div class="se-form-grid" style="margin-top:10px;grid-template-columns:repeat(2,1fr)">' +
+            '<div class="se-form-grid" style="margin-top:10px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">' +
               '<div class="se-field"><label>Surface min (m²)</label><input class="se-input" name="surface_min" type="number" placeholder="40"/></div>' +
               '<div class="se-field"><label>Surface max (m²)</label><input class="se-input" name="surface_max" type="number" placeholder="100"/></div>' +
             '</div>' +
           '</details>' +
         '</form>' +
+        '<hr style="margin:16px 0;border:none;border-top:1px solid var(--color-stroke-faint)"/>' +
+        barreFiltresRobot() +
       '</div>' +
-      barreFiltresRobot() +
       '<div class="se-chips" style="margin-bottom:10px">' + [1,2,3,4,5,6].map((lvl) => {
         const label = ['Propriétaire + tél', 'Propriétaire + email', 'Propriétaire + LinkedIn', 'Société à enrichir', 'Propriétaire sans coord', 'Non identifié'][lvl - 1];
         const count = robotBiens().filter((b) => prioriteRobot(b).level === lvl).length;
@@ -4086,7 +4133,7 @@
           '<div class="se-card"><h3>Le bien</h3><div class="se-kv" style="margin-top:12px">' +
             kv('Référence', esc(b.ref)) + kv('Surface', num(b.surface) + ' m²') +
             kv('Pièces', b.pieces + ' · ' + b.chambres + ' ch. · ' + b.sdb + ' sdb') +
-            kv('Étage', esc(b.etage || '—')) + kv('DPE', esc(b.dpe)) + kv('Statut', badgeBien(b.statut)) +
+            kv('Étage', esc(b.etage || '—')) + kv('DPE', esc(b.dpe)) + kv('Année de construction', b.anneeConstruction || '—') + kv('Statut', badgeBien(b.statut)) +
           '</div></div>' +
           '<div class="se-card"><h3>Mandat & propriétaire</h3><div class="se-kv" style="margin-top:12px">' +
             kv('Propriétaire', prop ? '<a href="#/client/' + prop.id + '">' + esc(nomClient(prop)) + '</a>' : '<span class="se-hint">non renseigné</span>') +
@@ -4188,6 +4235,7 @@
           kv('Surface', (rec.surfaceMin ? rec.surfaceMin + ' m² min' : '—') + (rec.surfaceMax ? ' · ' + rec.surfaceMax + ' m² max' : '')) +
           kv('Étage', (rec.etageMin ? rec.etageMin + ' min' : '—') + (rec.etageMax ? ' · ' + rec.etageMax + ' max' : '') + (rec.dernierEtageOk ? ' · dernier étage OK' : '')) +
           kv('DPE', rec.dpe ? rec.dpe + ' ou mieux' : 'Indifférent') +
+          kv('Époque', rec.epoque ? (EPOQUES.find((e) => e.id === rec.epoque) || {}).label || rec.epoque : 'Indifférent') +
           kv('Délai', esc(rec.delai || '—')) +
           kv('Secteurs', secteurs || '—') +
           kv('Alertes', rec.alertes ? 'Activées' : 'Désactivées') +
@@ -4793,6 +4841,7 @@
         field('Chambres', 'chambres', v.chambres, { type: 'number' }) +
         field('Salles de bain', 'sdb', v.sdb, { type: 'number' }) +
         field('Étage', 'etage', v.etage) + field('DPE', 'dpe', v.dpe, { type: 'select', options: ['A', 'B', 'C', 'D', 'E', 'F', 'G'].map((d) => ({ value: d, label: d })) }) +
+        field('Année de construction', 'anneeConstruction', v.anneeConstruction || '', { type: 'number', placeholder: '1975' }) +
         field('Prix (€)', 'prix', v.prix, { type: 'number' }) +
         field('Description', 'description', v.description, { type: 'textarea', full: true }) +
       '</div><div class="se-modal-foot"><button class="se-btn ghost" type="button" data-act="modal-close">Annuler</button><button class="se-btn" type="submit">' + (b ? 'Enregistrer' : 'Créer le bien') + '</button></div></form>';
@@ -4802,7 +4851,7 @@
     const v = r || {
       clientId: clientId || (state.clients.filter((c) => c.type !== 'vendeur')[0] && state.clients.filter((c) => c.type !== 'vendeur')[0].id),
       titre: '', types: [], prixMin: 0, prixMax: 2000000, piecesMin: 3, chambresMin: 0, sdbMin: 0, surfaceMin: 80, surfaceMax: 0,
-      etageMin: 0, etageMax: 0, dernierEtageOk: false, dpe: '', quartiers: [], alertes: true
+      etageMin: 0, etageMax: 0, dernierEtageOk: false, dpe: '', epoque: '', quartiers: [], alertes: true
     };
     const typesSelectionnes = (v.types && v.types.length) ? v.types : (v.type ? [v.type] : []);
     const chercheurs = state.clients.filter((c) => c.type !== 'vendeur');
@@ -4826,6 +4875,7 @@
         field('Étage min', 'etageMin', v.etageMin || '', { type: 'number' }) +
         field('Étage max', 'etageMax', v.etageMax || '', { type: 'number' }) +
         field('DPE (classe acceptée)', 'dpe', v.dpe || '', { type: 'select', options: [{ value: '', label: 'Indifférent' }].concat(DPE_ORDER.map((c) => ({ value: c, label: c + ' ou mieux' }))) }) +
+        field('Époque (ancien/récent)', 'epoque', v.epoque || '', { type: 'select', options: [{ value: '', label: 'Indifférent' }].concat(EPOQUES.map((e) => ({ value: e.id, label: e.label }))) }) +
         '<div class="se-field"><label>Dernier étage</label><label class="se-row" style="gap:6px;margin-top:6px"><input type="checkbox" name="dernierEtageOk" ' + (v.dernierEtageOk ? 'checked' : '') + '/> Dernier étage accepté (voire recherché)</label></div>' +
         '<div class="se-field full"><label>Secteurs</label><div class="se-chips">' +
           QUARTIERS.map((q) => '<button type="button" class="se-chip" data-act="q-toggle" data-group="quartiers" data-id="' + q.id + '" aria-pressed="' + ((v.quartiers || []).indexOf(q.id) > -1) + '">' + q.label + '</button>').join('') +
@@ -6098,7 +6148,8 @@
         adresse: String(data.get('adresse') || '').trim(),
         type: data.get('type'), quartier: data.get('quartier'), surface: chiffres(data.get('surface')),
         pieces: chiffres(data.get('pieces')), chambres: chiffres(data.get('chambres')), sdb: chiffres(data.get('sdb')),
-        etage: String(data.get('etage') || ''), dpe: data.get('dpe'), prix: chiffres(data.get('prix')),
+        etage: String(data.get('etage') || ''), dpe: data.get('dpe'),
+        anneeConstruction: chiffres(data.get('anneeConstruction')) || null, prix: chiffres(data.get('prix')),
         statut: data.get('statut'), proprietaireId: data.get('proprio') || null,
         exclusivite: { statut: 'scan_en_cours', liens: [] },
         description: String(data.get('description') || ''),
@@ -6155,7 +6206,7 @@
         surfaceMin: chiffres(data.get('surfaceMin')), surfaceMax: chiffres(data.get('surfaceMax')),
         etageMin: chiffres(data.get('etageMin')), etageMax: chiffres(data.get('etageMax')),
         dernierEtageOk: data.get('dernierEtageOk') === 'on',
-        dpe: String(data.get('dpe') || ''),
+        dpe: String(data.get('dpe') || ''), epoque: String(data.get('epoque') || ''),
         quartiers: $$('.se-chip[data-group="quartiers"][aria-pressed="true"]', form).map((c) => c.getAttribute('data-id')),
         statut: existing ? existing.statut : 'active', alertes: existing ? existing.alertes : true,
         cree: existing ? existing.cree : nowISO()
