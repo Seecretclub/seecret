@@ -3518,6 +3518,22 @@ app.get('/crm.html', (req, res, next) => {
   next();
 });
 
+// Page d'accès rapide (raccourci iPhone de Gabriel vers site/plateforme/CRM) :
+// même garde que le CRM lui-même — réservée à l'agence, jamais aux membres.
+// Un membre ou un visiteur qui tombe sur l'URL est simplement renvoyé vers
+// l'espace membre, sans rien voir de la page.
+app.get('/acces.html', (req, res, next) => {
+  const token = getCookie(req, SESSION_COOKIE);
+  if (!token) return res.redirect('/espace.html');
+  const db = readDb();
+  pruneAuth(db);
+  const session = db.sessions.find((s) => s.id === sha256(token));
+  const lead = session ? db.leads.find((l) => l.id === session.leadId) : null;
+  const role = roleOf(lead);
+  if (ROLES_STAFF.indexOf(role) === -1) return res.redirect('/espace.html');
+  next();
+});
+
 app.use(express.static(__dirname));
 
 app.listen(PORT, () => {
