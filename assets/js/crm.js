@@ -1569,34 +1569,6 @@
     render();
   }
 
-  function demandeModal(d) {
-    const lead = d.leadId ? state.clients.find((c) => c.serverId === d.leadId) : null;
-    const b = d.bienId ? bien(d.bienId) : null;
-    const refusee = d.statut === 'refusee';
-    const n = d.statut === 'nouvelle';
-    return '<h3>' + esc((DEMANDE[d.type] || DEMANDE.info).label) + '</h3>' +
-      '<div class="se-kv" style="margin-top:12px">' +
-        kv('Demandeur', esc(d.nom || '—')) +
-        kv('Email', esc(d.email || '—')) +
-        (lead ? kv('Profil', lead.type === 'vendeur' ? 'Vendeur' : lead.type === 'acquereur' ? 'Acquéreur' : 'Acquéreur & vendeur') : '') +
-        (lead && lead.tel ? kv('Téléphone', esc(lead.tel)) : '') +
-        (b ? kv('Bien', esc(b.titre || b.ref || '') + (b.adresse ? ' · ' + esc(b.adresse) : '')) : '') +
-        (d.prix ? kv('Prix', (d.ancienPrix ? euro(d.ancienPrix) + ' → ' : '') + euro(d.prix)) : '') +
-        (d.titre ? kv('Titre proposé', esc(d.titre)) : '') +
-        (d.description ? kv('Description proposée', esc(d.description)) : '') +
-        (d.message ? kv('Détail', esc(d.message)) : '') +
-        kv('Reçue le', dFR(d.cree)) +
-      '</div>' +
-      '<div class="se-modal-foot" style="flex-wrap:wrap;gap:8px">' +
-        '<button class="se-btn ghost" data-act="modal-close">Fermer</button>' +
-        (n && !d.clientId ? '<button class="se-btn ghost" data-act="demande-client" data-id="' + d.id + '">Créer la fiche client</button>' : '') +
-        (n ? '<button class="se-btn danger" data-act="demande-refuser" data-id="' + d.id + '">Refuser la demande</button>' : '') +
-        (n ? '<button class="se-btn" data-act="demande-valider" data-id="' + d.id + '">Valider la demande</button>' : '') +
-        (refusee ? '<button class="se-btn" data-act="demande-relancer" data-id="' + d.id + '">Relancer la demande</button>' : '') +
-      '</div>' +
-      (d.__whatsapp ? '<a class="se-btn soft block" style="margin-top:12px" href="' + d.__whatsapp + '" target="_blank" rel="noopener">Envoyer WhatsApp</a>' : '');
-  }
-
   function tabDem(id, label, n, cur) {
     return '<a href="#" data-act="filtre" data-id="demandes:' + id + '" class="' + (cur === id ? 'active' : '') + '">' + label + '<span>' + n + '</span></a>';
   }
@@ -1608,21 +1580,6 @@
     p16: [48.862, 2.276], p17: [48.885, 2.321], p18: [48.892, 2.344], p19: [48.883, 2.382], p20: [48.866, 2.398],
     boulogne: [48.835, 2.241], neuilly: [48.884, 2.268], vincennes: [48.848, 2.438]
   };
-
-  function coordBien(b) {
-    if (b && b.lat && b.lon) return [Number(b.lat), Number(b.lon)];
-    if (b && b.quartier && COORDS_CRM[b.quartier]) return COORDS_CRM[b.quartier];
-    return null;
-  }
-
-  function coordRecherche(r) {
-    const out = [];
-    (r.quartiers || []).forEach((q) => {
-      const c = COORDS_CRM[q];
-      if (c && out.indexOf(c) === -1) out.push(c);
-    });
-    return out;
-  }
 
   function joursEnLigne(b) {
     if (!b || !b.cree) return 0;
@@ -1673,43 +1630,6 @@
       }
     });
     return out;
-  }
-
-  function robotStats(res) {
-    if (!res || !res.features) return { parcelles: 0, proprietaires: 0, sci: 0, contacts: 0 };
-    let proprietaires = 0, sci = 0, contacts = 0;
-    res.features.forEach((f) => {
-      const p = f.properties || {};
-      const owner = p.owner || p.proprietaire || p.owners || null;
-      if (owner) {
-        proprietaires++;
-        const t = String(owner.type || '').toLowerCase();
-        if (t === 'sci' || t.indexOf('sci') > -1) sci++;
-        contacts += ((owner.contacts || []).length || 0);
-      }
-    });
-    return { parcelles: res.features.length, proprietaires, sci, contacts };
-  }
-
-  function robotFiches(features) {
-    if (!features || !features.length) return '<p class="se-muted" style="margin-top:8px">Lancez une prospection pour afficher les parcelles identifiées.</p>';
-    return features.slice(0, 20).map((f) => {
-      const p = f.properties || {};
-      const adresse = p.address || p.adresse || p.voie || 'Parcelle';
-      const ref = p.parcel_ref || p.reference || p.id || '';
-      const dpe = Array.isArray(p.dpe_classes) && p.dpe_classes.length ? p.dpe_classes.join(', ') : (p.dpe_class || '');
-      const owner = p.owner || p.proprietaire || p.owners || null;
-      const nomOwner = owner ? (owner.nom || owner.name || owner.raison_sociale || '') : '';
-      const typeOwner = owner ? (owner.type || owner.nature || '') : '';
-      return '<div class="se-list-item" style="align-items:flex-start">' +
-        '<div style="flex:1;min-width:0">' +
-          '<div style="font-size:13px;font-weight:500">' + esc(adresse) + '</div>' +
-          '<div class="se-hint">' + (ref ? 'Parcelle ' + esc(ref) : '') + (dpe ? ' · DPE ' + esc(dpe) : '') + '</div>' +
-          (nomOwner ? '<div class="se-hint" style="margin-top:2px">' + esc(nomOwner) + (typeOwner ? ' · ' + esc(typeOwner) : '') + '</div>' : '') +
-        '</div>' +
-        '<button class="se-btn ghost sm" data-act="robot-ajouter" data-json="' + esc(JSON.stringify({ adresse: adresse, ref: ref, dpe: dpe, nom: nomOwner, type: typeOwner })) + '">Ajouter</button>' +
-      '</div>';
-    }).join('');
   }
 
   function robotStatsDetectes() {
@@ -2444,7 +2364,7 @@
         '<div class="se-card se-stat"><span class="se-kicker">Correspondances</span><span class="se-num">' + ms.length + '</span><span class="se-sub">couples bien × recherche</span></div>' +
         '<div class="se-card se-stat"><span class="se-kicker">Pipeline</span><span class="se-num">' + Object.keys(ST_MATCHING).length + '</span><span class="se-sub">statuts commerciaux</span></div>' +
       '</div>' +
-      '<div class="se-split" style="margin-top:16px">' +
+      '<div class="se-grid cols-3" style="margin-top:16px">' +
         '<div class="se-card"><h3>Secteurs prioritaires</h3>' +
           '<div class="se-list" style="margin-top:8px">' + secteursPrioritaires().slice(0, 8).map((s) => {
             const pct = s.biens ? Math.round(s.proprietaires / s.biens * 100) : 0;
@@ -2458,6 +2378,7 @@
           (!secteursPrioritaires().length ? '<p class="se-muted" style="margin-top:8px">Aucun secteur détecté.</p>' : '') +
         '</div>' +
         '<div class="se-card"><h3>Dernières détections</h3>' + dernieresDetections() + '</div>' +
+        '<div class="se-card"><h3>Relances</h3>' + rappelsRobot() + '</div>' +
       '</div>';
   }
 
