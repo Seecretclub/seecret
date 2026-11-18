@@ -136,7 +136,11 @@
     lead_cree_assistant: { label: 'Lead créé par Célia', icon: 'chat' },
     lead_maj_assistant: { label: 'Lead mis à jour par Célia', icon: 'chat' },
     rappel_programme: { label: 'Rappel programmé par Célia', icon: 'calendar' },
-    candidature_envoyee: { label: 'Invitation à candidater envoyée', icon: 'inbox' }
+    candidature_envoyee: { label: 'Invitation à candidater envoyée', icon: 'inbox' },
+    document_envoye: { label: 'Pièce envoyée par le client', icon: 'inbox' },
+    document_valide: { label: 'Pièce validée par l’agence', icon: 'check' },
+    document_refuse: { label: 'Pièce refusée par l’agence', icon: 'chat' },
+    bien_valide: { label: 'Bien validé par l’agence', icon: 'building' }
   };
 
   function seed() {
@@ -1490,6 +1494,28 @@
   function whatsappHref(tel, prenom, lien) {
     const msg = 'Bonjour ' + prenom + ', bonne nouvelle ! Votre demande a été validée par l\'agence Seecret. Connectez-vous pour découvrir le marché : ' + lien;
     return 'https://wa.me/' + String(tel || '').replace(/[^0-9]/g, '') + '?text=' + encodeURIComponent(msg);
+  }
+
+  // Confirmation affichée après CHAQUE action de validation/refus côté CRM
+  // (pièce, adhésion, bien, offre, modification…) : le serveur a déjà déposé
+  // le même message dans l'espace du client et tenté l'email ; ici on ne fait
+  // que proposer, à l'agent, d'envoyer AUSSI un WhatsApp — jamais automatique,
+  // seul un clic humain sur le bouton déclenche l'ouverture de wa.me.
+  function notifieModal(notif, titre) {
+    const tel = notif && notif.tel ? String(notif.tel).replace(/[^0-9]/g, '') : '';
+    const wa = tel ? 'https://wa.me/' + tel + '?text=' + encodeURIComponent(notif.waMessage || notif.message || '') : '';
+    return '<h3>' + esc(titre) + '</h3>' +
+      '<p class="se-muted">Le client a été prévenu par email, et le même message l’attend dans son espace à la reconnexion.' + (tel ? '' : ' Pas de numéro de téléphone enregistré : pas de WhatsApp possible.') + '</p>' +
+      '<div class="se-modal-foot" style="justify-content:flex-start;gap:8px">' +
+        (wa ? '<a class="se-btn soft" target="_blank" rel="noopener" href="' + wa + '">Envoyer aussi par WhatsApp</a>' : '') +
+        '<button class="se-btn ghost" type="button" data-act="modal-close">Fermer</button>' +
+      '</div>';
+  }
+
+  function ouvrirNotifieModal(notif, titre) {
+    if (!notif) return;
+    modal = notifieModal(notif, titre);
+    render();
   }
 
   function demandeModal(d) {
@@ -3368,13 +3394,14 @@
       if (!r.ok) throw new Error(res.error || 'Erreur serveur');
       d.statut = decision === 'valider' ? 'validee' : decision === 'suspendre' ? 'suspendue' : 'refusee';
       if (decision === 'valider' && res.lien) d.__whatsapp = whatsappHref(res.tel, res.prenom, res.lien);
+      else if (res.notif && res.notif.tel) d.__whatsapp = 'https://wa.me/' + String(res.notif.tel).replace(/[^0-9]/g, '') + '?text=' + encodeURIComponent(res.notif.waMessage || '');
       const tv = (state.tachesVerif || []).find((x) => x.demandeId === serverId && x.statut === 'en_attente');
       if (tv) tv.statut = 'terminee';
       commit();
       if (decision === 'valider' && res.emailEnvoye === false) {
         toast('Adhésion acceptée, mais l’email a échoué : ' + (res.emailErreur || 'erreur SMTP'), 'warn');
       } else {
-        toast(decision === 'valider' ? 'Adhésion acceptée. Email envoyé et WhatsApp prêt.' : decision === 'suspendre' ? 'Adhésion suspendue avec succès.' : 'Demande refusée.', 'ok');
+        toast(decision === 'valider' ? 'Adhésion acceptée. Email envoyé et WhatsApp prêt.' : decision === 'suspendre' ? 'Adhésion suspendue, client prévenu.' : 'Demande refusée, client prévenu.', 'ok');
       }
     } catch (e) { toast('Action impossible : ' + (e.message || 'erreur'), 'warn'); }
   }
@@ -3481,6 +3508,20 @@
     state.clients.filter((c) => c.serveurStatut === 'suspendu').forEach((c) => {
       out.push({ id: 'suspendu-' + c.id, clientId: c.id, sujet: 'Adhésion suspendue', actionAuto: 'Suspension enregistrée', actionHumaine: 'Régularisation à suivre', date: new Date().toISOString(), priorite: 'moyenne', type: 'adhesion' });
     });
+    // Une pièce envoyée par un client (statut "a_verifier", jamais encore traitée
+    // par l'agence) déclenche une notification CRM — une par client, pas par pièce.
+    Object.keys(state.docsParLead || {}).forEach((serverId) => {
+      const docs = (state.docsParLead[serverId] || []).filter((d) => d.statut === 'a_verifier');
+      if (!docs.length) return;
+      const c = state.clients.find((x) => x.serverId === serverId);
+      out.push({
+        id: 'documents-' + serverId, clientId: c ? c.id : '',
+        sujet: docs.length > 1 ? docs.length + ' pièces envoyées' : 'Pièce envoyée',
+        actionAuto: 'Pièce(s) d’identité reçue(s)', actionHumaine: 'Vérifier et valider la pièce',
+        date: docs.map((d) => d.cree).sort().slice(-1)[0] || new Date().toISOString(),
+        priorite: 'haute', type: 'documents'
+      });
+    });
     return out.filter((n) => traitees.indexOf(n.id) === -1);
   }
 
@@ -3492,6 +3533,7 @@
     if (n.type === 'relance') return 'Bonjour ' + prenom + ', je reviens vers vous au sujet de « ' + n.sujet + ' ». Où en êtes-vous ?\n\nBien cordialement,\nGabriel Taieb\nSeecret';
     if (n.type === 'demande') return 'Bonjour ' + prenom + ', nous avons bien reçu votre demande et revenons vers vous très rapidement.\n\nBien cordialement,\nGabriel Taieb\nSeecret';
     if (n.type === 'adhesion') return 'Bonjour ' + prenom + ', votre adhésion à Seecret est actuellement suspendue. Je reste à votre disposition si vous souhaitez en discuter.\n\nBien cordialement,\nGabriel Taieb\nSeecret';
+    if (n.type === 'documents') return 'Bonjour ' + prenom + ', nous avons bien reçu votre/vos pièce(s). Je reviens vers vous rapidement après vérification.\n\nBien cordialement,\nGabriel Taieb\nSeecret';
     return 'Bonjour ' + prenom + ', je reviens vers vous au sujet de « ' + n.sujet + ' ».\n\nBien cordialement,\nGabriel Taieb\nSeecret';
   }
 
@@ -3934,7 +3976,10 @@
                 ? (state.docsParLead[c.serverId] || []).map((d) => '<div class="se-list-item">' +
                     '<div style="flex:1;min-width:0"><div style="font-size:13.5px">' + esc(libelleDoc(d.type)) + '</div>' +
                     '<div class="se-hint" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(d.nom) + '</div></div>' +
-                    (d.statut === 'valide' ? '<span class="se-badge open">Validé</span>' : '<button class="se-btn ghost sm" data-act="doc-valider" data-id="' + d.id + '">Valider la pièce</button>') +
+                    (d.statut === 'valide' ? '<span class="se-badge open">Validé</span>'
+                      : d.statut === 'refuse' ? '<span class="se-badge warn">Refusé</span>'
+                      : '<button class="se-btn ghost sm" data-act="doc-valider" data-id="' + d.id + '">Valider la pièce</button>' +
+                        '<button class="se-btn ghost sm" data-act="doc-refuser" data-id="' + d.id + '">Refuser</button>') +
                     '<a class="se-btn ghost sm" href="' + esc(d.fichier) + '" target="_blank" rel="noopener">Voir</a>' +
                   '</div>').join('')
                 : '<p class="se-muted" style="margin:8px 0 0">Aucun document reçu pour l’instant.</p>') +
@@ -5055,33 +5100,39 @@
           method: 'PATCH', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ statut: 'accepte' })
         });
+        const res = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error('Erreur');
         const c = state.clients.find((x) => x.serverId === id);
         if (c) { c.serveurStatut = 'accepte'; if (c.statut === 'prospect') c.statut = 'actif'; }
         commit();
-        toast('Accès validé. Le membre est débloqué.', 'ok');
+        toast('Accès validé. Le membre est débloqué et prévenu.', 'ok');
+        ouvrirNotifieModal(res.notif, 'Accès validé');
       } catch (e) { toast('Validation impossible.', 'warn'); }
     },
     'verif-valider': async (el, id) => {
       try {
         const r = await fetch('/api/tasks/' + id + '/valider', { method: 'POST' });
+        const res = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error('Erreur');
         const t = (state.tachesVerif || []).find((x) => x.id === id);
         if (t) t.statut = 'validee';
         const c = state.clients.find((x) => x.serverId === (t && t.leadId));
         if (c) { c.serveurStatut = 'accepte'; if (c.statut === 'prospect') c.statut = 'actif'; }
         commit();
-        toast('Compte validé. Le membre est débloqué.', 'ok');
+        toast('Compte validé. Le membre est débloqué et prévenu.', 'ok');
+        ouvrirNotifieModal(res.notif, 'Compte validé');
       } catch (e) { toast('Validation impossible.', 'warn'); }
     },
     'verif-refuser': async (el, id) => {
       try {
         const r = await fetch('/api/tasks/' + id + '/refuser', { method: 'POST' });
+        const res = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error('Erreur');
         const t = (state.tachesVerif || []).find((x) => x.id === id);
         if (t) t.statut = 'refusee';
         commit();
-        toast('Dossier refusé.', 'warn');
+        toast('Dossier refusé, client prévenu.', 'warn');
+        ouvrirNotifieModal(res.notif, 'Dossier refusé');
       } catch (e) { toast('Action impossible.', 'warn'); }
     },
     'demande-ouvrir': (el, id) => { const d = state.demandes.find((x) => x.id === id || x.serverDemandeId === id); if (d) { location.hash = '#/demande/' + d.id; } },
@@ -5093,13 +5144,15 @@
       const offreId = d ? (d.offreId || d.serverDemandeId) : id;
       try {
         const r = await fetch('/api/offres/' + offreId + '/accepter', { method: 'POST' });
+        const res = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error('Erreur');
         if (d) d.statut = 'traitee';
         const b = d && d.bienId ? bien(d.bienId) : null;
         if (b) b.statut = 'sous-compromis';
         modal = null;
         commit();
-        toast('Offre acceptée. Le bien passe sous compromis.', 'ok');
+        toast('Offre acceptée. Le bien passe sous compromis, acquéreur prévenu.', 'ok');
+        ouvrirNotifieModal(res.notif, 'Offre acceptée');
       } catch (e) { toast('Action impossible.', 'warn'); }
     },
     'offre-contre': (el, id) => {
@@ -5120,6 +5173,7 @@
         if (b) b.validation = 'valide';
         commit();
         toast('Bien validé. Le marché est débloqué pour ce membre.', 'ok');
+        ouvrirNotifieModal(res.notif, 'Bien validé');
       } catch (e) { toast('Validation impossible : ' + (e.message || 'erreur'), 'warn'); }
     },
     'sel-tous': (el) => {
@@ -5701,13 +5755,31 @@
           method: 'PATCH', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ statut: 'valide' })
         });
+        const res = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error('Erreur');
         Object.keys(state.docsParLead).forEach((k) => {
           (state.docsParLead[k] || []).forEach((d) => { if (d.id === id) d.statut = 'valide'; });
         });
         commit();
-        toast('Pièce validée.', 'ok');
+        toast('Pièce validée, client prévenu.', 'ok');
+        ouvrirNotifieModal(res.notif, 'Pièce validée');
       } catch (e) { toast('Validation impossible.', 'warn'); }
+    },
+    'doc-refuser': async (el, id) => {
+      try {
+        const r = await fetch('/api/documents/' + id, {
+          method: 'PATCH', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ statut: 'refuse' })
+        });
+        const res = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error('Erreur');
+        Object.keys(state.docsParLead).forEach((k) => {
+          (state.docsParLead[k] || []).forEach((d) => { if (d.id === id) d.statut = 'refuse'; });
+        });
+        commit();
+        toast('Pièce refusée, client prévenu.', 'warn');
+        ouvrirNotifieModal(res.notif, 'Pièce refusée');
+      } catch (e) { toast('Action impossible.', 'warn'); }
     },
     'market-scan': async (el, id) => {
       const b = bien(id);
@@ -5733,11 +5805,13 @@
         fetch('/api/demandes/' + d.serverDemandeId, {
           method: 'PATCH', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ statut: 'traitee', action: d.role })
-        }).then((r) => {
+        }).then(async (r) => {
+          const res = await r.json().catch(() => ({}));
           if (!r.ok) throw new Error('Erreur');
           d.statut = 'traitee';
           commit();
-          toast('Demande validée côté membre.', 'ok');
+          toast('Demande validée côté membre, client prévenu.', 'ok');
+          ouvrirNotifieModal(res.notif, 'Demande validée');
         }).catch(() => toast('Validation impossible.', 'warn'));
         return;
       }

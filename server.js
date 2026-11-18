@@ -65,6 +65,7 @@ function readDb() {
   db.offMarket = (db.offMarket && !Array.isArray(db.offMarket) && typeof db.offMarket === 'object') ? db.offMarket : {};
   db.activites = Array.isArray(db.activites) ? db.activites : [];
   db.rappels = Array.isArray(db.rappels) ? db.rappels : [];
+  db.notifications = Array.isArray(db.notifications) ? db.notifications : [];
   // Migration : relie chaque bien/recherche à son lead (leadId) via l'email si manquant.
   db.biens.forEach((b) => {
     if (!b.leadId && b.email) {
@@ -91,6 +92,29 @@ function writeDb(db) { fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2));
 function logActivite(db, { leadId, bienId, type, auteur }) {
   db.activites = Array.isArray(db.activites) ? db.activites : [];
   db.activites.push({ id: uid('act'), leadId: leadId || null, bienId: bienId || null, type: type, auteur: auteur || 'Système', at: nowISO() });
+}
+
+// Notification client unifiée : chaque action de validation/refus côté CRM
+// (pièce d'identité, adhésion, bien, offre, demande de modification, visite…)
+// déclenche TOUJOURS la même chose, de la même façon : un email réel, un
+// message déposé dans l'espace membre (vu à la reconnexion via
+// GET /api/mes-notifications), et un lien wa.me pré-rempli renvoyé au CRM
+// pour qu'un agent l'envoie d'un clic — jamais d'envoi WhatsApp automatique,
+// même convention que le reste du produit (voir prevenirMessage/wa.me côté
+// crm.js). N'écrit pas elle-même via writeDb : l'appelant reste responsable,
+// comme pour logActivite.
+function notifierClient(db, { leadId, email, tel, prenom, titre, message, lien }) {
+  db.notifications = Array.isArray(db.notifications) ? db.notifications : [];
+  const dest = String(email || '').trim();
+  const notif = { id: uid('ntf'), leadId: leadId || null, email: dest, titre: titre, message: message, lien: lien || null, lue: false, cree: nowISO() };
+  db.notifications.push(notif);
+  if (mailer && dest) {
+    mailer.sendMail({
+      from: '"Bonjour Seecret" <' + FROM_EMAIL + '>', to: dest, subject: titre,
+      html: emailValidationLegere(prenom || '', message)
+    }).catch((err) => console.error('[notif] email échoué :', err.message));
+  }
+  return { tel: tel || '', prenom: prenom || '', message: message, lien: lien || '', waMessage: 'Bonjour ' + (prenom || '') + ', ' + message + (lien ? ' ' + lien : '') };
 }
 
 function titreRecherche(r) {
@@ -1459,6 +1483,7 @@ app.post('/api/documents', requireAuth, upload.single('fichier'), (req, res) => 
     taille: req.file.size, statut: 'a_verifier', cree: nowISO()
   };
   req.lead.documents.push(doc);
+  logActivite(req.db, { leadId: req.lead.id, type: 'document_envoye', auteur: nomComplet(req.lead) + ' (client)' });
   writeDb(req.db);
   res.json({ ok: true, document: doc });
 });
@@ -1575,8 +1600,19 @@ app.patch('/api/biens/:id/valider', requireAdmin, (req, res) => {
   if (!bien) return res.status(404).json({ error: 'Bien introuvable' });
   bien.validation = 'valide';
   bien.valideAt = nowISO();
+  let notif = null;
+  if (bien.leadId) {
+    const lead = db.leads.find((l) => l.id === bien.leadId);
+    logActivite(db, { leadId: bien.leadId, bienId: bien.id, type: 'bien_valide', auteur: 'Agent' });
+    notif = notifierClient(db, {
+      leadId: bien.leadId, email: (lead && lead.email) || bien.email, tel: (lead && lead.tel) || '', prenom: (lead && lead.prenom) || '',
+      titre: 'Votre bien a été validé',
+      message: 'Votre bien « ' + (bien.titre || bien.adresse || 'votre annonce') + ' » a été validé par l’agence et est désormais visible sur le marché Seecret.',
+      lien: originOf(req) + '/espace.html'
+    });
+  }
   writeDb(db);
-  res.json({ ok: true, validation: 'valide' });
+  res.json({ ok: true, validation: 'valide', notif: notif });
 });
 
 // ---- Enregistrement (PATCH) des fiches Lead / Bien / Recherche ----
@@ -1755,6 +1791,27 @@ function bienOuvertAuxVisites(b) {
   return !!b && STATUTS_VISITABLES.indexOf(b.statut) > -1;
 }
 
+// ---- Notifications (vues par le client dans son espace, à la reconnexion) ----
+// Alimentée par notifierClient() à chaque validation/refus côté CRM
+// (pièce, adhésion, bien, offre, modification, visite…) : le client retrouve
+// ici le même message que celui envoyé par email, sans dépendre de sa boîte mail.
+app.get('/api/mes-notifications', requireAuth, (req, res) => {
+  const db = readDb();
+  const mien = (n) => n.leadId === req.lead.id || (n.email || '').toLowerCase() === (req.lead.email || '').toLowerCase();
+  const mes = (db.notifications || []).filter(mien).slice().sort((a, b) => new Date(b.cree) - new Date(a.cree));
+  res.json({ ok: true, notifications: mes });
+});
+
+app.post('/api/mes-notifications/:id/lu', requireAuth, (req, res) => {
+  const db = readDb();
+  const n = (db.notifications || []).find((x) => x.id === req.params.id && (x.leadId === req.lead.id || (x.email || '').toLowerCase() === (req.lead.email || '').toLowerCase()));
+  if (!n) return res.status(404).json({ error: 'Notification introuvable' });
+  n.lue = true;
+  n.lueAt = nowISO();
+  writeDb(db);
+  res.json({ ok: true });
+});
+
 // ---- Visites (demande du membre) ----
 app.post('/api/visites', requireAuth, (req, res) => {
   const bienId = String((req.body && req.body.bienId) || '');
@@ -1825,8 +1882,16 @@ app.post('/api/offres/:id/accepter', requireAdmin, (req, res) => {
     const tache = db.tasks.find((t) => t.demandeId === demande.id && t.statut === 'en_attente');
     if (tache) { tache.statut = 'terminee'; tache.traiteeAt = nowISO(); }
   }
+  const acheteur = db.leads.find((l) => l.id === offre.leadId);
+  const notif = notifierClient(db, {
+    leadId: offre.leadId, email: offre.email || (acheteur && acheteur.email), tel: (acheteur && acheteur.tel) || '',
+    prenom: (acheteur && acheteur.prenom) || (offre.nom || '').split(' ')[0] || '',
+    titre: 'Votre offre a été acceptée',
+    message: 'Excellente nouvelle, votre offre de ' + Number(offre.montant || 0).toLocaleString('fr-FR') + ' € a été acceptée par le propriétaire.',
+    lien: originOf(req) + '/espace.html'
+  });
   writeDb(db);
-  res.json({ ok: true });
+  res.json({ ok: true, notif: notif });
 });
 
 app.post('/api/offres/:id/refuser', requireAdmin, (req, res) => {
@@ -1842,8 +1907,16 @@ app.post('/api/offres/:id/refuser', requireAdmin, (req, res) => {
     const tache = db.tasks.find((t) => t.demandeId === demande.id && t.statut === 'en_attente');
     if (tache) { tache.statut = 'terminee'; tache.traiteeAt = nowISO(); }
   }
+  const acheteurRef = db.leads.find((l) => l.id === offre.leadId);
+  const notif = notifierClient(db, {
+    leadId: offre.leadId, email: offre.email || (acheteurRef && acheteurRef.email), tel: (acheteurRef && acheteurRef.tel) || '',
+    prenom: (acheteurRef && acheteurRef.prenom) || (offre.nom || '').split(' ')[0] || '',
+    titre: 'Votre offre n’a pas été retenue',
+    message: 'Votre offre de ' + Number(offre.montant || 0).toLocaleString('fr-FR') + ' € n’a malheureusement pas été retenue par le propriétaire.',
+    lien: originOf(req) + '/espace.html'
+  });
   writeDb(db);
-  res.json({ ok: true });
+  res.json({ ok: true, notif: notif });
 });
 
 app.post('/api/offres/:id/contre', requireAdmin, (req, res) => {
@@ -2809,8 +2882,18 @@ app.patch('/api/leads/:id/statut', requireAdmin, (req, res) => {
   }
   const statut = String((req.body && req.body.statut) || 'accepte');
   lead.statut = statut;
+  let notif = null;
+  if (statut === 'accepte') {
+    logActivite(db, { leadId: lead.id, type: 'admission', auteur: 'Agent' });
+    notif = notifierClient(db, {
+      leadId: lead.id, email: lead.email, tel: lead.tel, prenom: lead.prenom,
+      titre: 'Votre accès à Seecret est validé',
+      message: 'Bonne nouvelle, votre accès a été validé par l’agence. Vous pouvez dès maintenant vous reconnecter à votre espace.',
+      lien: originOf(req) + '/espace.html'
+    });
+  }
   writeDb(db);
-  res.json({ ok: true, lead: { id: lead.id, statut: lead.statut } });
+  res.json({ ok: true, lead: { id: lead.id, statut: lead.statut }, notif: notif });
 });
 
 app.get('/api/leads/:id/documents', requireAdmin, (req, res) => {
@@ -2826,13 +2909,26 @@ app.get('/api/leads/:id/documents', requireAdmin, (req, res) => {
 app.patch('/api/documents/:id', requireAdmin, (req, res) => {
   const db = readDb();
   const statut = (req.body && req.body.statut) === 'refuse' ? 'refuse' : 'valide';
-  let found = null;
+  let found = null, leadFound = null;
   db.leads.forEach((l) => (l.documents || []).forEach((d) => {
-    if (d.id === req.params.id) { d.statut = statut; d.valideAt = nowISO(); found = d; }
+    if (d.id === req.params.id) { d.statut = statut; d.valideAt = nowISO(); found = d; leadFound = l; }
   }));
   if (!found) return res.status(404).json({ error: 'Document introuvable' });
+  let notif = null;
+  if (leadFound) {
+    logActivite(db, { leadId: leadFound.id, type: statut === 'valide' ? 'document_valide' : 'document_refuse', auteur: 'Agent' });
+    const libelle = TYPES_DOC[found.type] || found.type || 'document';
+    notif = notifierClient(db, {
+      leadId: leadFound.id, email: leadFound.email, tel: leadFound.tel, prenom: leadFound.prenom,
+      titre: statut === 'valide' ? 'Votre pièce a été validée' : 'Votre pièce a été refusée',
+      message: statut === 'valide'
+        ? 'Votre pièce (' + libelle + ') a été validée par l’agence.'
+        : 'Votre pièce (' + libelle + ') a été refusée par l’agence. Merci d’en envoyer une nouvelle depuis votre espace.',
+      lien: originOf(req) + '/espace.html'
+    });
+  }
   writeDb(db);
-  res.json({ ok: true, document: found });
+  res.json({ ok: true, document: found, notif: notif });
 });
 
 // ---- Workflow de validation : documents -> tâche -> valider/refuser ----
@@ -2867,25 +2963,42 @@ app.post('/api/tasks/:id/valider', requireAdmin, (req, res) => {
   const tache = db.tasks.find((t) => t.id === req.params.id);
   if (!tache) return res.status(404).json({ error: 'Tâche introuvable' });
   const lead = db.leads.find((l) => l.id === tache.leadId);
+  let notif = null;
   if (lead) {
     lead.statut = 'accepte';
     (lead.documents || []).forEach((d) => { d.statut = 'valide'; d.valideAt = nowISO(); });
     logActivite(db, { leadId: lead.id, type: 'admission', auteur: 'Agent' });
+    notif = notifierClient(db, {
+      leadId: lead.id, email: lead.email, tel: lead.tel, prenom: lead.prenom,
+      titre: 'Votre dossier a été vérifié',
+      message: 'Bonne nouvelle, vous avez bien été accepté(e) : votre dossier a été vérifié et votre accès à Seecret est confirmé.',
+      lien: originOf(req) + '/espace.html'
+    });
   }
   tache.statut = 'validee';
   tache.traiteeAt = nowISO();
   writeDb(db);
-  res.json({ ok: true });
+  res.json({ ok: true, notif: notif });
 });
 
 app.post('/api/tasks/:id/refuser', requireAdmin, (req, res) => {
   const db = readDb();
   const tache = db.tasks.find((t) => t.id === req.params.id);
   if (!tache) return res.status(404).json({ error: 'Tâche introuvable' });
+  const lead = db.leads.find((l) => l.id === tache.leadId);
+  let notif = null;
+  if (lead) {
+    notif = notifierClient(db, {
+      leadId: lead.id, email: lead.email, tel: lead.tel, prenom: lead.prenom,
+      titre: 'Votre dossier n’a pas été validé',
+      message: 'Votre dossier n’a pas pu être validé en l’état. L’agence revient vers vous pour les pièces manquantes ou à corriger.',
+      lien: originOf(req) + '/espace.html'
+    });
+  }
   tache.statut = 'refusee';
   tache.traiteeAt = nowISO();
   writeDb(db);
-  res.json({ ok: true });
+  res.json({ ok: true, notif: notif });
 });
 
 app.get('/api/demandes', requireAdmin, (req, res) => {
@@ -2899,15 +3012,23 @@ app.patch('/api/demandes/:id', requireAdmin, (req, res) => {
   if (!d) return res.status(404).json({ error: 'Demande introuvable' });
   d.statut = 'traitee';
   d.traiteeAt = nowISO();
+  const lead = db.leads.find((l) => l.id === d.leadId || (l.email || '').toLowerCase() === (d.email || '').toLowerCase());
+  let notif = null;
   if (d.type === 'statut' && d.bienId) {
     const b = db.biens.find((x) => x.id === d.bienId);
     if (b) {
       b.statut = (req.body && req.body.action) === 'vente' ? 'vendu' : 'ouvert';
       b.statutDemande = null;
     }
+    notif = notifierClient(db, {
+      leadId: lead ? lead.id : (d.leadId || null), email: d.email, tel: lead ? lead.tel : '', prenom: (lead && lead.prenom) || (d.nom || '').split(' ')[0] || '',
+      titre: 'Votre demande est validée',
+      message: 'Votre demande de changement de statut a été validée par l’agence.',
+      lien: originOf(req) + '/espace.html'
+    });
   }
   writeDb(db);
-  res.json({ ok: true });
+  res.json({ ok: true, notif: notif });
 });
 
 app.post('/api/demandes/:id/decision', requireAdmin, async (req, res) => {
@@ -2927,8 +3048,14 @@ app.post('/api/demandes/:id/decision', requireAdmin, async (req, res) => {
   if (decision === 'refuser') {
     d.statut = 'refusee';
     d.traiteeAt = nowISO();
+    const notif = notifierClient(db, {
+      leadId: lead ? lead.id : (d.leadId || null), email: d.email, tel: tel, prenom: prenom,
+      titre: 'Votre demande n’a pas été retenue',
+      message: 'Votre demande n’a malheureusement pas été retenue par l’agence.',
+      lien: lien
+    });
     writeDb(db);
-    return res.json({ ok: true, decision: 'refuser', lien: lien, tel: tel, prenom: prenom });
+    return res.json({ ok: true, decision: 'refuser', lien: lien, tel: tel, prenom: prenom, notif: notif });
   }
 
   if (decision === 'suspendre') {
@@ -2941,12 +3068,24 @@ app.post('/api/demandes/:id/decision', requireAdmin, async (req, res) => {
       lead.timeline = lead.timeline || [];
       lead.timeline.push({ at: nowISO(), type: 'suspension', motif: motif || 'Adhésion suspendue' });
     }
+    const notif = notifierClient(db, {
+      leadId: lead ? lead.id : null, email: d.email, tel: tel, prenom: prenom,
+      titre: 'Votre adhésion Seecret est suspendue',
+      message: 'Votre adhésion a été suspendue par l’agence.' + (motif ? ' Motif : ' + motif + '.' : ''),
+      lien: lien
+    });
     writeDb(db);
-    return res.json({ ok: true, decision: 'suspendre', lien: lien, tel: tel, prenom: prenom });
+    return res.json({ ok: true, decision: 'suspendre', lien: lien, tel: tel, prenom: prenom, notif: notif });
   }
 
   d.statut = 'traitee';
   d.traiteeAt = nowISO();
+
+  // Titre/message par défaut : chaque type de demande déclenche la même
+  // notification (email + espace membre + wa.me), avec un libellé adapté.
+  let titreNotif = 'Votre demande a été validée';
+  let messageNotif = 'Votre demande a été validée par l’agence.';
+  let emailDejaEnvoye = false;
 
   if (d.type === 'candidature') {
     const token = crypto.randomBytes(32).toString('hex');
@@ -2964,28 +3103,27 @@ app.post('/api/demandes/:id/decision', requireAdmin, async (req, res) => {
       }
     }
     lien = originOf(req) + '/espace.html?token=' + token;
+    titreNotif = 'Félicitations, votre accès à Seecret est validé';
+    messageNotif = 'Bonne nouvelle ! Votre demande a été validée par l’agence. Connectez-vous pour découvrir le marché.';
+    // Email « premium » avec le lien magique (différent du template générique
+    // des autres notifications) : envoyé ici, pas re-envoyé par notifierClient.
     if (mailer) {
       try {
         await mailer.sendMail({
           from: '"Bonjour Seecret" <' + FROM_EMAIL + '>',
           to: d.email,
-          subject: 'Félicitations, votre accès à Seecret est validé',
+          subject: titreNotif,
           html: emailValidationPremium(prenom, lien)
         });
         emailEnvoye = true;
+        emailDejaEnvoye = true;
       } catch (err) { emailErreur = (err && err.message) || 'Erreur SMTP'; }
     }
   } else if (d.type === 'statut' && d.bienId) {
     const b = db.biens.find((x) => x.id === d.bienId);
     if (b) { b.statut = d.role === 'vente' ? 'mandat' : 'ouvert'; b.statutDemande = null; }
-    if (mailer) {
-      mailer.sendMail({
-        from: '"Bonjour Seecret" <' + FROM_EMAIL + '>',
-        to: d.email,
-        subject: 'Votre demande est validée',
-        html: emailValidationLegere(prenom, 'Votre demande de changement de statut a été validée par l’agence.')
-      }).catch((err) => console.error('[email] envoi échoué :', err.message));
-    }
+    titreNotif = 'Votre demande est validée';
+    messageNotif = 'Votre demande de changement de statut a été validée par l’agence.';
   } else if (d.type === 'modification') {
     if (d.bienId) {
       const b = db.biens.find((x) => x.id === d.bienId);
@@ -2995,18 +3133,25 @@ app.post('/api/demandes/:id/decision', requireAdmin, async (req, res) => {
         if (d.description) b.description = d.description;
       }
     }
-    if (mailer) {
-      mailer.sendMail({
-        from: '"Bonjour Seecret" <' + FROM_EMAIL + '>',
-        to: d.email,
-        subject: 'Votre modification est validée',
-        html: emailValidationLegere(prenom, 'Votre demande de modification a été validée par l’agence.')
-      }).catch((err) => console.error('[email] envoi échoué :', err.message));
-    }
+    titreNotif = 'Votre modification est validée';
+    messageNotif = 'Votre demande de modification a été validée par l’agence.';
+  } else if (d.type === 'visite') {
+    titreNotif = 'Votre visite est confirmée';
+    messageNotif = 'Votre demande de visite a été confirmée par l’agence.' + (d.creneau ? ' Créneau : ' + d.creneau + '.' : '');
+  }
+
+  // Dépôt systématique dans l'espace membre ; email générique sauf pour la
+  // candidature, dont l'email premium (lien magique) a déjà été envoyé ci-dessus.
+  let notif;
+  if (emailDejaEnvoye) {
+    db.notifications.push({ id: uid('ntf'), leadId: lead ? lead.id : null, email: d.email, titre: titreNotif, message: messageNotif, lien: lien, lue: false, cree: nowISO() });
+    notif = { tel: tel, prenom: prenom, message: messageNotif, lien: lien, waMessage: 'Bonjour ' + prenom + ', ' + messageNotif + ' ' + lien };
+  } else {
+    notif = notifierClient(db, { leadId: lead ? lead.id : null, email: d.email, tel: tel, prenom: prenom, titre: titreNotif, message: messageNotif, lien: lien });
   }
 
   writeDb(db);
-  res.json({ ok: true, decision: 'valider', lien: lien, tel: tel, prenom: prenom, emailEnvoye: emailEnvoye, emailErreur: emailErreur });
+  res.json({ ok: true, decision: 'valider', lien: lien, tel: tel, prenom: prenom, emailEnvoye: emailEnvoye, emailErreur: emailErreur, notif: notif });
 });
 
 // Renvoyer l'email d'accès (magic link) à un membre validé.
