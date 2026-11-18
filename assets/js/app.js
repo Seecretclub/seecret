@@ -162,6 +162,7 @@
       session: null,
       membre: null,
       docs: [],
+      mesNotifications: [],
       profil: {
         prenom: 'Camille', nom: 'Renaud', email: '', tel: '', ville: 'Paris',
         role: 'acheteur-vendeur',
@@ -467,6 +468,7 @@
         '</nav>' +
         '<a class="ed-user" href="#/profil">' + esc((p.prenom + ' ' + p.nom).trim() || 'Mon compte') + '</a>' +
       '</header>' +
+      banniereNotifications() +
       banniereAdhesion() +
       '<main class="ed-main">' + content + '</main>' +
     '</div>';
@@ -546,6 +548,28 @@
           '<div class="se-hint" style="margin-top:8px">' + (lignes.length ? lignes.join(' · ') + '.' : 'Tous vos documents sont déposés.') + '</div>' +
           (state.membre && state.membre.dossierEnvoye ? '<p class="se-hint" style="margin:10px 0 0;color:var(--color-ok)">✅ Dossier bien reçu. Nos équipes analysent vos documents pour valider votre accès complet à la plateforme.</p>' : '') +
           '<button class="se-btn block" style="margin-top:12px" data-act="finaliser-adhesion">Finaliser mon adhésion</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  }
+
+  // Messages déposés par l'agence à chaque validation/refus côté CRM (pièce,
+  // adhésion, bien, offre, modification…) — vus ici à la reconnexion, en plus
+  // de l'email déjà envoyé. Une case à cocher les marque lus (persisté côté
+  // serveur), comme les notifications agent dans le CRM.
+  function banniereNotifications() {
+    const non = (state.mesNotifications || []).filter((n) => !n.lue);
+    if (!non.length) return '';
+    return '<div class="ed-panel" style="margin-bottom:22px;border:1px solid var(--color-club-green,#1b3a32);background:var(--color-club-mist)">' +
+      '<div style="display:flex;gap:12px;align-items:flex-start">' +
+        '<span style="font-size:22px">🔔</span>' +
+        '<div style="flex:1;min-width:0">' +
+          '<div style="font-weight:600">' + non.length + ' nouveau' + (non.length > 1 ? 'x' : '') + ' message' + (non.length > 1 ? 's' : '') + ' de l’agence</div>' +
+          '<div class="se-list" style="margin-top:8px">' + non.map((n) => '<div class="se-list-item" style="align-items:flex-start">' +
+            '<div style="flex:1;min-width:0"><div style="font-size:13.5px;font-weight:500">' + esc(n.titre || 'Message') + '</div>' +
+            '<p class="se-muted" style="margin:2px 0 0">' + esc(n.message || '') + '</p></div>' +
+            '<button class="se-btn ghost sm" data-act="notif-lu" data-id="' + n.id + '">Marquer comme lu</button>' +
+          '</div>').join('') + '</div>' +
         '</div>' +
       '</div>' +
     '</div>';
@@ -1055,6 +1079,7 @@
       try { const b = await API.get('/api/mon-bien'); state.monBien = Object.assign({ mien: true }, b.bien); } catch (e) { /* pas de bien */ }
       try { const r = await API.get('/api/mon-recherche'); state.recherche = Object.assign({}, state.recherche, r.recherche); } catch (e) { /* pas de recherche */ }
       try { const d = await API.get('/api/documents'); state.docs = d.documents || []; } catch (e) { /* pas de docs */ }
+      try { const n = await API.get('/api/mes-notifications'); state.mesNotifications = n.notifications || []; } catch (e) { /* pas de notifications */ }
     } catch (e) {
       state.membre = null;
       state.session = null;
@@ -1698,9 +1723,18 @@
     },
     'logout': async () => {
       try { await API.send('POST', '/api/auth/logout'); } catch (e) { /* ignore */ }
-      state.session = null; state.membre = null; state.monBien = null; state.docs = [];
+      state.session = null; state.membre = null; state.monBien = null; state.docs = []; state.mesNotifications = [];
       try { localStorage.removeItem(KEY); } catch (e) { /* ignore */ }
       location.href = '/espace.html';
+    },
+    'notif-lu': async (el) => {
+      const id = el.getAttribute('data-id');
+      try {
+        await API.send('POST', '/api/mes-notifications/' + id + '/lu');
+        const n = (state.mesNotifications || []).find((x) => x.id === id);
+        if (n) n.lue = true;
+        render();
+      } catch (e) { toast(e.message || 'Action impossible.', 'warn'); }
     },
     'visibilite': async (el) => {
       const demande = el.getAttribute('data-demande') === 'vente' ? 'vente' : 'ouvert';
