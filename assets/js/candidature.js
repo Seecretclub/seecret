@@ -502,7 +502,7 @@
           etage: rep.bien.etage || '', dpe: rep.bien.dpe || '',
           prix: Number(rep.vente.prix) || 0, description: '', photos: [], atouts: [],
           statut: 'brouillon', statutDemande: null, suiveurs: 0,
-          agent: 'Léa Marchand', cree: nowISO()
+          agent: 'Gabriel Taieb', cree: nowISO()
         };
         const i = biens.findIndex((b) => b.email === rep.vous.email);
         if (i > -1) {

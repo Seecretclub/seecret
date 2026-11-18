@@ -156,12 +156,12 @@
     ];
 
     const clients = [
-      { id: 'c1', type: 'acquereur', prenom: 'Camille', nom: 'Renaud', email: 'camille.renaud@example.com', tel: '06 12 34 56 78', statut: 'actif', source: 'Candidature', budgetMin: 1200000, budgetMax: 2200000, quartiers: ['p4', 'p5', 'p6', 'p7'], piecesMin: 3, surfaceMin: 90, typeBien: 'Appartement', notes: 'Cherche la lumière et un dernier étage. Prête à se positionner vite.', tags: ['VIP', 'Financement validé'], agent: 'Léa Marchand', cree: '2026-10-18T09:00:00.000Z' },
-      { id: 'c2', type: 'vendeur', prenom: 'Antoine', nom: 'Mercier', email: 'a.mercier@example.com', tel: '06 22 11 44 90', statut: 'client', source: 'Recommandation', budgetMin: 0, budgetMax: 0, quartiers: [], piecesMin: 0, surfaceMin: 0, typeBien: '', notes: 'Vend pour acheter ailleurs. Très attaché à la discrétion.', tags: ['Exclusif'], agent: 'Léa Marchand', cree: '2026-09-12T09:00:00.000Z' },
+      { id: 'c1', type: 'acquereur', prenom: 'Camille', nom: 'Renaud', email: 'camille.renaud@example.com', tel: '06 12 34 56 78', statut: 'actif', source: 'Candidature', budgetMin: 1200000, budgetMax: 2200000, quartiers: ['p4', 'p5', 'p6', 'p7'], piecesMin: 3, surfaceMin: 90, typeBien: 'Appartement', notes: 'Cherche la lumière et un dernier étage. Prête à se positionner vite.', tags: ['VIP', 'Financement validé'], agent: 'Gabriel Taieb', cree: '2026-10-18T09:00:00.000Z' },
+      { id: 'c2', type: 'vendeur', prenom: 'Antoine', nom: 'Mercier', email: 'a.mercier@example.com', tel: '06 22 11 44 90', statut: 'client', source: 'Recommandation', budgetMin: 0, budgetMax: 0, quartiers: [], piecesMin: 0, surfaceMin: 0, typeBien: '', notes: 'Vend pour acheter ailleurs. Très attaché à la discrétion.', tags: ['Exclusif'], agent: 'Gabriel Taieb', cree: '2026-09-12T09:00:00.000Z' },
       { id: 'c3', type: 'acquereur', prenom: 'Sofia', nom: 'Belkacem', email: 'sofia.b@example.com', tel: '07 88 21 33 05', statut: 'actif', source: 'Site web', budgetMin: 2500000, budgetMax: 3500000, quartiers: ['p7', 'p8', 'p16'], piecesMin: 5, surfaceMin: 150, typeBien: 'Appartement', notes: 'Famille de 4, écoles du 7e. Visite uniquement le samedi.', tags: ['Sérieux'], agent: 'Karim B.', cree: '2026-10-04T09:00:00.000Z' },
-      { id: 'c4', type: 'vendeur', prenom: 'Hugo', nom: 'Lefèvre', email: 'hugo.lefevre@example.com', tel: '06 45 09 77 12', statut: 'client', source: 'Candidature', budgetMin: 0, budgetMax: 0, quartiers: [], piecesMin: 0, surfaceMin: 0, typeBien: '', notes: 'Duplex du 6e. Veut vendre avant l’été.', tags: ['Exclusif'], agent: 'Léa Marchand', cree: '2026-09-18T09:00:00.000Z' },
+      { id: 'c4', type: 'vendeur', prenom: 'Hugo', nom: 'Lefèvre', email: 'hugo.lefevre@example.com', tel: '06 45 09 77 12', statut: 'client', source: 'Candidature', budgetMin: 0, budgetMax: 0, quartiers: [], piecesMin: 0, surfaceMin: 0, typeBien: '', notes: 'Duplex du 6e. Veut vendre avant l’été.', tags: ['Exclusif'], agent: 'Gabriel Taieb', cree: '2026-09-18T09:00:00.000Z' },
       { id: 'c5', type: 'acquereur', prenom: 'Inès', nom: 'Fontaine', email: 'ines.fontaine@example.com', tel: '06 30 55 21 84', statut: 'prospect', source: 'Instagram', budgetMin: 1000000, budgetMax: 1500000, quartiers: ['p9', 'p10', 'p11', 'p18'], piecesMin: 3, surfaceMin: 70, typeBien: 'Appartement', notes: 'Primo-accédante, prêt obtenu.', tags: [], agent: 'Karim B.', cree: '2026-10-21T09:00:00.000Z' },
-      { id: 'c6', type: 'mixte', prenom: 'Paul', nom: 'Girard', email: 'paul.girard@example.com', tel: '07 12 65 43 21', statut: 'actif', source: 'Bouche à oreille', budgetMin: 1700000, budgetMax: 2600000, quartiers: ['p3', 'p4', 'p11'], piecesMin: 4, surfaceMin: 100, typeBien: 'Loft', notes: 'Vend son loft du Marais, cherche plus grand dans le centre.', tags: ['VIP'], agent: 'Léa Marchand', cree: '2026-10-08T09:00:00.000Z' }
+      { id: 'c6', type: 'mixte', prenom: 'Paul', nom: 'Girard', email: 'paul.girard@example.com', tel: '07 12 65 43 21', statut: 'actif', source: 'Bouche à oreille', budgetMin: 1700000, budgetMax: 2600000, quartiers: ['p3', 'p4', 'p11'], piecesMin: 4, surfaceMin: 100, typeBien: 'Loft', notes: 'Vend son loft du Marais, cherche plus grand dans le centre.', tags: ['VIP'], agent: 'Gabriel Taieb', cree: '2026-10-08T09:00:00.000Z' }
     ];
 
     const recherches = [
@@ -193,7 +193,7 @@
 
     return {
       v: 1,
-      agent: { prenom: 'Léa', nom: 'Marchand', email: 'lea@seecret.club', tel: '06 71 22 90 14', agence: 'Seecret — Paris centre' },
+      agent: { prenom: 'Gabriel', nom: 'Taieb', email: 'gabriel.taieb@seecret.club', tel: '06 81 29 21 02', agence: 'Seecret — Paris centre' },
       // Identité réelle de la personne connectée (serveur, via /api/auth/me) —
       // distincte de `agent` ci-dessus qui n'est qu'un profil d'affichage local.
       // null jusqu'au premier appel réussi à syncIdentite().
