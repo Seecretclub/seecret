@@ -97,7 +97,7 @@
 /* Pro : boutons affinés */
 .se-btn { padding: 7px 14px; font-size: 13px; border-radius: 8px; font-weight: 500; }
 .se-btn.sm { padding: 5px 11px; font-size: 12px; }
-.se-btn.ghost { background: transparent; border: 1px solid var(--color-stroke); color: var(--color-ink); }
+.se-btn.ghost { background: var(--color-club-mist); border: 1px solid transparent; color: var(--color-ink); }
 .se-btn.danger.ghost { color: var(--color-alert); border-color: var(--color-alert); }
 
 /* Radar (Leaflet) */
@@ -127,7 +127,11 @@
 .se-mail-from { font-weight: 600; font-size: 13.5px; color: #1f2937; }
 .se-mail-from small { font-weight: 400; color: var(--color-graphite); }
 .se-mail-subject { font-size: 14.5px; margin-top: 4px; color: #111827; }
-.se-mail-body { background: #faf9f7; }
+/* Scopé à .se-mail-preview : .se-mail-body est aussi le nom (sans rapport) du
+   corps d'une carte de demande dans la boîte de réception (liste /demandes),
+   qui héritait par erreur de ce fond grisé — d'où les rectangles gris sur
+   blanc disgracieux repérés sur mobile. */
+.se-mail-preview .se-mail-body { background: #faf9f7; }
 .se-mail-attach { display: flex; align-items: center; gap: 8px; padding: 12px 20px; border-top: 1px solid #eceff1; font-size: 13px; color: var(--color-graphite); background: #fff; }
 
 /* Aperçu WhatsApp (simulation smartphone) */

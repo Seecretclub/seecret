@@ -508,9 +508,30 @@ function validerEmail(email) {
 // sur une base qui a déjà été seedée, pour ne jamais dupliquer au redémarrage.
 function joursAvant(n) { return new Date(Date.now() - n * 24 * 60 * 60 * 1000).toISOString(); }
 
+// Photos ajoutées après le premier seed (v1 n'avait aucune photo) : plutôt que
+// de resseeder (dupliquerait tout), on rattrape juste les biens de démo déjà
+// en base qui n'ont pas encore de photo, en les retrouvant par email — sans
+// jamais toucher un bien réel (jamais marqué `demo`).
+function rattraperPhotosDemo(db) {
+  if (db.demoPhotosV2) return;
+  db.demoPhotosV2 = true;
+  const photosParEmail = {
+    'sophie.marchal@demo.seecret.fr': ['ilesaintlouis-1.jpg', 'saintsulpice-1.jpg'],
+    'marc.lemoine@demo.seecret.fr': ['home-1.jpg', 'home-loft-bright.jpg'],
+    'antoine.roussel@demo.seecret.fr': ['home-6.jpg', 'trocadero-1.jpg'],
+    'helene.girard@demo.seecret.fr': ['montmartre-1.jpg', 'home-jardin.jpg']
+  };
+  db.biens.forEach((b) => {
+    if (b.demo && photosParEmail[b.email] && (!b.photos || !b.photos.length)) {
+      b.photos = photosParEmail[b.email];
+    }
+  });
+}
+
 function seedDemoData(db) {
-  if (db.demoSeeded) return;
+  if (db.demoSeeded) { rattraperPhotosDemo(db); return; }
   db.demoSeeded = true;
+  db.demoPhotosV2 = true;
 
   const lead = (over) => Object.assign({
     id: uid('l'), tel: '', budgetMax: 0, quartiers: [], piecesMin: 0, surfaceMin: 0, surfaceMax: 0,
@@ -556,6 +577,7 @@ function seedDemoData(db) {
     exterieur: 'Balcon', surfaceExterieur: 6, prix: 920000, delai: '6 à 12 mois',
     motif: 'Agrandissement familial', description: 'Bel appartement traversant, lumineux, dans une rue calme du Marais.',
     atouts: ['Parquet d’origine', 'Lumineux', 'Calme'], charges: 280,
+    photos: ['ilesaintlouis-1.jpg', 'saintsulpice-1.jpg'],
     exclusivite: { statut: 'verifie_exclusif', liens: [] }, validation: 'valide', statut: 'avant-premiere',
     suiveurs: 4, cree: joursAvant(25)
   });
@@ -573,6 +595,7 @@ function seedDemoData(db) {
     prix: 610000, delai: 'Dès que possible', dejaEnVente: 'non', mandat: 'Mandat simple signé',
     motif: 'Départ en province', description: 'Appartement refait à neuf, cuisine ouverte, exposé sud.',
     atouts: ['Lumineux', 'Cuisine ouverte'], charges: 150, ascenseur: true,
+    photos: ['home-1.jpg', 'home-loft-bright.jpg'],
     exclusivite: { statut: 'verifie_exclusif', liens: [] }, validation: 'valide', statut: 'sous-offre',
     suiveurs: 9, cree: joursAvant(40)
   });
@@ -641,7 +664,8 @@ function seedDemoData(db) {
     adresse: '22 rue des Martyrs',
     codePostal: '75009', ville: 'Paris', type: 'Appartement', quartier: 'Pigalle / SOPI', surface: 48,
     pieces: 2, chambres: 1, sdb: 1, etage: '2e étage', dpe: 'D', ges: 'E', prix: 540000,
-    motif: 'Investissement revendu', exclusivite: { statut: 'verifie_exclusif', liens: [] },
+    motif: 'Investissement revendu', photos: ['home-6.jpg', 'trocadero-1.jpg'],
+    exclusivite: { statut: 'verifie_exclusif', liens: [] },
     validation: 'valide', statut: 'vendu', suiveurs: 12, cree: joursAvant(85)
   });
 
@@ -657,7 +681,7 @@ function seedDemoData(db) {
     pieces: 3, chambres: 2, sdb: 2, etage: 'RDC', dpe: 'E', ges: 'E', prix: 780000,
     delai: 'Dès que possible', dejaEnVente: 'oui', mandat: 'Mandat exclusif',
     motif: 'Investissement revendu', description: 'Loft atypique en rez-de-jardin, volumes exceptionnels.',
-    atouts: ['Volumes', 'Rez-de-jardin'], charges: 310,
+    atouts: ['Volumes', 'Rez-de-jardin'], charges: 310, photos: ['montmartre-1.jpg', 'home-jardin.jpg'],
     exclusivite: { statut: 'verifie_exclusif', liens: [] }, validation: 'valide', statut: 'ouvert',
     suiveurs: 6, cree: joursAvant(12)
   });

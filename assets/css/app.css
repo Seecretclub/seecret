@@ -170,7 +170,7 @@ body.se-body {
 .se-btn svg { width: 16px; height: 16px; }
 
 .se-btn.soft { background: var(--color-club-mist); color: var(--color-ink); }
-.se-btn.ghost { background: transparent; border-color: var(--color-stroke); color: var(--color-ink); }
+.se-btn.ghost { background: var(--color-club-mist); border-color: transparent; color: var(--color-ink); }
 .se-btn.light { background: #fff; border-color: var(--color-stroke-faint); color: var(--color-ink); box-shadow: var(--shadow-card); }
 .se-btn.danger { background: var(--color-alert); }
 .se-btn.sm { padding: 6px 12px; font-size: 12.5px; }
