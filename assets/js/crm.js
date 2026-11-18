@@ -2625,6 +2625,52 @@
       '<p class="se-hint" style="margin-top:6px">Comparez ces sociétés et villes avec ce qu’affiche le profil LinkedIn trouvé (employeur actuel/passé, localisation) pour confirmer qu’il s’agit bien de la même personne.</p>';
   }
 
+  // Coordonnées pro (email/téléphone) : cascade sur plusieurs annuaires B2B freemium
+  // (Societeinfo, Dropcontact, Datagma côté serveur) + enrichissement Kaspr d'un profil
+  // LinkedIn que l'agent a lui-même confirmé. On ne bascule jamais en payant tout seul : si
+  // tous les quotas gratuits sont épuisés, on le dit clairement plutôt que de dépenser de
+  // l'argent réel sans accord explicite à chaque fois.
+  function coordonneesProHtml(nom, contexte) {
+    const r = (state.coordonneesPro || {})[nom];
+    let bloc;
+    if (!r) {
+      bloc = '<button class="se-btn ghost sm" style="margin-top:8px" data-act="chercher-coordonnees-pro" data-nom="' + esc(nom) + '" data-societe="' + esc(contexte || '') + '">' + ICONS.mail + ' Chercher un email/téléphone pro (gratuit)</button>' +
+        '<p class="se-hint" style="margin-top:4px">Essaie successivement Societeinfo, Dropcontact puis Datagma (annuaires professionnels légaux) et s’arrête au premier résultat — seuls ceux dont la clé est configurée sont utilisés.</p>';
+    } else if (r.chargement) {
+      bloc = '<p class="se-hint" style="margin-top:8px">Recherche en cours sur les annuaires professionnels…</p>';
+    } else if (r.erreur) {
+      bloc = '<p class="se-muted" style="margin-top:8px">La recherche a échoué (problème réseau). <button class="se-btn ghost sm" data-act="chercher-coordonnees-pro" data-nom="' + esc(nom) + '" data-societe="' + esc(contexte || '') + '" style="margin-left:4px">Réessayer</button></p>';
+    } else if (r.trouve) {
+      bloc = '<div class="se-kv" style="margin-top:8px">' +
+        (r.email ? kv('Email pro', esc(r.email)) : '') +
+        (r.telephone ? kv('Téléphone pro', esc(r.telephone)) : '') +
+        '</div><p class="se-hint" style="margin-top:4px">Source : ' + esc(r.source) + ' — coordonnée générique d’annuaire, à vérifier avant tout envoi.</p>';
+    } else if (r.tousEpuises) {
+      bloc = '<p class="se-muted" style="margin-top:8px">Quotas gratuits épuisés sur tous les annuaires configurés (ou aucun n’est configuré). Passer en payant n’est jamais automatique — demandez-le explicitement si vous voulez activer un plan payant sur l’un d’eux.</p>';
+    } else {
+      bloc = '<p class="se-hint" style="margin-top:8px">Rien trouvé sur les annuaires essayés (' + ((r.etapes || []).map((e) => esc(e.fournisseur)).join(', ') || 'aucun fournisseur configuré') + ').</p>' +
+        '<button class="se-btn ghost sm" style="margin-top:6px" data-act="chercher-coordonnees-pro" data-nom="' + esc(nom) + '" data-societe="' + esc(contexte || '') + '">Réessayer</button>';
+    }
+    return '<div style="margin-top:10px;padding-top:10px;border-top:1px dashed var(--color-stroke-faint)">' + bloc + coordonneesLinkedinHtml(nom) + '</div>';
+  }
+
+  function coordonneesLinkedinHtml(nom) {
+    const r = (state.coordonneesPro || {})[nom + '__linkedin'];
+    let bloc = '<div style="margin-top:10px"><label class="se-hint" style="display:block;margin-bottom:4px">Profil LinkedIn confirmé ci-dessus ? Collez son URL pour tenter un enrichissement direct (Kaspr) :</label>' +
+      '<div class="se-row" data-stop style="gap:6px;flex-wrap:wrap">' +
+      '<input type="text" class="se-input li-url-input" style="flex:1;min-width:200px" placeholder="https://www.linkedin.com/in/…"/>' +
+      '<button class="se-btn ghost sm" data-act="enrichir-linkedin" data-nom="' + esc(nom) + '">Enrichir (Kaspr)</button>' +
+      '</div></div>';
+    if (r) {
+      if (r.chargement) bloc += '<p class="se-hint" style="margin-top:6px">Enrichissement Kaspr en cours…</p>';
+      else if (r.trouve) bloc += '<div class="se-kv" style="margin-top:6px">' + (r.email ? kv('Email pro', esc(r.email)) : '') + (r.telephone ? kv('Téléphone pro', esc(r.telephone)) : '') + '</div>';
+      else if (r.epuise) bloc += '<p class="se-muted" style="margin-top:6px">Quota Kaspr gratuit épuisé. Passer en payant n’est pas automatique.</p>';
+      else if (r.erreur) bloc += '<p class="se-muted" style="margin-top:6px">' + esc(r.erreur) + '</p>';
+      else bloc += '<p class="se-hint" style="margin-top:6px">Rien trouvé pour ce profil.</p>';
+    }
+    return bloc;
+  }
+
   function reseauxSociauxHtml(nom, label, contexte) {
     if (!nom) return '';
     return '<div class="se-row" style="gap:8px;flex-wrap:wrap;margin-top:10px">' +
@@ -2632,7 +2678,8 @@
       '<a class="se-btn ghost sm" target="_blank" rel="noopener" href="' + esc(lienInstagram(nom, contexte)) + '">' + ICONS.out + ' Instagram</a>' +
       '</div>' +
       '<p class="se-hint" style="margin-top:6px">Recherche de ' + esc(label || 'ce profil') + ' sur "' + esc(motsClesIdentite(nom, contexte)) + '"' + (contexte ? ' (société/ville ajoutées pour réduire les homonymes)' : '') + ' — vérifiez vous-même qu’il s’agit bien de la bonne personne avant tout contact.</p>' +
-      recoupementHtml(nom);
+      recoupementHtml(nom) +
+      coordonneesProHtml(nom, contexte);
   }
 
   async function chercherRecoupement(nom) {
@@ -2644,6 +2691,40 @@
       state.recoupements[nom] = r.ok ? { mandats: r.mandats || [] } : { erreur: true, mandats: [] };
     } catch (e) {
       state.recoupements[nom] = { erreur: true, mandats: [] };
+    }
+    commit();
+  }
+
+  async function chercherCoordonneesPro(nom, societe) {
+    state.coordonneesPro = state.coordonneesPro || {};
+    state.coordonneesPro[nom] = { chargement: true };
+    render();
+    try {
+      const params = new URLSearchParams({ nom: nom, societe: societe || '' });
+      const r = await fetch('/api/robot/coordonnees-pro?' + params.toString(), { credentials: 'same-origin' }).then((x) => x.json());
+      if (r.ok && r.trouve) state.coordonneesPro[nom] = { trouve: true, email: r.email, telephone: r.telephone, source: r.source };
+      else if (r.ok && r.tousEpuises) state.coordonneesPro[nom] = { tousEpuises: true, etapes: r.etapes };
+      else if (r.ok) state.coordonneesPro[nom] = { trouve: false, etapes: r.etapes };
+      else state.coordonneesPro[nom] = { erreur: true };
+    } catch (e) {
+      state.coordonneesPro[nom] = { erreur: true };
+    }
+    commit();
+  }
+
+  async function enrichirLinkedin(nom, url) {
+    const cle = nom + '__linkedin';
+    state.coordonneesPro = state.coordonneesPro || {};
+    state.coordonneesPro[cle] = { chargement: true };
+    render();
+    try {
+      const r = await fetch('/api/robot/enrichir-linkedin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ linkedinUrl: url }) }).then((x) => x.json());
+      if (r.ok && r.trouve) state.coordonneesPro[cle] = { trouve: true, email: r.email, telephone: r.telephone };
+      else if (r.ok && r.epuise) state.coordonneesPro[cle] = { epuise: true };
+      else if (r.ok) state.coordonneesPro[cle] = { trouve: false };
+      else state.coordonneesPro[cle] = { erreur: r.error || 'Erreur.' };
+    } catch (e) {
+      state.coordonneesPro[cle] = { erreur: 'Kaspr injoignable.' };
     }
     commit();
   }
@@ -5307,6 +5388,14 @@
     'celia-refuser': () => repondreActionCelia(false),
     'robot-valorisation': async (el) => { await estimerValorisation(el.getAttribute('data-id')); },
     'chercher-recoupement': async (el) => { await chercherRecoupement(el.getAttribute('data-nom')); },
+    'chercher-coordonnees-pro': async (el) => { await chercherCoordonneesPro(el.getAttribute('data-nom'), el.getAttribute('data-societe')); },
+    'enrichir-linkedin': async (el) => {
+      const input = el.closest('.se-row') && el.closest('.se-row').querySelector('input.li-url-input');
+      const url = input ? input.value.trim() : '';
+      if (!url) { toast('Collez d’abord l’URL du profil LinkedIn confirmé.', 'warn'); return; }
+      if (!/^https:\/\/(www\.)?linkedin\.com\/in\//.test(url)) { toast('URL de profil LinkedIn invalide (attendu : linkedin.com/in/…).', 'warn'); return; }
+      await enrichirLinkedin(el.getAttribute('data-nom'), url);
+    },
     'robot-tache': (el) => {
       const b = robotBien(el.getAttribute('data-id'));
       if (!b) return;

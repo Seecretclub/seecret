@@ -2166,6 +2166,122 @@ app.get('/api/robot/autres-mandats', requireAdmin, async (req, res) => {
   } catch (e) { res.status(502).json({ error: 'RNE injoignable.' }); }
 });
 
+// Coordonnées professionnelles (email/téléphone) — cascade sur plusieurs annuaires B2B
+// freemium (Societeinfo, Dropcontact, Datagma), demandée par l'agence pour tenter d'obtenir
+// systématiquement un contact pro légal sur chaque propriétaire/dirigeant identifié par le
+// Radar. Chaque fournisseur est optionnel : sans clé API en variable d'environnement, on le
+// saute silencieusement. On s'arrête au premier résultat trouvé. Important : on ne bascule
+// JAMAIS automatiquement sur un plan payant quand les quotas gratuits sont épuisés — dépenser
+// de l'argent réel sans accord explicite à chaque fois n'est pas acceptable ; on le signale
+// clairement à l'agent à la place, pour qu'il décide lui-même d'activer un plan payant.
+function fournisseurConfigure(cle) { return !!(process.env[cle] && String(process.env[cle]).trim()); }
+
+async function appelSocieteinfo(nomComplet, societe) {
+  if (!fournisseurConfigure('SOCIETEINFO_API_KEY')) return { statut: 'non_configure' };
+  try {
+    const params = new URLSearchParams({ apiKey: process.env.SOCIETEINFO_API_KEY, q: societe || nomComplet });
+    const r = await fetch('https://api.societeinfo.com/v1/search?' + params.toString(), { signal: AbortSignal.timeout(15000) });
+    if (r.status === 402 || r.status === 429) return { statut: 'epuise' };
+    const data = await r.json().catch(() => ({}));
+    const hit = (data.results || data.companies || [])[0];
+    const contact = (hit && hit.contact) || {};
+    if (contact.email || contact.phone) return { statut: 'trouve', email: contact.email || '', telephone: contact.phone || '', source: 'Societeinfo' };
+    return { statut: 'vide' };
+  } catch (e) { return { statut: 'erreur' }; }
+}
+
+async function appelDropcontact(prenom, nomFamille, societe) {
+  if (!fournisseurConfigure('DROPCONTACT_API_KEY')) return { statut: 'non_configure' };
+  try {
+    const lancement = await fetch('https://api.dropcontact.io/v1/enrich/all', {
+      method: 'POST',
+      headers: { 'X-Access-Token': process.env.DROPCONTACT_API_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data: [{ first_name: prenom, last_name: nomFamille, company: societe || '' }] }),
+      signal: AbortSignal.timeout(15000)
+    });
+    if (lancement.status === 402 || lancement.status === 429) return { statut: 'epuise' };
+    const lancementData = await lancement.json().catch(() => ({}));
+    const requestId = lancementData.request_id;
+    if (!requestId) return { statut: 'vide' };
+    // Dropcontact répond de façon asynchrone : on interroge brièvement le résultat.
+    for (let i = 0; i < 5; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      const resultat = await fetch('https://api.dropcontact.io/v1/enrich/all/' + requestId, {
+        headers: { 'X-Access-Token': process.env.DROPCONTACT_API_KEY },
+        signal: AbortSignal.timeout(15000)
+      });
+      const resultatData = await resultat.json().catch(() => ({}));
+      if (resultatData && resultatData.data && resultatData.data.length) {
+        const c = resultatData.data[0];
+        const email = c.email && c.email.length ? c.email[0].email : '';
+        const telephone = c.phone && c.phone.length ? c.phone[0].number : '';
+        if (email || telephone) return { statut: 'trouve', email: email || '', telephone: telephone || '', source: 'Dropcontact' };
+        if (resultatData.success === true) return { statut: 'vide' };
+      }
+    }
+    return { statut: 'vide' };
+  } catch (e) { return { statut: 'erreur' }; }
+}
+
+async function appelDatagma(prenom, nomFamille, societe) {
+  if (!fournisseurConfigure('DATAGMA_API_KEY')) return { statut: 'non_configure' };
+  try {
+    const params = new URLSearchParams({ apiId: process.env.DATAGMA_API_KEY, firstName: prenom, lastName: nomFamille, company: societe || '', phoneFull: 'true' });
+    const r = await fetch('https://gateway.datagma.net/api/ingress/v2/full?' + params.toString(), { signal: AbortSignal.timeout(15000) });
+    if (r.status === 402 || r.status === 429) return { statut: 'epuise' };
+    const data = await r.json().catch(() => ({}));
+    if (data.email || data.phone) return { statut: 'trouve', email: data.email || '', telephone: data.phone || '', source: 'Datagma' };
+    return { statut: 'vide' };
+  } catch (e) { return { statut: 'erreur' }; }
+}
+
+app.get('/api/robot/coordonnees-pro', requireAdmin, async (req, res) => {
+  const nomComplet = String(req.query.nom || '').trim();
+  const societe = String(req.query.societe || '').trim();
+  if (!nomComplet) return res.status(400).json({ error: 'Nom requis.' });
+  const parts = nomComplet.split(/\s+/);
+  const prenom = parts[0] || '';
+  const nomFamille = parts.slice(1).join(' ') || parts[0] || '';
+
+  const fournisseurs = [
+    { nom: 'Societeinfo', fn: () => appelSocieteinfo(nomComplet, societe) },
+    { nom: 'Dropcontact', fn: () => appelDropcontact(prenom, nomFamille, societe) },
+    { nom: 'Datagma', fn: () => appelDatagma(prenom, nomFamille, societe) }
+  ];
+  const etapes = [];
+  for (const f of fournisseurs) {
+    const r = await f.fn();
+    etapes.push({ fournisseur: f.nom, statut: r.statut });
+    if (r.statut === 'trouve') return res.json({ ok: true, trouve: true, email: r.email, telephone: r.telephone, source: r.source, etapes: etapes });
+  }
+  const tousEpuises = etapes.every((e) => e.statut === 'epuise' || e.statut === 'non_configure');
+  res.json({ ok: true, trouve: false, tousEpuises: tousEpuises, etapes: etapes });
+});
+
+// Enrichissement d'un profil LinkedIn précis, déjà identifié et confirmé par l'agent (pas une
+// recherche par nom) — Kaspr ne fonctionne qu'à partir d'une URL de profil exacte, ce qui colle
+// justement au principe retenu : jamais choisir un profil à la place de l'agent, seulement
+// enrichir celui qu'il a lui-même vérifié.
+app.post('/api/robot/enrichir-linkedin', requireAdmin, async (req, res) => {
+  const url = String((req.body && req.body.linkedinUrl) || '').trim();
+  if (!url || !/^https:\/\/(www\.)?linkedin\.com\/in\//.test(url)) return res.status(400).json({ error: 'URL de profil LinkedIn (linkedin.com/in/…) requise.' });
+  if (!fournisseurConfigure('KASPR_API_KEY')) return res.status(400).json({ error: 'Kaspr non configuré (clé KASPR_API_KEY manquante).' });
+  try {
+    const r = await fetch('https://api.developers.kaspr.io/profile/linkedin', {
+      method: 'POST',
+      headers: { Authorization: process.env.KASPR_API_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ linkedinUrl: url }),
+      signal: AbortSignal.timeout(15000)
+    });
+    if (r.status === 402 || r.status === 429) return res.json({ ok: true, trouve: false, epuise: true });
+    const data = await r.json().catch(() => ({}));
+    const email = data.email || (Array.isArray(data.emails) && data.emails[0]) || '';
+    const telephone = data.phone || (Array.isArray(data.phones) && data.phones[0]) || '';
+    if (!email && !telephone) return res.json({ ok: true, trouve: false });
+    res.json({ ok: true, trouve: true, email: email, telephone: telephone });
+  } catch (e) { res.status(502).json({ error: 'Kaspr injoignable.' }); }
+});
+
 // Signal BODACC — Bulletin officiel des annonces civiles et commerciales (data.gouv.fr /
 // Opendatasoft, API publique et gratuite, sans clé). Sert à détecter qu'une société ou SCI déjà
 // repérée comme propriétaire par le Radar fait l'objet d'une procédure collective (liquidation,
