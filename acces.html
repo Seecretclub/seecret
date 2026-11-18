@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+<meta name="theme-color" content="#faf9f7"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="default"/>
+<meta name="apple-mobile-web-app-title" content="Seecret"/>
+<meta name="robots" content="noindex"/>
+<title>Seecret — Accès rapide</title>
+<link rel="icon" href="assets/img/icon.svg" type="image/svg+xml" sizes="any"/>
+<link rel="apple-touch-icon" href="assets/img/icon.svg"/>
+<style>
+  :root {
+    --color-paper: #faf9f7;
+    --color-ink: #141210;
+    --color-graphite: #5f5a54;
+    --color-stroke: #e3dfd9;
+    --color-club-violet: #3b2b4a;
+    --color-club-mist: #f5f2f9;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --color-paper: #15131a;
+      --color-ink: #f3f1ee;
+      --color-graphite: #b8b2c4;
+      --color-stroke: #2c2733;
+      --color-club-mist: #221d2b;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    background: var(--color-paper);
+    color: var(--color-ink);
+  }
+  body {
+    min-height: 100svh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    padding: max(28px, env(safe-area-inset-top, 0px)) max(20px, env(safe-area-inset-right, 0px)) max(28px, env(safe-area-inset-bottom, 0px)) max(20px, env(safe-area-inset-left, 0px));
+  }
+  .wrap { width: 100%; max-width: 420px; }
+  .brand {
+    text-align: center;
+    margin-bottom: 36px;
+  }
+  .brand .mark {
+    font-size: 12px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--color-club-violet);
+    font-weight: 600;
+  }
+  .brand h1 {
+    font-family: Georgia, "Times New Roman", serif;
+    font-weight: 400;
+    font-size: 26px;
+    margin: 10px 0 0;
+    letter-spacing: -.01em;
+  }
+  .brand p {
+    color: var(--color-graphite);
+    font-size: 14.5px;
+    margin: 8px 0 0;
+  }
+  .liens {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  a.btn {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 18px 18px;
+    border-radius: 18px;
+    border: 1px solid var(--color-stroke);
+    background: #fff;
+    color: var(--color-ink);
+    text-decoration: none;
+    -webkit-tap-highlight-color: transparent;
+    transition: transform .08s ease;
+  }
+  @media (prefers-color-scheme: dark) {
+    a.btn { background: var(--color-club-mist); }
+  }
+  a.btn:active { transform: scale(.98); }
+  a.btn .ic {
+    width: 44px; height: 44px; flex: 0 0 44px;
+    border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--color-club-mist);
+    font-size: 20px;
+  }
+  a.btn .txt { flex: 1; min-width: 0; }
+  a.btn .txt b { display: block; font-size: 16px; font-weight: 600; }
+  a.btn .txt span { display: block; font-size: 13px; color: var(--color-graphite); margin-top: 2px; }
+  a.btn .chev { color: var(--color-graphite); font-size: 18px; }
+  .foot {
+    text-align: center;
+    margin-top: 28px;
+    font-size: 12.5px;
+    color: var(--color-graphite);
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="brand">
+      <div class="mark">Seecret</div>
+      <h1>Accès rapide</h1>
+      <p>Les trois espaces de la plateforme, en un clic.</p>
+    </div>
+    <div class="liens">
+      <a class="btn" href="/">
+        <span class="ic">🏠</span>
+        <span class="txt"><b>Site / Landing</b><span>La page publique, candidature</span></span>
+        <span class="chev">›</span>
+      </a>
+      <a class="btn" href="/espace.html">
+        <span class="ic">🔑</span>
+        <span class="txt"><b>Plateforme</b><span>Espace membre — mon bien, catalogue</span></span>
+        <span class="chev">›</span>
+      </a>
+      <a class="btn" href="/crm.html">
+        <span class="ic">📋</span>
+        <span class="txt"><b>CRM</b><span>Espace agence</span></span>
+        <span class="chev">›</span>
+      </a>
+    </div>
+    <div class="foot">Ajoutez cette page à l’écran d’accueil pour un accès en un tap.</div>
+  </div>
+</body>
+</html>
