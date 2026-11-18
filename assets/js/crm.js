@@ -305,6 +305,12 @@
 
   const client = (id) => state.clients.find((c) => c.id === id) || null;
   const bien = (id) => state.biens.find((b) => b.id === id) || (state.biensServeur || []).find((b) => b.id === id) || null;
+  // Une demande venue du serveur (modification, visite, offre…) porte le
+  // bienId BRUT du serveur (ex. "bmwm..."), alors que ce même bien, une fois
+  // synchronisé côté CRM, vit dans state.biensServeur sous l'id préfixé
+  // "srv-b-<id>" (cf. mapBienServeur). bien(d.bienId) seul ne le trouvait
+  // donc jamais pour un vrai bien de production.
+  const bienParServeur = (serverId) => (serverId ? (bien('srv-b-' + serverId) || bien(serverId)) : null);
   const recherche = (id) => state.recherches.find((r) => r.id === id) || (state.recherchesServeur || []).find((r) => r.id === id) || null;
   const nomClient = (c) => (c ? (c.prenom + ' ' + c.nom).trim() : '—');
   const prixM2 = (b) => (b.surface ? Math.round(b.prix / b.surface) : 0);
@@ -1510,15 +1516,26 @@
 
   function mailItem(d) {
     const meta = DEMANDE[d.type] || DEMANDE.info;
-    const b = d.bienId ? bien(d.bienId) : null;
+    const b = d.bienId ? bienParServeur(d.bienId) : null;
     const n = d.statut === 'nouvelle';
     const badgeStatut = d.statut === 'refusee' ? '<span class="se-badge muted">Refusée</span>' : d.statut === 'suspendue' ? '<span class="se-badge warn">Suspendue</span>' : n ? '<span class="se-badge warn">Nouvelle</span>' : '<span class="se-badge open">Validée</span>';
+    // Pour une demande de modification, l'agent doit pouvoir modifier le bien,
+    // valider ou refuser directement depuis cette carte — sans passer par la
+    // fiche détaillée (c'est précisément ce qui manquait : avant, seuls les
+    // boutons génériques « Accepter/Refuser l'adhésion » apparaissaient ici,
+    // sans rapport avec une modification de bien).
+    const actionsModif = (d.type === 'modification' && n)
+      ? '<button class="se-btn sm" data-act="demande-modif-editer" data-id="' + d.id + '">Modifier le bien</button>' +
+        '<button class="se-btn soft sm" data-act="demande-modif-valider" data-id="' + d.id + '">Valider</button>' +
+        '<button class="se-btn ghost sm" data-act="demande-modif-refuser" data-id="' + d.id + '">Refuser</button>'
+      : '';
     return '<div class="se-mail' + (n ? ' neuf' : '') + '">' +
       '<span class="se-mail-ico">' + ICONS[meta.icon] + '</span>' +
       '<div class="se-mail-body">' +
         '<b>' + esc(meta.label) + ' — ' + esc(d.nom || 'Visiteur') + '</b>' +
         '<p>' + esc(d.message || '') + (b ? ' <span class="se-hint">· ' + esc(b.titre) + '</span>' : '') + '</p>' +
-        '<div class="se-mail-actions" style="margin-top:8px">' +
+        '<div class="se-mail-actions" style="margin-top:8px;flex-wrap:wrap;gap:6px">' +
+          actionsModif +
           '<button class="se-btn ghost sm" data-act="demande-ouvrir" data-id="' + d.id + '">Voir la fiche</button>' +
           badgeStatut +
         '</div>' +
@@ -3169,7 +3186,7 @@
     const lead = (d.leadId ? state.clients.find((c) => c.serverId === d.leadId) : null) ||
       state.clients.find((c) => d.email && c.email && c.email.toLowerCase() === d.email.toLowerCase()) || null;
     const rec = lead ? (state.recherchesServeur || []).concat(state.recherches).find((x) => x.clientId === lead.id || x.clientId === lead.serverId) : null;
-    const b = d.bienId ? bien(d.bienId) : null;
+    const b = d.bienId ? bienParServeur(d.bienId) : null;
     const docs = lead ? (state.docsParLead[lead.serverId] || []) : [];
     const n = d.statut === 'nouvelle';
     const refusee = d.statut === 'refusee';
@@ -3267,6 +3284,18 @@
                   ? '<button class="se-btn soft block" data-act="offre-accepter" data-id="' + d.id + '">Accepter l’offre</button>' +
                     '<button class="se-btn ghost block" style="margin-top:8px" data-act="offre-contre" data-id="' + d.id + '">Contre-offre</button>'
                   : '<span class="se-hint">Offre traitée.</span>')
+              : d.type === 'modification'
+              // Avant ce correctif, une demande de modification affichait ici
+              // les boutons « Accepter/Suspendre l'adhésion » — sans rapport
+              // avec une modification de bien (ils appelaient bien le même
+              // décisionnaire côté serveur, qui applique déjà prix/titre/
+              // description sur « valider », mais le libellé induisait en
+              // erreur et n'offrait aucun accès direct au formulaire du bien).
+              ? (n
+                  ? (b ? '<button class="se-btn block" data-act="demande-modif-editer" data-id="' + d.id + '">Modifier le bien</button>' : '') +
+                    '<button class="se-btn soft block" style="margin-top:8px" data-act="demande-modif-valider" data-id="' + d.id + '">Valider la modification</button>' +
+                    '<button class="se-btn danger ghost block" style="margin-top:8px" data-act="demande-modif-refuser" data-id="' + d.id + '">Refuser</button>'
+                  : '<span class="se-hint">Demande traitée.</span>')
               : ((n ? (bloquee
                   ? '<div class="se-note" style="background:var(--color-alert-soft);color:var(--color-alert)">Résolvez l’alerte d’exclusivité de son bien avant de valider son compte.</div>'
                   : '<button class="se-btn soft block" data-act="accepter-adhesion" data-id="' + d.id + '">Accepter l’adhésion</button>') : '') +
@@ -5042,6 +5071,19 @@
     'accepter-adhesion': async (el, id) => { await decisionDemande(id, 'valider'); },
     'suspendre-adhesion': (el, id) => { modal = suspendreModal(id); render(); },
     'refuser-adhesion': async (el, id) => { await decisionDemande(id, 'refuser'); },
+    // Actions dédiées aux demandes de modification : ouvrir directement le
+    // formulaire du bien concerné (modale, sans quitter la page), ou valider/
+    // refuser la demande en un clic — decisionDemande() applique déjà le
+    // nouveau prix/titre/description sur « valider » et prévient le membre.
+    'demande-modif-editer': (el, id) => {
+      const d = state.demandes.find((x) => x.id === id);
+      const b = d && d.bienId ? bienParServeur(d.bienId) : null;
+      if (!b) { toast('Bien introuvable pour cette demande — ouvrez-la via « Voir la fiche ».', 'warn'); return; }
+      modal = bienModal(b);
+      render();
+    },
+    'demande-modif-valider': async (el, id) => { await decisionDemande(id, 'valider'); },
+    'demande-modif-refuser': async (el, id) => { await decisionDemande(id, 'refuser'); },
     'offre-accepter': async (el, id) => {
       const d = state.demandes.find((x) => x.id === id || x.serverDemandeId === id);
       const offreId = d ? (d.offreId || d.serverDemandeId) : id;
