@@ -2127,6 +2127,45 @@ app.get('/api/robot/dirigeants', requireAdmin, async (req, res) => {
   } catch (e) { res.status(502).json({ error: 'SIRENE injoignable.' }); }
 });
 
+// Recoupement d'identité (anti-homonymie) : cherche les AUTRES sociétés où une personne déjà
+// repérée comme dirigeante d'une SCI/société du Radar apparaît elle aussi comme dirigeante.
+// Source : le Répertoire National des Entreprises (RNE), via la même API publique et gratuite
+// de l'État que /api/robot/dirigeants — une information que la loi oblige déjà à publier pour
+// tout dirigeant de société, donc rien de privé n'est exposé ici. Objectif : donner à l'agent
+// des indices vérifiables (autres sociétés, villes, secteurs) pour reconnaître, parmi les
+// homonymes d'un réseau social, lequel correspond vraiment à cette personne — jamais pour
+// choisir un profil à sa place.
+function normaliserNom(s) {
+  return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+}
+app.get('/api/robot/autres-mandats', requireAdmin, async (req, res) => {
+  const nom = String(req.query.nom || '').trim();
+  if (!nom) return res.status(400).json({ error: 'Nom requis.' });
+  const exclureSiren = String(req.query.exclureSiren || '').trim();
+  const cible = normaliserNom(nom);
+  try {
+    const r = await fetch('https://recherche-entreprises.api.gouv.fr/search?q=' + encodeURIComponent(nom) + '&page=1&per_page=15', { signal: AbortSignal.timeout(15000) });
+    const data = await r.json().catch(() => ({}));
+    const results = data.results || [];
+    const mandats = [];
+    results.forEach((entreprise) => {
+      if (exclureSiren && String(entreprise.siren) === exclureSiren) return;
+      (entreprise.dirigeants || []).forEach((d) => {
+        if (String(d.type_dirigeant || '').toLowerCase() !== 'personne physique') return;
+        const nomComplet = ((d.prenoms ? d.prenoms + ' ' : '') + (d.nom || '')).trim();
+        if (normaliserNom(nomComplet) !== cible) return;
+        mandats.push({
+          entreprise: entreprise.nom_complet || entreprise.nom_raison_sociale || ('SIREN ' + entreprise.siren),
+          siren: entreprise.siren,
+          ville: (entreprise.siege && (entreprise.siege.ville || entreprise.siege.libelle_commune)) || '',
+          role: d.qualite || ''
+        });
+      });
+    });
+    res.json({ ok: true, mandats: mandats });
+  } catch (e) { res.status(502).json({ error: 'RNE injoignable.' }); }
+});
+
 // Signal BODACC — Bulletin officiel des annonces civiles et commerciales (data.gouv.fr /
 // Opendatasoft, API publique et gratuite, sans clé). Sert à détecter qu'une société ou SCI déjà
 // repérée comme propriétaire par le Radar fait l'objet d'une procédure collective (liquidation,

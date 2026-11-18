@@ -2601,18 +2601,51 @@
   }
 
   // Identité sociale d'un propriétaire/dirigeant (personne physique) détecté par le Radar.
-  // On ne scrape ni ne devine un profil précis (risque de cibler la mauvaise personne et
-  // de violer la vie privée) : on ouvre la recherche officielle du réseau sur ce nom, à
-  // l'agent de choisir le bon profil ensuite — un lien de redirection, pas une donnée inventée.
-  function lienLinkedIn(nom) { return 'https://www.linkedin.com/search/results/people/?keywords=' + encodeURIComponent(nom); }
-  function lienInstagram(nom) { return 'https://www.instagram.com/explore/search/keyword/?q=' + encodeURIComponent(nom); }
-  function reseauxSociauxHtml(nom, label) {
+  // On ne scrape ni ne devine un profil précis (risque de cibler la mauvaise personne et de
+  // violer la vie privée) : on ouvre la recherche officielle du réseau, affinée avec le plus
+  // de critères connus (société, ville) pour réduire mécaniquement les homonymes, et on donne
+  // en plus des indices de recoupement publics (autres mandats RNE) pour que l'agent tranche
+  // lui-même lequel des résultats correspond — jamais un profil choisi à sa place.
+  function motsClesIdentite(nom, contexte) { return contexte ? nom + ' ' + contexte : nom; }
+  function lienLinkedIn(nom, contexte) { return 'https://www.linkedin.com/search/results/people/?keywords=' + encodeURIComponent(motsClesIdentite(nom, contexte)); }
+  function lienInstagram(nom, contexte) { return 'https://www.instagram.com/explore/search/keyword/?q=' + encodeURIComponent(motsClesIdentite(nom, contexte)); }
+
+  function recoupementHtml(nom) {
+    const r = (state.recoupements || {})[nom];
+    if (!r) {
+      return '<button class="se-btn ghost sm" style="margin-top:8px" data-act="chercher-recoupement" data-nom="' + esc(nom) + '">' + ICONS.search + ' Chercher ses autres mandats (RNE, gratuit)</button>' +
+        '<p class="se-hint" style="margin-top:4px">Les autres sociétés où cette personne est dirigeante (secteur, ville) sont un indice public pour reconnaître le bon profil parmi les homonymes.</p>';
+    }
+    if (r.chargement) return '<p class="se-hint" style="margin-top:8px">Recherche des autres mandats en cours…</p>';
+    if (r.erreur) return '<p class="se-muted" style="margin-top:8px">Le Répertoire national des entreprises (RNE) n’a pas répondu — ce n’est pas que la personne n’a aucun autre mandat, la recherche a simplement échoué. <button class="se-btn ghost sm" data-act="chercher-recoupement" data-nom="' + esc(nom) + '" style="margin-left:4px">Réessayer</button></p>';
+    if (!r.mandats.length) return '<p class="se-hint" style="margin-top:8px">Aucun autre mandat trouvé pour ce nom dans le RNE — soit la personne n’en a pas d’autre déclaré, soit l’homonymie rend le recoupement impossible par cette voie.</p>';
+    return '<div class="se-kv" style="margin-top:8px">' +
+      r.mandats.map((m) => kv(esc(m.entreprise), (m.ville ? esc(m.ville) : 'ville inconnue') + (m.role ? ' · ' + esc(m.role) : ''))).join('') +
+      '</div>' +
+      '<p class="se-hint" style="margin-top:6px">Comparez ces sociétés et villes avec ce qu’affiche le profil LinkedIn trouvé (employeur actuel/passé, localisation) pour confirmer qu’il s’agit bien de la même personne.</p>';
+  }
+
+  function reseauxSociauxHtml(nom, label, contexte) {
     if (!nom) return '';
     return '<div class="se-row" style="gap:8px;flex-wrap:wrap;margin-top:10px">' +
-      '<a class="se-btn ghost sm" target="_blank" rel="noopener" href="' + esc(lienLinkedIn(nom)) + '">' + ICONS.out + ' LinkedIn</a>' +
-      '<a class="se-btn ghost sm" target="_blank" rel="noopener" href="' + esc(lienInstagram(nom)) + '">' + ICONS.out + ' Instagram</a>' +
+      '<a class="se-btn ghost sm" target="_blank" rel="noopener" href="' + esc(lienLinkedIn(nom, contexte)) + '">' + ICONS.out + ' LinkedIn</a>' +
+      '<a class="se-btn ghost sm" target="_blank" rel="noopener" href="' + esc(lienInstagram(nom, contexte)) + '">' + ICONS.out + ' Instagram</a>' +
       '</div>' +
-      '<p class="se-hint" style="margin-top:6px">Ouvre la recherche de ' + esc(label || 'ce profil') + ' sur le nom "' + esc(nom) + '" — vérifiez vous-même qu’il s’agit bien de la bonne personne avant tout contact.</p>';
+      '<p class="se-hint" style="margin-top:6px">Recherche de ' + esc(label || 'ce profil') + ' sur "' + esc(motsClesIdentite(nom, contexte)) + '"' + (contexte ? ' (société/ville ajoutées pour réduire les homonymes)' : '') + ' — vérifiez vous-même qu’il s’agit bien de la bonne personne avant tout contact.</p>' +
+      recoupementHtml(nom);
+  }
+
+  async function chercherRecoupement(nom) {
+    state.recoupements = state.recoupements || {};
+    state.recoupements[nom] = { chargement: true };
+    render();
+    try {
+      const r = await fetch('/api/robot/autres-mandats?nom=' + encodeURIComponent(nom), { credentials: 'same-origin' }).then((x) => x.json());
+      state.recoupements[nom] = r.ok ? { mandats: r.mandats || [] } : { erreur: true, mandats: [] };
+    } catch (e) {
+      state.recoupements[nom] = { erreur: true, mandats: [] };
+    }
+    commit();
   }
 
   function verifTag(v) {
@@ -2794,17 +2827,19 @@
     }).join('') + '</div>';
     const nomsDirigeants = dirigeants.map((d) => (typeof d === 'string' ? d : (d.nom || d.name || ''))).filter(Boolean);
     const estPersonneMorale = g.type === 'sci' || g.type === 'societe';
+    const ville = (biens[0] && biens[0].ville) || '';
+    const contexteDirigeant = [g.nom, ville].filter(Boolean).join(' ');
     return head('Prospection', 'Propriétaire', 'Patrimoine immobilier identifié.', '') +
       tabsRobot('robot-proprietaires') +
       '<div class="se-card">' +
         '<div style="font-size:20px;font-weight:700">' + esc(g.nom) + '</div>' +
         '<div class="se-hint" style="margin-top:4px">SIREN ' + esc(g.siren || '—') + ' · ' + (g.type === 'sci' ? 'SCI' : g.type === 'societe' ? 'Société' : 'Particulier') + '</div>' +
         (nomsDirigeants.length ? '<div class="se-hint" style="margin-top:4px">Dirigeants : ' + nomsDirigeants.map(esc).join(', ') + '</div>' : '') +
-        (!estPersonneMorale ? reseauxSociauxHtml(g.nom, 'ce propriétaire') : '') +
+        (!estPersonneMorale ? reseauxSociauxHtml(g.nom, 'ce propriétaire', ville) : '') +
       '</div>' +
       (estPersonneMorale && nomsDirigeants.length
         ? '<div class="se-card" style="margin-top:16px"><h3>Identité des dirigeants</h3>' +
-          nomsDirigeants.map((n) => '<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--color-stroke-faint)"><b style="font-size:14px">' + esc(n) + '</b>' + reseauxSociauxHtml(n, 'ce dirigeant') + '</div>').join('') +
+          nomsDirigeants.map((n) => '<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--color-stroke-faint)"><b style="font-size:14px">' + esc(n) + '</b>' + reseauxSociauxHtml(n, 'ce dirigeant', contexteDirigeant) + '</div>').join('') +
           '</div>'
         : '') +
       '<div class="se-card" style="margin-top:16px"><h3>Patrimoine identifié (' + biens.length + ')</h3>' + biensHtml + '</div>';
@@ -2856,7 +2891,7 @@
       body = '<div class="se-card"><h3>Propriétaire</h3><div class="se-kv" style="margin-top:12px">' +
         kv('Nom', esc(prop.nom || 'Non identifié')) + kv('Type', typeProp) +
         '</div>' +
-        (prop.nom && typeProp === 'Personne physique' ? reseauxSociauxHtml(prop.nom, 'ce propriétaire') : '') +
+        (prop.nom && typeProp === 'Personne physique' ? reseauxSociauxHtml(prop.nom, 'ce propriétaire', b.ville || '') : '') +
         (prop.nom ? '' : '<p class="se-muted" style="margin-top:10px">Le propriétaire n’est pas encore identifié. Lancez l’enrichissement pour le rechercher.</p>') + '</div>';
     } else if (tab === 'societe') {
       const nomsDirigeants = (prop.dirigeants || []).map((d) => (typeof d === 'string' ? d : (d.nom || d.name || ''))).filter(Boolean);
@@ -2868,7 +2903,7 @@
         '</div>' +
         (nomsDirigeants.length
           ? '<div class="se-card" style="margin-top:16px"><h3>Cibler les dirigeants sur les réseaux</h3><p class="se-hint">Le ou les gérants de la ' + esc(typeProp) + ', pour les approcher directement.</p>' +
-            nomsDirigeants.map((n) => '<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--color-stroke-faint)"><b style="font-size:14px">' + esc(n) + '</b>' + reseauxSociauxHtml(n, 'ce dirigeant') + '</div>').join('') +
+            nomsDirigeants.map((n) => '<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--color-stroke-faint)"><b style="font-size:14px">' + esc(n) + '</b>' + reseauxSociauxHtml(n, 'ce dirigeant', [prop.nom, b.ville].filter(Boolean).join(' ')) + '</div>').join('') +
             '</div>'
           : '');
     } else if (tab === 'contacts') {
@@ -5271,6 +5306,7 @@
     'celia-valider': () => repondreActionCelia(true),
     'celia-refuser': () => repondreActionCelia(false),
     'robot-valorisation': async (el) => { await estimerValorisation(el.getAttribute('data-id')); },
+    'chercher-recoupement': async (el) => { await chercherRecoupement(el.getAttribute('data-nom')); },
     'robot-tache': (el) => {
       const b = robotBien(el.getAttribute('data-id'));
       if (!b) return;
