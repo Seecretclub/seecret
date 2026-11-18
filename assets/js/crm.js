@@ -2600,6 +2600,21 @@
       '<div class="se-card" style="margin-top:16px"><h3>Opportunités clients</h3>' + (groupes.length ? rows : '<p class="se-muted" style="margin-top:10px">Aucune correspondance acquéreur.</p>') + '</div>';
   }
 
+  // Identité sociale d'un propriétaire/dirigeant (personne physique) détecté par le Radar.
+  // On ne scrape ni ne devine un profil précis (risque de cibler la mauvaise personne et
+  // de violer la vie privée) : on ouvre la recherche officielle du réseau sur ce nom, à
+  // l'agent de choisir le bon profil ensuite — un lien de redirection, pas une donnée inventée.
+  function lienLinkedIn(nom) { return 'https://www.linkedin.com/search/results/people/?keywords=' + encodeURIComponent(nom); }
+  function lienInstagram(nom) { return 'https://www.instagram.com/explore/search/keyword/?q=' + encodeURIComponent(nom); }
+  function reseauxSociauxHtml(nom, label) {
+    if (!nom) return '';
+    return '<div class="se-row" style="gap:8px;flex-wrap:wrap;margin-top:10px">' +
+      '<a class="se-btn ghost sm" target="_blank" rel="noopener" href="' + esc(lienLinkedIn(nom)) + '">' + ICONS.out + ' LinkedIn</a>' +
+      '<a class="se-btn ghost sm" target="_blank" rel="noopener" href="' + esc(lienInstagram(nom)) + '">' + ICONS.out + ' Instagram</a>' +
+      '</div>' +
+      '<p class="se-hint" style="margin-top:6px">Ouvre la recherche de ' + esc(label || 'ce profil') + ' sur le nom "' + esc(nom) + '" — vérifiez vous-même qu’il s’agit bien de la bonne personne avant tout contact.</p>';
+  }
+
   function verifTag(v) {
     const s = String(v || '').toUpperCase();
     if (s === 'VERIFIED') return '<span class="se-badge open">VERIFIED</span>';
@@ -2777,14 +2792,22 @@
         '<div class="se-hint" style="margin-top:2px">ID ' + sc.scores.identification + ' · CT ' + sc.scores.coordonnees + ' · PV ' + sc.scores.potentiel + '</div>' +
       '</div></a>';
     }).join('') + '</div>';
+    const nomsDirigeants = dirigeants.map((d) => (typeof d === 'string' ? d : (d.nom || d.name || ''))).filter(Boolean);
+    const estPersonneMorale = g.type === 'sci' || g.type === 'societe';
     return head('Prospection', 'Propriétaire', 'Patrimoine immobilier identifié.', '') +
       tabsRobot('robot-proprietaires') +
       '<div class="se-card">' +
         '<div style="font-size:20px;font-weight:700">' + esc(g.nom) + '</div>' +
         '<div class="se-hint" style="margin-top:4px">SIREN ' + esc(g.siren || '—') + ' · ' + (g.type === 'sci' ? 'SCI' : g.type === 'societe' ? 'Société' : 'Particulier') + '</div>' +
-        (dirigeants.length ? '<div class="se-hint" style="margin-top:4px">Dirigeants : ' + dirigeants.map((d) => esc(typeof d === 'string' ? d : (d.nom || d.name || ''))).filter(Boolean).join(', ') + '</div>' : '') +
+        (nomsDirigeants.length ? '<div class="se-hint" style="margin-top:4px">Dirigeants : ' + nomsDirigeants.map(esc).join(', ') + '</div>' : '') +
+        (!estPersonneMorale ? reseauxSociauxHtml(g.nom, 'ce propriétaire') : '') +
       '</div>' +
-      '<div class="se-card"><h3>Patrimoine identifié (' + biens.length + ')</h3>' + biensHtml + '</div>';
+      (estPersonneMorale && nomsDirigeants.length
+        ? '<div class="se-card" style="margin-top:16px"><h3>Identité des dirigeants</h3>' +
+          nomsDirigeants.map((n) => '<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--color-stroke-faint)"><b style="font-size:14px">' + esc(n) + '</b>' + reseauxSociauxHtml(n, 'ce dirigeant') + '</div>').join('') +
+          '</div>'
+        : '') +
+      '<div class="se-card" style="margin-top:16px"><h3>Patrimoine identifié (' + biens.length + ')</h3>' + biensHtml + '</div>';
   }
 
   function viewRobotBien(r) {
@@ -2832,13 +2855,22 @@
     } else if (tab === 'proprietaire') {
       body = '<div class="se-card"><h3>Propriétaire</h3><div class="se-kv" style="margin-top:12px">' +
         kv('Nom', esc(prop.nom || 'Non identifié')) + kv('Type', typeProp) +
-        '</div>' + (prop.nom ? '' : '<p class="se-muted" style="margin-top:10px">Le propriétaire n’est pas encore identifié. Lancez l’enrichissement pour le rechercher.</p>') + '</div>';
+        '</div>' +
+        (prop.nom && typeProp === 'Personne physique' ? reseauxSociauxHtml(prop.nom, 'ce propriétaire') : '') +
+        (prop.nom ? '' : '<p class="se-muted" style="margin-top:10px">Le propriétaire n’est pas encore identifié. Lancez l’enrichissement pour le rechercher.</p>') + '</div>';
     } else if (tab === 'societe') {
+      const nomsDirigeants = (prop.dirigeants || []).map((d) => (typeof d === 'string' ? d : (d.nom || d.name || ''))).filter(Boolean);
       body = '<div class="se-card"><h3>Société & dirigeants</h3><div class="se-kv" style="margin-top:12px">' +
-        kv('SIREN', esc(prop.siren || '—')) + kv('Dirigeants', (prop.dirigeants || []).join(', ') || '—') +
+        kv('SIREN', esc(prop.siren || '—')) + kv('Dirigeants', nomsDirigeants.join(', ') || '—') +
         '</div>' +
         (prop.siren ? '<div style="margin-top:12px"><a class="se-btn ghost sm" target="_blank" rel="noopener" href="https://www.pappers.fr/entreprise/' + encodeURIComponent(prop.siren) + '">Vérifier sur Pappers (gratuit)</a><p class="se-hint" style="margin-top:6px">Fiche légale publique et gratuite de la société : dirigeants, immatriculation, comptes publiés s’il y en a.</p></div>' : '') +
-        (typeProp === 'SCI' || typeProp === 'Société' ? '' : '<p class="se-muted" style="margin-top:10px">Ce bien est détenu par une personne physique (pas de société).</p>') + '</div>';
+        (typeProp === 'SCI' || typeProp === 'Société' ? '' : '<p class="se-muted" style="margin-top:10px">Ce bien est détenu par une personne physique (pas de société).</p>') +
+        '</div>' +
+        (nomsDirigeants.length
+          ? '<div class="se-card" style="margin-top:16px"><h3>Cibler les dirigeants sur les réseaux</h3><p class="se-hint">Le ou les gérants de la ' + esc(typeProp) + ', pour les approcher directement.</p>' +
+            nomsDirigeants.map((n) => '<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--color-stroke-faint)"><b style="font-size:14px">' + esc(n) + '</b>' + reseauxSociauxHtml(n, 'ce dirigeant') + '</div>').join('') +
+            '</div>'
+          : '');
     } else if (tab === 'contacts') {
       body = '<div class="se-card"><h3>Coordonnées & vérifications</h3>' +
         ((b.contacts || []).length
