@@ -129,6 +129,7 @@
     ouverture_visites: { label: 'Bien ouvert aux visites', icon: 'home' },
     offre_faite: { label: 'Offre faite', icon: 'tag' },
     offre_acceptee: { label: 'Offre acceptée', icon: 'check' },
+    vente_conclue: { label: 'Vente conclue', icon: 'check' },
     retour_silence: { label: 'Contacté, puis silence — à relancer', icon: 'chat' },
     visite_demandee: { label: 'Visite demandée par un acquéreur', icon: 'calendar' },
     converti: { label: 'Converti en membre', icon: 'check' },
@@ -871,7 +872,7 @@
           Object.assign(c, {
             serverId: l.id, serveurStatut: l.statut,
             documents: l.documents || 0, documentsValides: l.documentsValides || 0,
-            bienInfo: l.bienInfo || null, agentId: l.agentId || null
+            bienInfo: l.bienInfo || null, agentId: l.agentId || null, demo: !!l.demo
           });
           if (l.statut === 'accepte' && c.statut === 'prospect') c.statut = 'actif';
         } else {
@@ -886,7 +887,7 @@
             notes: '', tags: [], agent: 'Gabriel Taieb', cree: l.cree || nowISO(),
             documents: l.documents || 0, documentsValides: l.documentsValides || 0,
             pipeline: l.pipeline || '', adresseBien: l.adresseBien || '', siren: l.siren || '', parcelle: l.parcelle || '', dirigeants: l.dirigeants || [],
-            agentId: l.agentId || null
+            agentId: l.agentId || null, demo: !!l.demo
           });
         }
       });
@@ -1198,6 +1199,12 @@
     const st = TEMP_CLIENT[t];
     return '<span class="se-badge ' + st.cls + '" title="Température du dossier — basée sur l’activité récente, les offres et visites, et l’urgence déclarée.">' + st.label + '</span>';
   }
+  // Les clients/biens de démo (seedés côté serveur pour peupler la plateforme
+  // avant les premières vraies candidatures) restent visuellement distincts
+  // de vrais clients, pour qu'un agent ne les traite jamais comme réels.
+  function badgeDemo(o) {
+    return (o && o.demo) ? '<span class="se-badge warn" title="Donnée de démonstration, pas un vrai client/bien — à purger quand la plateforme aura ses premières vraies candidatures.">Démo</span>' : '';
+  }
   function scoreTag(v) {
     const cls = v >= 70 ? '' : v >= 45 ? 'mid' : 'low';
     return '<span class="se-score ' + cls + '"><span class="se-score-bar"><i style="width:' + v + '%"></i></span>' + v + ' %</span>';
@@ -1223,7 +1230,7 @@
       atouts: b.atouts || b.annexes || [], annexes: b.annexes || [], mandat: { type: 'simple', fin: '' }, cree: b.cree || nowISO(),
       exclusivite: b.exclusivite || { statut: 'scan_en_cours', liens: [] },
       validation: b.validation || 'en_attente',
-      serveur: true, email: b.email || ''
+      serveur: true, email: b.email || '', demo: !!b.demo
     };
   }
 
@@ -3039,7 +3046,7 @@
     const list = state.membresBiens || [];
     return head('Le Club', 'Biens des membres', list.length + ' bien(s) off-market déposé(s).', '') +
       (list.length
-        ? '<div class="se-grid cols-2" style="gap:14px">' + list.map((b) => '<div class="se-card"><div style="font-weight:500">' + esc(b.titre || 'Bien') + '</div><div class="se-hint" style="margin-top:4px">' + esc(b.label || '') + ' · ' + euro(b.prix) + '</div><div style="margin-top:8px">' + badgeBien(b.statut) + '</div></div>').join('') + '</div>'
+        ? '<div class="se-grid cols-2" style="gap:14px">' + list.map((b) => '<div class="se-card"><div style="font-weight:500">' + esc(b.titre || 'Bien') + ' ' + badgeDemo(b) + '</div><div class="se-hint" style="margin-top:4px">' + esc(b.label || '') + ' · ' + euro(b.prix) + '</div><div style="margin-top:8px">' + badgeBien(b.statut) + '</div></div>').join('') + '</div>'
         : '<div class="se-card se-empty"><div class="se-empty-title">Aucun bien membre</div><p>Les biens déposés par les membres apparaîtront ici.</p></div>');
   }
 
@@ -3563,7 +3570,7 @@
       const tel = String(c.tel || '').replace(/[^0-9]/g, '');
       return '<div class="se-pipe-card">' +
         '<div class="se-row" style="justify-content:space-between;align-items:flex-start;gap:6px">' +
-          '<div class="se-pipe-nom">' + esc(nomClient(c)) + '</div>' + badgeTemperature(c) +
+          '<div class="se-pipe-nom">' + esc(nomClient(c)) + '</div>' + badgeTemperature(c) + badgeDemo(c) +
         '</div>' +
         '<div class="se-hint">' + typeLead(c) + (c.siren ? ' · SIREN ' + esc(c.siren) : '') + '</div>' +
         (c.adresseBien ? '<div class="se-hint">' + esc(c.adresseBien) + '</div>' : (c.ville ? '<div class="se-hint">' + esc(c.ville) + '</div>' : '')) +
@@ -3616,7 +3623,7 @@
       '<div class="se-card" style="padding:8px 16px">' +
         '<table class="se-table"><thead><tr><th>Client</th><th>Type</th><th>Budget / critères</th><th>Statut</th><th>Température</th><th>Agent</th><th></th></tr></thead><tbody>' +
         list.map((c) => '<tr>' +
-          '<td><a href="#/client/' + c.id + '" style="color:inherit;text-decoration:none"><b style="font-weight:500">' + esc(nomClient(c)) + '</b><div class="se-hint">' + esc(c.email) + '</div></a></td>' +
+          '<td><a href="#/client/' + c.id + '" style="color:inherit;text-decoration:none"><b style="font-weight:500">' + esc(nomClient(c)) + '</b> ' + badgeDemo(c) + '<div class="se-hint">' + esc(c.email) + '</div></a></td>' +
           '<td>' + (c.type === 'acquereur' ? 'Acquéreur' : c.type === 'vendeur' ? 'Vendeur' : 'Les deux') + '</td>' +
           '<td>' + (c.type === 'vendeur' ? '<span class="se-hint">propriétaire</span>' : euro(c.budgetMin) + ' – ' + euro(c.budgetMax) + '<div class="se-hint">' + c.piecesMin + '+ pièces · ' + c.surfaceMin + '+ m² · ' + (c.quartiers || []).map(qLabel).join(', ') + '</div>') + '</td>' +
           '<td>' + badgeClient(c.statut) + '</td>' +
@@ -3661,7 +3668,7 @@
         '<span class="se-avatar">' + esc((c.prenom.charAt(0) + c.nom.charAt(0)).toUpperCase()) + '</span>' +
         '<div style="flex:1"><div class="kicker" style="color:var(--color-taupe)">' + (c.type === 'acquereur' ? 'Acquéreur' : c.type === 'vendeur' ? 'Vendeur' : 'Acquéreur & vendeur') + ' · ' + esc(c.source) + '</div>' +
         '<h1 class="display" style="font-size:30px;margin:4px 0 2px">' + esc(nomClient(c)) + '</h1>' +
-        '<div class="se-row" style="gap:8px">' + badgeClient(c.statut) + badgeTemperature(c) + (c.tags || []).map((t) => '<span class="se-pill">' + esc(t) + '</span>').join('') + '</div></div>' +
+        '<div class="se-row" style="gap:8px">' + badgeClient(c.statut) + badgeTemperature(c) + badgeDemo(c) + (c.tags || []).map((t) => '<span class="se-pill">' + esc(t) + '</span>').join('') + '</div></div>' +
         '<div class="se-actions">' +
           ((biensPossedes.some((x) => x.validation === 'en_attente')) ? '<button class="se-btn soft" data-act="bien-valider" data-id="' + biensPossedes.find((x) => x.validation === 'en_attente').id + '">Valider ce bien</button>' : '') +
           (biensPossedes.length ? '<a class="se-btn ghost" href="#/bien/' + biensPossedes[0].id + '">Voir son Bien</a>' : '') +
@@ -3804,7 +3811,7 @@
     return '<div class="se-fiche-head">' +
       '<div style="flex:1"><div class="kicker" style="color:var(--color-taupe)">' + esc(b.ref) + ' · ' + esc(b.type) + ' · ' + esc(qLabel(b.quartier)) + (prop ? ' · <a href="#/client/' + prop.id + '" style="color:var(--color-club-violet);text-decoration:none">Propriétaire : ' + esc(nomClient(prop)) + '</a>' : '') + '</div>' +
       '<h1 class="display" style="font-size:30px;margin:4px 0 2px">' + esc(b.titre) + '</h1>' +
-      '<div class="se-row" style="gap:8px">' + badgeBien(b.statut) + badgeExclusivite(b) + badgeValidation(b) + '<span class="se-pill"><b>' + euro(b.prix) + '</b></span><span class="se-pill">' + euro(prixM2(b)) + ' /m²</span></div></div>' +
+      '<div class="se-row" style="gap:8px">' + badgeBien(b.statut) + badgeExclusivite(b) + badgeValidation(b) + badgeDemo(b) + '<span class="se-pill"><b>' + euro(b.prix) + '</b></span><span class="se-pill">' + euro(prixM2(b)) + ' /m²</span></div></div>' +
       '<div class="se-actions">' +
         '<button class="se-btn ghost" data-act="bien-editer" data-id="' + b.id + '">Modifier</button>' +
         '<button class="se-btn ghost" data-act="bien-statut" data-id="' + b.id + '">Changer le statut</button>' +
