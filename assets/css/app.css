@@ -227,6 +227,13 @@ body.se-body {
 .se-badge.warn { background: var(--color-warn-soft); color: var(--color-warn); }
 .se-badge.alert { background: var(--color-alert-soft); color: var(--color-alert); }
 .se-badge.muted { background: var(--color-sand); color: var(--color-graphite); }
+/* Température d'un client (chaud/tiède/froid) : réutilise les couleurs
+   d'alerte/d'avertissement existantes pour chaud/tiède (même langage visuel
+   que le reste du CRM), et une teinte bleutée neutre pour froid — « pas
+   urgent », jamais « mauvais signe ». */
+.se-badge.temp-chaud { background: var(--color-alert-soft); color: var(--color-alert); }
+.se-badge.temp-tiede { background: var(--color-warn-soft); color: var(--color-warn); }
+.se-badge.temp-froid { background: #e4ecf5; color: #2f5a8a; }
 
 /* ---------------------------------- biens ------------------------------------ */
 
