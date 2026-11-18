@@ -1595,7 +1595,13 @@ app.post('/api/robot-biens', requireAdmin, (req, res) => {
 
 // Recherche DPE — source ADEME data-fair (données publiques réelles, sans clé API)
 const ADEME_URL = 'https://data.ademe.fr/data-fair/api/v1/datasets/dpe03existant/lines';
-const ADEME_SELECT = 'etiquette_dpe,etiquette_ges,type_batiment,surface_habitable_logement,surface_habitable_immeuble,annee_construction,date_reception_dpe,date_etablissement_dpe,date_fin_validite_dpe,numero_dpe,adresse_ban,code_postal_ban,code_insee_ban,nom_commune_ban,coordonnee_cartographique_y_ban,coordonnee_cartographique_x_ban,conso_5_usages_par_m2_ep,emission_ges_5_usages_par_m2';
+// Pas de `select` restreint à une liste de champs : on ne connaît pas à
+// l'avance tous les noms exacts de colonnes utiles côté ADEME (chauffage,
+// isolation, coût énergétique, niveaux du bâtiment…), et une liste mal
+// orthographiée casserait la recherche en silence. On récupère la ligne
+// complète telle que l'ADEME la fournit et on l'enrichit côté client avec
+// tout ce qu'elle contient — c'est aussi ce qui permet d'ajouter des
+// critères sans dépendre d'un redéploiement si l'ADEME ajoute des champs.
 
 app.get('/api/robot/dpe', requireAdmin, async (req, res) => {
   const clauses = [];
@@ -1627,7 +1633,6 @@ app.get('/api/robot/dpe', requireAdmin, async (req, res) => {
 
   const params = new URLSearchParams();
   params.set('size', String(limit));
-  params.set('select', ADEME_SELECT);
   if (q) params.set('q', q);
   if (clauses.length) params.set('qs', clauses.join(' AND '));
   const sortMap = {
