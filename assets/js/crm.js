@@ -1418,7 +1418,7 @@
         carteCompteurPeriode('Propositions', c.propositions, 'aujourd’hui', deltaHtml(cSemaine.propositions, cSemainePrec.propositions), periode) +
       '</div>' +
       (periode === 'semaine'
-        ? '<div class="se-split" style="margin-top:16px;grid-template-columns:1fr 1fr">' +
+        ? '<div class="se-split" style="margin-top:16px">' +
             '<div class="se-card"><h3>Au long cours</h3><div class="se-grid cols-2" style="margin-top:10px;gap:10px">' +
               '<div class="se-card se-stat"><span class="se-kicker">Clients au book</span><span class="se-num">' + state.clients.length + '</span></div>' +
               '<div class="se-card se-stat"><span class="se-kicker">Biens au catalogue</span><span class="se-num">' + biensTotal.length + '</span></div>' +
@@ -2097,7 +2097,7 @@
         '<button class="se-btn ghost sm" data-act="robot-map-toggle">' + (state.robotShowMap ? 'Masquer la carte' : 'Afficher la carte') + '</button>' +
       '</div>' +
       (state.robotShowMap
-        ? '<div class="se-split" style="grid-template-columns:1fr 400px;align-items:start;gap:16px">' +
+        ? '<div class="se-split" style="align-items:start;gap:16px">' +
             '<div id="robot-map" style="height:440px;border-radius:16px;overflow:hidden;border:1px solid var(--color-stroke-faint)"></div>' +
             '<div class="se-card" style="max-height:440px;overflow:auto"><h3>Biens détectés' + (state.robotEnrichStats ? ' <span class="se-hint" style="font-weight:400">· ' + state.robotEnrichStats.enrichis + ' enrichi(s) · ' + state.robotEnrichStats.enCours + ' en cours · ' + state.robotEnrichStats.enAttente + ' en attente</span>' : '') + '</h3>' + robotBiensList() + '</div>' +
           '</div>'
@@ -3144,7 +3144,7 @@
           '</div>' +
           '<details style="margin-top:14px">' +
             '<summary style="cursor:pointer;font-size:13px;color:var(--color-taupe);user-select:none">Critères avancés</summary>' +
-            '<div class="se-form-grid" style="margin-top:12px;grid-template-columns:repeat(4,1fr)">' +
+            '<div class="se-form-grid" style="margin-top:12px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">' +
               '<div class="se-field"><label>Date début (AAAA-MM-JJ)</label><input class="se-input" name="date_debut" placeholder="2024-01-01"/></div>' +
               '<div class="se-field"><label>Date fin (AAAA-MM-JJ)</label><input class="se-input" name="date_fin" placeholder="2025-12-31"/></div>' +
               '<div class="se-field"><label>Surface min (m²)</label><input class="se-input" name="surface_min" type="number" placeholder="40"/></div>' +
