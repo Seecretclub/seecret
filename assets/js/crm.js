@@ -711,6 +711,13 @@
       (state.clientsServeur || []).find((c) => c.id === rec.clientId || (!!rec.leadId && c.id === rec.leadId)) || null;
   }
 
+  // Nombre total de critères examinés par scoreRobotBien (chacun finit soit
+  // scoré, soit dans `inconnus` — jamais les deux) : Localisation, Type,
+  // Surface, Budget, Pièces, DPE, Étage, Époque. Partagé avec explicationMatching
+  // pour ne pas avoir à resynchroniser ce chiffre à la main si un critère est
+  // ajouté ou retiré un jour.
+  const ROBOT_CRITERES_TOTAL = 8;
+
   function scoreRobotBien(rb, rec) {
     let s = 0, tot = 0;
     const inconnus = [];
@@ -779,7 +786,7 @@
       else inconnus.push('Époque de construction');
     } else { inconnus.push('Époque de construction'); }
     const score = tot ? Math.round(s / tot * 100) : 0;
-    const couverture = Math.round((1 - inconnus.length / 8) * 100);
+    const couverture = Math.round((1 - inconnus.length / ROBOT_CRITERES_TOTAL) * 100);
     return { score, couverture, inconnus };
   }
 
@@ -2546,7 +2553,7 @@
     const s = scoreRobotBien(rb, rec);
     const connus = s.inconnus.length;
     const manquants = s.inconnus.slice(0, 3);
-    let txt = 'Ce bien correspond à ' + (6 - connus) + ' des 6 critères de la recherche.';
+    let txt = 'Ce bien correspond à ' + (ROBOT_CRITERES_TOTAL - connus) + ' des ' + ROBOT_CRITERES_TOTAL + ' critères de la recherche.';
     if (manquants.length) txt += ' À confirmer : ' + manquants.join(', ') + '.';
     txt += ' Couverture : ' + s.couverture + ' %.';
     return txt;
