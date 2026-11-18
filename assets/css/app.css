@@ -257,7 +257,9 @@ body.se-body {
 
 /* ---------------------------------- tables ----------------------------------- */
 
-.se-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.se-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 -16px; padding: 0 16px; }
+.se-table { width: 100%; min-width: 620px; border-collapse: collapse; font-size: 14px; }
+@media (max-width: 640px) { .se-table { min-width: 560px; } }
 .se-table th {
   text-align: left; font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase;
   color: var(--color-taupe); font-weight: 600; padding: 10px 12px; border-bottom: 1px solid var(--color-stroke-faint);
