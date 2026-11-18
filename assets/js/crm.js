@@ -145,14 +145,14 @@
 
   function seed() {
     const biens = [
-      { id: 'b1', adresse: 'Île Saint-Louis, Paris 4e', ref: 'SC-1042', titre: 'Quatre pièces sur la Seine', type: 'Appartement', quartier: 'p4', surface: 112, pieces: 4, chambres: 2, sdb: 2, etage: '3ᵉ', dpe: 'D', prix: 2079000, statut: 'avant-premiere', proprietaireId: 'c2', photos: ['ilesaintlouis-1.jpg', 'ilesaintlouis-3.jpg'], description: 'La Seine par trois fenêtres, un parquet de Versailles d’origine, et la lumière des quatre expositions.', atouts: ['Vue', 'Parquet d’origine', 'Calme'], mandat: { type: 'exclusif', fin: '2027-03-31' }, cree: '2026-10-02T10:00:00.000Z' },
-      { id: 'b2', adresse: 'Rue des Abbesses, Paris 18e', ref: 'SC-1043', titre: 'La maison au figuier', type: 'Maison', quartier: 'p18', surface: 96, pieces: 4, chambres: 2, sdb: 2, etage: 'RDC', dpe: 'E', prix: 1270500, statut: 'avant-premiere', proprietaireId: null, photos: ['montmartre-1.jpg', 'montmartre-3.jpg'], description: 'Une verrière d’atelier qui prend la lumière du nord toute la journée, et un figuier dans la cour.', atouts: ['Jardin', 'Verrière', 'Calme'], mandat: { type: 'simple', fin: '2027-01-31' }, cree: '2026-10-06T10:00:00.000Z' },
-      { id: 'b3', adresse: 'Rue de Verneuil, Paris 6e', ref: 'SC-1044', titre: 'Les deux derniers étages', type: 'Duplex', quartier: 'p6', surface: 128, pieces: 4, chambres: 3, sdb: 2, etage: '5ᵉ', dpe: 'C', prix: 2604000, statut: 'ouvert', proprietaireId: 'c4', photos: ['saintgermain-1.jpg', 'saintgermain-3.jpg'], description: 'Deux niveaux qui se répondent, une terrasse plein sud, et l’adresse la plus sûre de la rive gauche.', atouts: ['Terrasse', 'Dernier étage', 'Lumineux'], mandat: { type: 'exclusif', fin: '2027-06-30' }, cree: '2026-09-18T10:00:00.000Z' },
-      { id: 'b4', adresse: 'Avenue du Président Kennedy, Paris 16e', ref: 'SC-1045', titre: 'Six pièces face aux toits', type: 'Appartement', quartier: 'p16', surface: 185, pieces: 6, chambres: 4, sdb: 3, etage: '6ᵉ', dpe: 'D', prix: 3412500, statut: 'avant-premiere', proprietaireId: null, photos: ['trocadero-1.jpg', 'home-5.jpg'], description: 'La rotonde du dernier étage, une vue que rien ne viendra fermer, et l’ascenseur d’époque.', atouts: ['Vue', 'Ascenseur', 'Dernier étage'], mandat: { type: 'simple', fin: '2027-04-30' }, cree: '2026-10-10T10:00:00.000Z' },
-      { id: 'b5', adresse: 'Rue des Archives, Paris 3e', ref: 'SC-1046', titre: 'L’atelier et sa verrière', type: 'Loft', quartier: 'p3', surface: 142, pieces: 3, chambres: 2, sdb: 2, etage: '4ᵉ', dpe: 'C', prix: 1774500, statut: 'mandat', proprietaireId: 'c6', photos: ['marais-1.jpg', 'home-loft-bright.jpg'], description: 'Des moulures d’origine, le calme d’un dernier étage, et Paris qui se déplie par les fenêtres.', atouts: ['Verrière', 'Dernier étage', 'Calme'], mandat: { type: 'exclusif', fin: '2027-02-28' }, cree: '2026-10-12T10:00:00.000Z' },
-      { id: 'b6', adresse: 'Rue de Grenelle, Paris 7e', ref: 'SC-1047', titre: 'Un rez-de-jardin rue de Grenelle', type: 'Appartement', quartier: 'p7', surface: 138, pieces: 5, chambres: 3, sdb: 2, etage: 'RDC', dpe: 'D', prix: 2350000, statut: 'ouvert', proprietaireId: null, photos: ['home-jardin.jpg', 'home-1.jpg'], description: 'Un jardin de 90 m² à l’abri des regards, deux expositions, et le silence d’une cour pavée.', atouts: ['Jardin', 'Calme', 'Cheminée'], mandat: { type: 'simple', fin: '2027-05-31' }, cree: '2026-09-28T10:00:00.000Z' },
-      { id: 'b7', adresse: 'Quai de Montebello, Paris 5e', ref: 'SC-1048', titre: 'Sous les toits de Notre-Dame', type: 'Appartement', quartier: 'p9', surface: 88, pieces: 3, chambres: 2, sdb: 1, etage: '5ᵉ', dpe: 'E', prix: 1415000, statut: 'avant-premiere', proprietaireId: null, photos: ['home-5.jpg', 'home-3.jpg'], description: 'Une charpente apparente, une verrière plein ciel et le marché Saint-Georges à trois minutes.', atouts: ['Dernier étage', 'Lumineux'], mandat: { type: 'simple', fin: '2027-01-15' }, cree: '2026-10-14T10:00:00.000Z' },
-      { id: 'b8', adresse: 'Boulogne-Billancourt', ref: 'SC-1049', titre: 'La maison des deux cèdres', type: 'Maison', quartier: 'boulogne', surface: 210, pieces: 7, chambres: 4, sdb: 3, etage: 'R+2', dpe: 'C', prix: 2890000, statut: 'sous-offre', proprietaireId: null, photos: ['home-6.jpg', 'home-3.jpg'], description: 'Un jardin planté de deux cèdres centenaires, une véranda d’hiver et un garage double.', atouts: ['Jardin', 'Parking', 'Calme'], mandat: { type: 'exclusif', fin: '2027-07-31' }, cree: '2026-09-05T10:00:00.000Z' }
+      { id: 'b1', adresse: 'Île Saint-Louis, Paris 4e', ref: 'SC-1042', titre: 'Quatre pièces sur la Seine', type: 'Appartement', quartier: 'p4', surface: 112, pieces: 4, chambres: 2, sdb: 2, etage: 3, dpe: 'D', prix: 2079000, statut: 'avant-premiere', proprietaireId: 'c2', photos: ['ilesaintlouis-1.jpg', 'ilesaintlouis-3.jpg'], description: 'La Seine par trois fenêtres, un parquet de Versailles d’origine, et la lumière des quatre expositions.', atouts: ['Vue', 'Parquet d’origine', 'Calme'], mandat: { type: 'exclusif', fin: '2027-03-31' }, cree: '2026-10-02T10:00:00.000Z' },
+      { id: 'b2', adresse: 'Rue des Abbesses, Paris 18e', ref: 'SC-1043', titre: 'La maison au figuier', type: 'Maison', quartier: 'p18', surface: 96, pieces: 4, chambres: 2, sdb: 2, etage: 0, dpe: 'E', prix: 1270500, statut: 'avant-premiere', proprietaireId: null, photos: ['montmartre-1.jpg', 'montmartre-3.jpg'], description: 'Une verrière d’atelier qui prend la lumière du nord toute la journée, et un figuier dans la cour.', atouts: ['Jardin', 'Verrière', 'Calme'], mandat: { type: 'simple', fin: '2027-01-31' }, cree: '2026-10-06T10:00:00.000Z' },
+      { id: 'b3', adresse: 'Rue de Verneuil, Paris 6e', ref: 'SC-1044', titre: 'Les deux derniers étages', type: 'Duplex', quartier: 'p6', surface: 128, pieces: 4, chambres: 3, sdb: 2, etage: 5, dpe: 'C', prix: 2604000, statut: 'ouvert', proprietaireId: 'c4', photos: ['saintgermain-1.jpg', 'saintgermain-3.jpg'], description: 'Deux niveaux qui se répondent, une terrasse plein sud, et l’adresse la plus sûre de la rive gauche.', atouts: ['Terrasse', 'Dernier étage', 'Lumineux'], mandat: { type: 'exclusif', fin: '2027-06-30' }, cree: '2026-09-18T10:00:00.000Z' },
+      { id: 'b4', adresse: 'Avenue du Président Kennedy, Paris 16e', ref: 'SC-1045', titre: 'Six pièces face aux toits', type: 'Appartement', quartier: 'p16', surface: 185, pieces: 6, chambres: 4, sdb: 3, etage: 6, dpe: 'D', prix: 3412500, statut: 'avant-premiere', proprietaireId: null, photos: ['trocadero-1.jpg', 'home-5.jpg'], description: 'La rotonde du dernier étage, une vue que rien ne viendra fermer, et l’ascenseur d’époque.', atouts: ['Vue', 'Ascenseur', 'Dernier étage'], mandat: { type: 'simple', fin: '2027-04-30' }, cree: '2026-10-10T10:00:00.000Z' },
+      { id: 'b5', adresse: 'Rue des Archives, Paris 3e', ref: 'SC-1046', titre: 'L’atelier et sa verrière', type: 'Loft', quartier: 'p3', surface: 142, pieces: 3, chambres: 2, sdb: 2, etage: 4, dpe: 'C', prix: 1774500, statut: 'mandat', proprietaireId: 'c6', photos: ['marais-1.jpg', 'home-loft-bright.jpg'], description: 'Des moulures d’origine, le calme d’un dernier étage, et Paris qui se déplie par les fenêtres.', atouts: ['Verrière', 'Dernier étage', 'Calme'], mandat: { type: 'exclusif', fin: '2027-02-28' }, cree: '2026-10-12T10:00:00.000Z' },
+      { id: 'b6', adresse: 'Rue de Grenelle, Paris 7e', ref: 'SC-1047', titre: 'Un rez-de-jardin rue de Grenelle', type: 'Appartement', quartier: 'p7', surface: 138, pieces: 5, chambres: 3, sdb: 2, etage: 0, dpe: 'D', prix: 2350000, statut: 'ouvert', proprietaireId: null, photos: ['home-jardin.jpg', 'home-1.jpg'], description: 'Un jardin de 90 m² à l’abri des regards, deux expositions, et le silence d’une cour pavée.', atouts: ['Jardin', 'Calme', 'Cheminée'], mandat: { type: 'simple', fin: '2027-05-31' }, cree: '2026-09-28T10:00:00.000Z' },
+      { id: 'b7', adresse: 'Quai de Montebello, Paris 5e', ref: 'SC-1048', titre: 'Sous les toits de Notre-Dame', type: 'Appartement', quartier: 'p9', surface: 88, pieces: 3, chambres: 2, sdb: 1, etage: 5, dpe: 'E', prix: 1415000, statut: 'avant-premiere', proprietaireId: null, photos: ['home-5.jpg', 'home-3.jpg'], description: 'Une charpente apparente, une verrière plein ciel et le marché Saint-Georges à trois minutes.', atouts: ['Dernier étage', 'Lumineux'], mandat: { type: 'simple', fin: '2027-01-15' }, cree: '2026-10-14T10:00:00.000Z' },
+      { id: 'b8', adresse: 'Boulogne-Billancourt', ref: 'SC-1049', titre: 'La maison des deux cèdres', type: 'Maison', quartier: 'boulogne', surface: 210, pieces: 7, chambres: 4, sdb: 3, etage: 2, dpe: 'C', prix: 2890000, statut: 'sous-offre', proprietaireId: null, photos: ['home-6.jpg', 'home-3.jpg'], description: 'Un jardin planté de deux cèdres centenaires, une véranda d’hiver et un garage double.', atouts: ['Jardin', 'Parking', 'Calme'], mandat: { type: 'exclusif', fin: '2027-07-31' }, cree: '2026-09-05T10:00:00.000Z' }
     ];
 
     const clients = [
@@ -316,11 +316,20 @@
 
   /* ------------------------------- scoring -------------------------------- */
 
-  // Étage comparable d'un bien : seules les biens du Radar ont un étage estimé
-  // numérique (etageEstime) — un bien du portefeuille saisi à la main n'a
-  // qu'un étage en texte libre, pas fiable à comparer. Mieux vaut ignorer le
-  // critère étage que de le faire échouer sur une donnée qu'on n'a pas.
-  const etageComparable = (b) => (typeof b.etageEstime === 'number' ? b.etageEstime : null);
+  // Un bien du Radar a un étage estimé numérique (etageEstime, déduit de
+  // l'adresse ADEME) ; un bien du portefeuille a son étage saisi à la main
+  // (etage, nombre — 0 = RDC). Donnée absente ou non numérique → null,
+  // ignorée comme un critère inconnu plutôt que de le faire échouer.
+  const etageSaisie = (v) => {
+    if (v == null || String(v).trim() === '') return null;
+    const n = parseInt(v, 10);
+    return isNaN(n) ? null : n;
+  };
+  const etageComparable = (b) => {
+    if (typeof b.etageEstime === 'number') return b.etageEstime;
+    if (typeof b.etage === 'number') return b.etage;
+    return null;
+  };
 
   // Époque de construction comparable : un bien du portefeuille a une année
   // libre (anneeConstruction, saisie à la main) ; un bien du Radar a l'année
@@ -1315,7 +1324,7 @@
       titre: b.titre || 'Bien sans titre', adresse: b.adresse || '', ville: b.ville || '', codePostal: b.codePostal || '',
       type: b.type || 'Appartement', quartier: b.quartier || '',
       surface: b.surface || 0, pieces: b.pieces || 0, chambres: b.chambres || 0, sdb: b.sdb || 0,
-      etage: b.etage || '', dpe: b.dpe || '', ges: b.ges || '', etat: b.etat || '', anneeConstruction: b.anneeConstruction || null, prix: b.prix || 0, charges: b.charges || 0,
+      etage: etageSaisie(b.etage), dpe: b.dpe || '', ges: b.ges || '', etat: b.etat || '', anneeConstruction: b.anneeConstruction || null, prix: b.prix || 0, charges: b.charges || 0,
       ascenseur: !!b.ascenseur, exterieur: b.exterieur || '', surfaceExterieur: b.surfaceExterieur || 0,
       delai: b.delai || '', dejaEnVente: b.dejaEnVente || '', motif: b.motif || '',
       statut: b.statut || 'brouillon', etapeProposition: b.etapeProposition || '', proprietaireId: lead ? lead.id : null,
@@ -3970,7 +3979,7 @@
           '<div class="se-card"><h3>Le bien</h3><div class="se-kv" style="margin-top:12px">' +
             kv('Référence', esc(b.ref)) + kv('Surface', num(b.surface) + ' m²') +
             kv('Pièces', b.pieces + ' · ' + b.chambres + ' ch. · ' + b.sdb + ' sdb') +
-            kv('Étage', esc(b.etage || '—')) + kv('DPE', esc(b.dpe)) + kv('Année de construction', b.anneeConstruction || '—') + kv('Statut', badgeBien(b.statut)) +
+            kv('Étage', b.etage != null ? (b.etage === 0 ? 'RDC' : esc(String(b.etage))) : '—') + kv('DPE', esc(b.dpe)) + kv('Année de construction', b.anneeConstruction || '—') + kv('Statut', badgeBien(b.statut)) +
           '</div></div>' +
           '<div class="se-card"><h3>Mandat & propriétaire</h3><div class="se-kv" style="margin-top:12px">' +
             kv('Propriétaire', prop ? '<a href="#/client/' + prop.id + '">' + esc(nomClient(prop)) + '</a>' : '<span class="se-hint">non renseigné</span>') +
@@ -4677,7 +4686,7 @@
         field('Pièces', 'pieces', v.pieces, { type: 'number' }) +
         field('Chambres', 'chambres', v.chambres, { type: 'number' }) +
         field('Salles de bain', 'sdb', v.sdb, { type: 'number' }) +
-        field('Étage', 'etage', v.etage) + field('DPE', 'dpe', v.dpe, { type: 'select', options: ['A', 'B', 'C', 'D', 'E', 'F', 'G'].map((d) => ({ value: d, label: d })) }) +
+        field('Étage', 'etage', v.etage, { type: 'number', placeholder: '0 = RDC' }) + field('DPE', 'dpe', v.dpe, { type: 'select', options: ['A', 'B', 'C', 'D', 'E', 'F', 'G'].map((d) => ({ value: d, label: d })) }) +
         field('Année de construction', 'anneeConstruction', v.anneeConstruction || '', { type: 'number', placeholder: '1975' }) +
         field('Prix (€)', 'prix', v.prix, { type: 'number' }) +
         field('Description', 'description', v.description, { type: 'textarea', full: true }) +
@@ -4780,7 +4789,7 @@
       '</div>' +
     '</div>';
 
-    const pdfRows = [['Prix', b ? euro(b.prix) : '—'], ['Surface', b && b.surface ? b.surface + ' m²' : '—'], ['Pièces', b && b.pieces ? b.pieces : '—'], ['Chambres', b && b.chambres ? b.chambres : '—'], ['Salles de bain', b && b.sdb ? b.sdb : '—'], ['Étage', b && b.etage ? b.etage : '—'], ['DPE', b && b.dpe ? b.dpe : '—'], ['GES', b && b.ges ? b.ges : '—']];
+    const pdfRows = [['Prix', b ? euro(b.prix) : '—'], ['Surface', b && b.surface ? b.surface + ' m²' : '—'], ['Pièces', b && b.pieces ? b.pieces : '—'], ['Chambres', b && b.chambres ? b.chambres : '—'], ['Salles de bain', b && b.sdb ? b.sdb : '—'], ['Étage', b && b.etage != null ? (b.etage === 0 ? 'RDC' : b.etage) : '—'], ['DPE', b && b.dpe ? b.dpe : '—'], ['GES', b && b.ges ? b.ges : '—']];
     const pdfView = '<div class="se-pdf-preview">' +
       '<div class="se-pdf-head"><div class="se-pdf-logo">SEECRET</div><div class="se-pdf-tag">Fiche confidentielle</div></div>' +
       '<div class="se-pdf-body">' +
@@ -5997,7 +6006,7 @@
         adresse: String(data.get('adresse') || '').trim(),
         type: data.get('type'), quartier: data.get('quartier'), surface: chiffres(data.get('surface')),
         pieces: chiffres(data.get('pieces')), chambres: chiffres(data.get('chambres')), sdb: chiffres(data.get('sdb')),
-        etage: String(data.get('etage') || ''), dpe: data.get('dpe'),
+        etage: etageSaisie(data.get('etage')), dpe: data.get('dpe'),
         anneeConstruction: chiffres(data.get('anneeConstruction')) || null, prix: chiffres(data.get('prix')),
         statut: data.get('statut'), proprietaireId: data.get('proprio') || null,
         exclusivite: { statut: 'scan_en_cours', liens: [] },
