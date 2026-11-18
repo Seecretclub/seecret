@@ -685,6 +685,13 @@
     const suivi = state.suivis.indexOf(b.id) > -1;
     const mien = b.mien || (state.monBien && state.monBien.id === b.id);
     const lock = !mien && !marcheDebloque();
+    // En avant-première, le propriétaire n'a pas encore ouvert son bien aux
+    // visites ni aux offres — les autres membres peuvent seulement le
+    // suivre et marquer leur intérêt. C'est le cœur de la distinction du
+    // produit, donc elle doit être respectée ici, pas seulement présentée
+    // ailleurs : voir aussi le garde-fou côté serveur sur /api/visites et
+    // /api/offres, qui refuse la demande même si ce bouton était contourné.
+    const ouvertAuxVisites = b.statut === 'ouvert' || b.statut === 'sous-offre';
     return '<div style="margin-bottom:20px"><a class="se-btn ghost sm" href="#/catalogue">← Catalogue</a></div>' +
       '<div class="ed-detail-grid">' +
         '<div>' +
@@ -712,8 +719,10 @@
                   ? '<div class="se-note" style="margin-top:16px">Complétez votre fiche à 100 % pour débloquer les photos, les visites et les offres.</div>' +
                     '<a class="se-btn block" style="margin-top:10px" href="#/mon-bien">Compléter ma fiche</a>'
                   : '<button class="se-btn ' + (suivi ? 'soft' : 'ghost') + ' block" style="margin-top:12px;gap:8px" data-act="suivre" data-id="' + b.id + '">' + bookmarkSvg(suivi) + (suivi ? 'Enregistré' : 'Suivre ce bien') + '</button>' +
-                    '<button class="se-btn block" style="margin-top:8px" data-act="visite-open" data-id="' + b.id + '">Demander une visite</button>' +
-                    '<button class="se-btn ghost block" style="margin-top:8px" data-act="offre-open" data-id="' + b.id + '">Faire une offre</button>')) +
+                    (ouvertAuxVisites
+                      ? '<button class="se-btn block" style="margin-top:8px" data-act="visite-open" data-id="' + b.id + '">Demander une visite</button>' +
+                        '<button class="se-btn ghost block" style="margin-top:8px" data-act="offre-open" data-id="' + b.id + '">Faire une offre</button>'
+                      : '<p class="se-hint" style="margin-top:10px">Ce bien est en avant-première : le propriétaire n’a pas encore ouvert les visites. Suivez-le pour être informé dès que ce sera possible.</p>'))) +
           '</div>' +
           '<div class="ed-panel"><span class="ed-kicker">Quartier</span><div style="margin-top:10px">' + ecolesBlock(b) + '</div></div>' +
         '</div>' +
@@ -2063,20 +2072,25 @@
 
     if (kind === 'visite') {
       const bienId = form.getAttribute('data-bien');
-      const b = bien(bienId);
-      state.visites.unshift({
-        id: uid('v'), bienId: bienId, sens: 'envoyee', creneau: String(data.get('creneau')),
-        note: String(data.get('note') || ''), statut: 'demandee', at: nowISO(), demandeur: (state.profil.prenom + ' ' + state.profil.nom).trim()
-      });
-      pousserDemande({
-        id: uid('d'), type: 'visite', bienId: bienId,
-        nom: (state.profil.prenom + ' ' + state.profil.nom).trim(), email: state.profil.email,
-        message: String(data.get('note') || '') || ('Demande de visite : ' + String(data.get('creneau'))),
-        source: 'Espace membre', cree: nowISO()
-      });
-      modal = null;
-      commit();
-      toast('Demande envoyée. Votre agent confirme sous 24 h.');
+      const creneau = String(data.get('creneau') || '');
+      const note = String(data.get('note') || '');
+      // La demande part vraiment vers le serveur (et donc vers l'agent dans
+      // le CRM) depuis cette correction — avant, elle n'était écrite que
+      // dans le localStorage du navigateur du membre et n'arrivait jamais
+      // à l'agence. Le serveur refuse aussi la demande si le bien est
+      // encore en avant-première (pas encore ouvert aux visites).
+      try {
+        await API.send('POST', '/api/visites', { bienId: bienId, creneau: creneau, note: note });
+        state.visites.unshift({
+          id: uid('v'), bienId: bienId, sens: 'envoyee', creneau: creneau,
+          note: note, statut: 'demandee', at: nowISO(), demandeur: (state.profil.prenom + ' ' + state.profil.nom).trim()
+        });
+        modal = null;
+        commit();
+        toast('Demande envoyée. Votre agent confirme sous 24 h.');
+      } catch (e) {
+        toast((e && e.message) || 'Demande impossible pour l’instant.', 'warn');
+      }
       return;
     }
 

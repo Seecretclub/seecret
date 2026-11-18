@@ -1524,6 +1524,41 @@ app.get('/api/recherches', requireAdmin, (req, res) => {
   res.json({ ok: true, recherches: recherchesVisibles(req, db) });
 });
 
+// Un bien n'est ouvert aux visites et aux offres qu'à partir du moment où
+// son propriétaire l'a lui-même fait passer en « visite ouverte » — c'est le
+// cœur du produit (voir la note de vision) : en avant-première, les autres
+// membres peuvent le suivre et marquer leur intérêt, mais le propriétaire
+// n'a pas encore accepté de recevoir des visites ou des offres. On vérifie
+// ça côté serveur (pas seulement en cachant les boutons côté client) pour
+// qu'aucun appel direct à l'API ne puisse contourner la règle.
+const STATUTS_VISITABLES = ['ouvert', 'sous-offre', 'sous-compromis'];
+function bienOuvertAuxVisites(b) {
+  return !!b && STATUTS_VISITABLES.indexOf(b.statut) > -1;
+}
+
+// ---- Visites (demande du membre) ----
+app.post('/api/visites', requireAuth, (req, res) => {
+  const bienId = String((req.body && req.body.bienId) || '');
+  const creneau = String((req.body && req.body.creneau) || '').slice(0, 120);
+  const note = String((req.body && req.body.note) || '').slice(0, 500);
+  if (!bienId) return res.status(400).json({ error: 'Bien requis' });
+  const bien = req.db.biens.find((b) => b.id === bienId);
+  if (!bien) return res.status(404).json({ error: 'Bien introuvable' });
+  if (!bienOuvertAuxVisites(bien)) {
+    return res.status(409).json({ error: 'Ce bien est en avant-première : le propriétaire n’a pas encore ouvert les visites. Suivez-le pour être informé dès que ce sera possible.' });
+  }
+  const demande = {
+    id: uid('d'), type: 'visite', leadId: req.lead.id, bienId: bienId, email: req.lead.email,
+    nom: nomComplet(req.lead), message: (note || ('Créneau souhaité : ' + (creneau || 'non précisé'))),
+    creneau: creneau, statut: 'nouvelle', source: 'Espace membre', cree: nowISO()
+  };
+  req.db.demandes.unshift(demande);
+  creerTacheDemande(req.db, demande, 'Demande de visite de ' + nomComplet(req.lead));
+  logActivite(req.db, { leadId: bien.leadId || null, bienId: bienId, type: 'visite_demandee', auteur: nomComplet(req.lead) + ' (acquéreur)' });
+  writeDb(req.db);
+  res.json({ ok: true, id: demande.id });
+});
+
 // ---- Offres (Silent Offer) ----
 app.post('/api/offres', requireAuth, (req, res) => {
   const bienId = String((req.body && req.body.bienId) || '');
@@ -1531,6 +1566,9 @@ app.post('/api/offres', requireAuth, (req, res) => {
   const message = String((req.body && req.body.message) || '');
   if (!bienId || !montant) return res.status(400).json({ error: 'Bien et montant requis' });
   const bien = req.db.biens.find((b) => b.id === bienId);
+  if (!bienOuvertAuxVisites(bien)) {
+    return res.status(409).json({ error: 'Ce bien est en avant-première : le propriétaire n’a pas encore ouvert les visites, donc pas encore les offres. Suivez-le pour être informé dès que ce sera possible.' });
+  }
   const bienAdresse = bien ? (bien.adresse || bien.titre || '') : '';
   const offre = { id: uid('o'), bienId: bienId, leadId: req.lead.id, email: req.lead.email, nom: nomComplet(req.lead), montant: montant, message: message, statut: 'en_attente', cree: nowISO() };
   req.db.offres.unshift(offre);

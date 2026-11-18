@@ -130,6 +130,7 @@
     offre_faite: { label: 'Offre faite', icon: 'tag' },
     offre_acceptee: { label: 'Offre acceptée', icon: 'check' },
     retour_silence: { label: 'Contacté, puis silence — à relancer', icon: 'chat' },
+    visite_demandee: { label: 'Visite demandée par un acquéreur', icon: 'calendar' },
     converti: { label: 'Converti en membre', icon: 'check' },
     lead_cree_assistant: { label: 'Lead créé par Célia', icon: 'chat' },
     lead_maj_assistant: { label: 'Lead mis à jour par Célia', icon: 'chat' },
