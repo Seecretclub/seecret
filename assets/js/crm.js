@@ -2003,10 +2003,10 @@
         '<p class="se-hint" style="margin-top:4px">Lancer une recherche charge les biens correspondants ; les filtres et le tri ci-dessous s’appliquent ensuite à tout ce qui est chargé, sans relancer de recherche.</p>' +
         '<form data-form="dpe-search" style="margin-top:12px">' +
           '<div class="se-row" style="gap:10px;align-items:flex-end;flex-wrap:wrap">' +
-            '<div class="se-field" style="flex:1;min-width:200px"><label>Adresse ou ville</label><input class="se-input" name="ville" placeholder="75011 Paris"/></div>' +
-            '<div class="se-field" style="width:150px"><label>Code postal</label><input class="se-input" name="code_postal" placeholder="75011"/></div>' +
-            '<div class="se-field" style="width:130px"><label>Section</label><input class="se-input" name="section" placeholder="EC"/></div>' +
-            '<div class="se-field" style="width:140px"><label>N° parcelle</label><input class="se-input" name="numero" placeholder="32"/></div>' +
+            '<div class="se-field" style="flex:1;min-width:200px"><label>Adresse ou ville</label><input class="se-input" name="ville" data-rr="dpe_ville" value="' + rr('dpe_ville') + '" placeholder="75011 Paris"/></div>' +
+            '<div class="se-field" style="width:150px"><label>Code postal</label><input class="se-input" name="code_postal" data-rr="dpe_code_postal" value="' + rr('dpe_code_postal') + '" placeholder="75011"/></div>' +
+            '<div class="se-field" style="width:130px"><label>Section</label><input class="se-input" name="section" data-rr="dpe_section" value="' + rr('dpe_section') + '" placeholder="EC"/></div>' +
+            '<div class="se-field" style="width:140px"><label>N° parcelle</label><input class="se-input" name="numero" data-rr="dpe_numero" value="' + rr('dpe_numero') + '" placeholder="32"/></div>' +
             '<button class="se-btn" type="button" data-act="dpe-search">Rechercher</button>' +
             '<span class="se-hint" id="dpe-status"></span>' +
           '</div>' +
@@ -2070,6 +2070,14 @@
     });
     if (pts.length) map.fitBounds(L.latLngBounds(pts).pad(0.1));
   }
+
+  // Les formulaires de recherche du Robot (Radar, Recherche DPE, Recherche
+  // cadastrale) n'avaient aucune valeur persistée : un simple clic sur un
+  // filtre ailleurs sur la page (ex. la case SCI) déclenche un render() qui
+  // reconstruit tout le HTML, donc efface ce qui venait d'être tapé et pas
+  // encore validé par « Rechercher ». `rr()` relit la valeur sauvegardée
+  // dans state.robotRecherche pour que les champs survivent à ces renders.
+  const rr = (key) => esc((state.robotRecherche || {})[key] || '');
 
   function tabsRobot(active) {
     const t = (route, label) => '<a href="#/' + route + '" class="' + (active === route ? 'active' : '') + '">' + label + '</a>';
@@ -2343,12 +2351,12 @@
         '<h3>Recherche cadastrale (moteur Python)</h3>' +
         '<p class="se-hint" style="margin-top:4px">Différente de la recherche DPE de l’onglet « Radar » : celle-ci passe par le moteur Python dédié (cadastre + dossier propriétaire), quand il est configuré et lancé.</p>' +
         '<form class="se-form-grid" data-form="robot-search" style="margin-top:12px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">' +
-          '<div class="se-field"><label>Adresse</label><input class="se-input" name="adresse" placeholder="12 boulevard Flandrin"/></div>' +
-          '<div class="se-field"><label>Ville</label><input class="se-input" name="ville" placeholder="Paris"/></div>' +
-          '<div class="se-field"><label>Code postal</label><input class="se-input" name="code_postal" placeholder="75116"/></div>' +
-          '<div class="se-field"><label>Section cadastrale</label><input class="se-input" name="section" placeholder="EC"/></div>' +
-          '<div class="se-field"><label>Numéro de parcelle</label><input class="se-input" name="numero" placeholder="32"/></div>' +
-          '<div class="se-field"><label>DPE (A–G)</label><input class="se-input" name="dpe" maxlength="1" placeholder="E"/></div>' +
+          '<div class="se-field"><label>Adresse</label><input class="se-input" name="adresse" data-rr="cad_adresse" value="' + rr('cad_adresse') + '" placeholder="12 boulevard Flandrin"/></div>' +
+          '<div class="se-field"><label>Ville</label><input class="se-input" name="ville" data-rr="cad_ville" value="' + rr('cad_ville') + '" placeholder="Paris"/></div>' +
+          '<div class="se-field"><label>Code postal</label><input class="se-input" name="code_postal" data-rr="cad_code_postal" value="' + rr('cad_code_postal') + '" placeholder="75116"/></div>' +
+          '<div class="se-field"><label>Section cadastrale</label><input class="se-input" name="section" data-rr="cad_section" value="' + rr('cad_section') + '" placeholder="EC"/></div>' +
+          '<div class="se-field"><label>Numéro de parcelle</label><input class="se-input" name="numero" data-rr="cad_numero" value="' + rr('cad_numero') + '" placeholder="32"/></div>' +
+          '<div class="se-field"><label>DPE (A–G)</label><input class="se-input" name="dpe" data-rr="cad_dpe" value="' + rr('cad_dpe') + '" maxlength="1" placeholder="E"/></div>' +
         '</form>' +
         '<div style="display:flex;align-items:center;gap:10px;margin-top:12px">' +
           '<button class="se-btn" data-act="robot-search">Rechercher</button>' +
@@ -3065,20 +3073,20 @@
         '<h3>Recherche DPE</h3>' +
         '<form data-form="dpe-search" style="margin-top:12px">' +
           '<div class="se-row" style="gap:10px;align-items:flex-end;flex-wrap:wrap">' +
-            '<div class="se-field" style="flex:1;min-width:200px"><label>Adresse ou ville</label><input class="se-input" name="ville" placeholder="75011 Paris"/></div>' +
-            '<div class="se-field" style="width:150px"><label>Code postal</label><input class="se-input" name="code_postal" placeholder="75011"/></div>' +
-            '<div class="se-field" style="width:130px"><label>Section</label><input class="se-input" name="section" placeholder="EC"/></div>' +
-            '<div class="se-field" style="width:140px"><label>N° parcelle</label><input class="se-input" name="numero" placeholder="32"/></div>' +
+            '<div class="se-field" style="flex:1;min-width:200px"><label>Adresse ou ville</label><input class="se-input" name="ville" data-rr="dpe_ville" value="' + rr('dpe_ville') + '" placeholder="75011 Paris"/></div>' +
+            '<div class="se-field" style="width:150px"><label>Code postal</label><input class="se-input" name="code_postal" data-rr="dpe_code_postal" value="' + rr('dpe_code_postal') + '" placeholder="75011"/></div>' +
+            '<div class="se-field" style="width:130px"><label>Section</label><input class="se-input" name="section" data-rr="dpe_section" value="' + rr('dpe_section') + '" placeholder="EC"/></div>' +
+            '<div class="se-field" style="width:140px"><label>N° parcelle</label><input class="se-input" name="numero" data-rr="dpe_numero" value="' + rr('dpe_numero') + '" placeholder="32"/></div>' +
             '<button class="se-btn" type="button" data-act="dpe-search">Rechercher</button>' +
             '<span class="se-hint" id="dpe-status"></span>' +
           '</div>' +
           '<details style="margin-top:14px">' +
             '<summary style="cursor:pointer;font-size:13px;color:var(--color-taupe);user-select:none">Critères avancés</summary>' +
             '<div class="se-form-grid" style="margin-top:12px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">' +
-              '<div class="se-field"><label>Date début (AAAA-MM-JJ)</label><input class="se-input" name="date_debut" placeholder="2024-01-01"/></div>' +
-              '<div class="se-field"><label>Date fin (AAAA-MM-JJ)</label><input class="se-input" name="date_fin" placeholder="2025-12-31"/></div>' +
-              '<div class="se-field"><label>Surface min (m²)</label><input class="se-input" name="surface_min" type="number" placeholder="40"/></div>' +
-              '<div class="se-field"><label>Surface max (m²)</label><input class="se-input" name="surface_max" type="number" placeholder="100"/></div>' +
+              '<div class="se-field"><label>Date début (AAAA-MM-JJ)</label><input class="se-input" name="date_debut" data-rr="dpe_date_debut" value="' + rr('dpe_date_debut') + '" placeholder="2024-01-01"/></div>' +
+              '<div class="se-field"><label>Date fin (AAAA-MM-JJ)</label><input class="se-input" name="date_fin" data-rr="dpe_date_fin" value="' + rr('dpe_date_fin') + '" placeholder="2025-12-31"/></div>' +
+              '<div class="se-field"><label>Surface min (m²)</label><input class="se-input" name="surface_min" data-rr="dpe_surface_min" value="' + rr('dpe_surface_min') + '" type="number" placeholder="40"/></div>' +
+              '<div class="se-field"><label>Surface max (m²)</label><input class="se-input" name="surface_max" data-rr="dpe_surface_max" value="' + rr('dpe_surface_max') + '" type="number" placeholder="100"/></div>' +
               '<div class="se-field"><label>Type de bien</label><select class="se-select" name="type"><option value="tout">Tous</option><option value="appartement">Appartement</option><option value="maison">Maison</option><option value="immeuble">Immeuble</option></select></div>' +
               '<div class="se-field"><label>Tri</label><select class="se-select" name="tri"><option value="recent">DPE le plus récent</option><option value="ancien">DPE le plus ancien</option><option value="surface_desc">Surface décroissante</option><option value="surface_asc">Surface croissante</option><option value="classe_asc">Classe A→G</option><option value="classe_desc">Classe G→A</option></select></div>' +
             '</div>' +
@@ -6213,6 +6221,16 @@
   });
 
   document.addEventListener('input', (e) => {
+    if (e.target.matches('[data-rr]')) {
+      // Persiste la saisie sans re-render : le champ affiche déjà ce qui
+      // vient d'être tapé, un render() ici ne ferait que couper le curseur
+      // au milieu de la frappe. La sauvegarde suffit à ce que la valeur
+      // survive au prochain render() déclenché par autre chose sur la page.
+      state.robotRecherche = state.robotRecherche || {};
+      state.robotRecherche[e.target.getAttribute('data-rr')] = e.target.value;
+      save();
+      return;
+    }
     if (e.target.matches('[data-search]')) {
       state.filtres.q = e.target.value;
       const v = e.target.value;
