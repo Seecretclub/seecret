@@ -405,6 +405,29 @@
   // les recherches clients filtrées par secteur (comme n'importe quel bien).
   const quartierDeCp = (cp) => (QUARTIERS.find((q) => q.cp === String(cp || '').trim()) || null);
 
+  // L'ADEME n'a pas de colonne « étage » structurée pour les logements : ça
+  // n'existe nulle part dans ses données publiques (vérifié). Mais l'adresse
+  // brute du DPE (non nettoyée par la BAN) mentionne parfois l'étage en texte
+  // libre, ex. « 12 rue de Seine, étage 3, porte 2 » — on l'extrait en best
+  // effort, toujours affiché comme une estimation non garantie, jamais
+  // comme une donnée certaine.
+  // Note : on évite \b juste avant « étage »/« ét. » car le \w de JS est
+  // ASCII uniquement — « é » n'est pas considéré comme un caractère de mot,
+  // donc un \b entre une espace et « é » ne matche jamais (bug constaté en
+  // test). On utilise un lookbehind négatif sur les lettres (accents inclus)
+  // à la place.
+  const ETAGE_RE = /(?<![a-zàâäéèêëïîôöùûüÿñç])(?:étage|etage|ét\.?|et\.?)\s*n?°?\s*(rdc|rez[- ]de[- ]chauss[ée]e|\d{1,2})\b/i;
+  function etageDepuisAdresseBrute(adresseBrut) {
+    const m = ETAGE_RE.exec(String(adresseBrut || ''));
+    if (!m) return null;
+    const v = m[1].toLowerCase();
+    return /rdc|rez/.test(v) ? 'RDC' : v;
+  }
+
+  // Liste des champs déjà exploités explicitement ailleurs (affichés avec
+  // leur propre libellé) — tout le reste d'une ligne ADEME est néanmoins
+  // conservé dans `ademeBrut` et proposé en complément dans les fiches, pour
+  // enrichir au maximum sans dépendre d'une liste de champs codée en dur.
   function mapSignalRobotBien(s) {
     const secteur = quartierDeCp(s.code_postal_ban);
     return {
@@ -424,6 +447,8 @@
       dpeId: s.numero_dpe || s.dpe_id || '',
       dpeDate: s.date_reception_dpe || s.dpe_observed_at || null,
       anneeConstruction: s.annee_construction || null,
+      periodeConstruction: s.periode_construction || null,
+      etageEstime: etageDepuisAdresseBrute(s.adresse_brut),
       proprietaire: {
         nom: s.owner_name || '',
         type: String(s.owner_type || '').toLowerCase().indexOf('sci') > -1 ? 'sci' : (s.owner_type === 'societe' || s.siren ? 'societe' : 'personne'),
@@ -437,8 +462,30 @@
       confidence_owner_source: s.owner_status || null,
       dateDetection: new Date().toISOString(),
       statutProspection: 'nouveau',
-      coords: (s.coordonnee_cartographique_y_ban != null && s.coordonnee_cartographique_x_ban != null && Math.abs(Number(s.coordonnee_cartographique_y_ban)) <= 90 && Math.abs(Number(s.coordonnee_cartographique_x_ban)) <= 180) ? [Number(s.coordonnee_cartographique_y_ban), Number(s.coordonnee_cartographique_x_ban)] : null
+      coords: (s.coordonnee_cartographique_y_ban != null && s.coordonnee_cartographique_x_ban != null && Math.abs(Number(s.coordonnee_cartographique_y_ban)) <= 90 && Math.abs(Number(s.coordonnee_cartographique_x_ban)) <= 180) ? [Number(s.coordonnee_cartographique_y_ban), Number(s.coordonnee_cartographique_x_ban)] : null,
+      ademeBrut: s
     };
+  }
+
+  // Formate en français lisible toute donnée ADEME supplémentaire non déjà
+  // exploitée par un champ dédié — c'est ce qui permet d'enrichir avec
+  // « le maximum de critères » sans dépendre d'une liste de noms de colonnes
+  // devinée à l'avance (voir /api/robot/dpe, qui ne restreint plus les champs
+  // renvoyés par l'ADEME).
+  const ADEME_CHAMPS_DEJA_AFFICHES = new Set([
+    'etiquette_dpe', 'etiquette_ges', 'type_batiment', 'surface_habitable_logement', 'surface_habitable_immeuble',
+    'annee_construction', 'periode_construction', 'date_reception_dpe', 'date_etablissement_dpe', 'date_fin_validite_dpe',
+    'numero_dpe', 'adresse_ban', 'adresse_brut', 'code_postal_ban', 'code_insee_ban', 'nom_commune_ban',
+    'coordonnee_cartographique_y_ban', 'coordonnee_cartographique_x_ban', 'conso_5_usages_par_m2_ep', 'emission_ges_5_usages_par_m2',
+    '_id', '_rand', '_score', 'geo_point_2d', '_geopoint', '_i'
+  ]);
+  const ADEME_LABEL = (k) => k.replace(/_/g, ' ').replace(/\bban\b/g, 'BAN').replace(/\bep\b/g, 'ÉP').replace(/^./, (c) => c.toUpperCase());
+  function autresChampsAdeme(ademeBrut) {
+    if (!ademeBrut || typeof ademeBrut !== 'object') return [];
+    return Object.keys(ademeBrut)
+      .filter((k) => !ADEME_CHAMPS_DEJA_AFFICHES.has(k) && ademeBrut[k] !== null && ademeBrut[k] !== '' && ademeBrut[k] !== undefined)
+      .map((k) => ({ label: ADEME_LABEL(k), valeur: ademeBrut[k] }))
+      .filter((x) => typeof x.valeur !== 'object');
   }
 
   let ENRICH_POLL = null;
@@ -2369,7 +2416,7 @@
       return '<div class="se-card" style="margin-bottom:12px">' +
         '<div class="se-row" style="justify-content:space-between;align-items:flex-start">' +
           '<div style="min-width:0"><b style="font-weight:600">' + esc((rb && rb.adresse) || 'Bien') + '</b>' +
-          '<div class="se-hint">' + esc((rb && rb.type) || '') + (rb && rb.ville ? ' · ' + esc(rb.ville) : '') + (rb && rb.surface_habitable_m2 != null ? ' · ' + rb.surface_habitable_m2 + ' m² hab.' : (rb && rb.contenance_cadastrale_m2 != null ? ' · parcelle ' + rb.contenance_cadastrale_m2 + ' m²' : '')) + (rb && rb.dpe ? ' · DPE ' + esc(rb.dpe) : '') + '</div></div>' +
+          '<div class="se-hint">' + esc((rb && rb.type) || '') + (rb && rb.ville ? ' · ' + esc(rb.ville) : '') + (rb && rb.surface_habitable_m2 != null ? ' · ' + rb.surface_habitable_m2 + ' m² hab.' : (rb && rb.contenance_cadastrale_m2 != null ? ' · parcelle ' + rb.contenance_cadastrale_m2 + ' m²' : '')) + (rb && rb.dpe ? ' · DPE ' + esc(rb.dpe) : '') + (rb && rb.etageEstime ? ' · étage ' + esc(rb.etageEstime) + ' (estimé)' : '') + '</div></div>' +
           '<div style="text-align:right;flex:0 0 auto">' +
             '<span class="se-badge open">Correspond à ' + g.items.length + ' recherche' + (g.items.length > 1 ? 's' : '') + '</span>' +
             (rb ? '<div style="margin-top:6px"><a class="se-btn ghost sm" href="#/robot-bien/' + rb.id + '">Démarcher</a></div>' : '') +
@@ -2616,11 +2663,16 @@
 
     let body = '';
     if (tab === 'immo') {
+      const autresAdeme = autresChampsAdeme(b.ademeBrut);
       body = '<div class="se-card"><h3>Informations immobilières</h3><div class="se-kv" style="margin-top:12px">' +
         kv('Adresse', esc(b.adresse)) + kv('Ville', esc(b.ville || '—')) + kv('Code postal', esc(b.codePostal || '—')) +
         kv('Type', esc(b.type || '—')) + kv('Surface habitable', b.surface_habitable_m2 != null ? b.surface_habitable_m2 + ' m²' : '—') + kv('Surface réf. DPE', b.surface_reference_dpe_m2 != null ? b.surface_reference_dpe_m2 + ' m²' : '—') + kv('Terrain', b.surface_terrain_m2 != null ? b.surface_terrain_m2 + ' m²' : '—') + kv('Contenance cadastrale', b.contenance_cadastrale_m2 != null ? b.contenance_cadastrale_m2 + ' m²' : '—') +
         kv('Pièces', b.pieces || '—') + kv('Chambres', b.chambres || '—') + kv('DPE', b.dpe || '—') +
-        '</div></div>' +
+        kv('Construction', b.anneeConstruction || b.periodeConstruction || '—') +
+        kv('Étage', b.etageEstime ? b.etageEstime + ' (estimé depuis l’adresse, non garanti)' : 'Non disponible — l’ADEME ne le fournit pas en donnée structurée') +
+        '</div>' +
+        (autresAdeme.length ? '<details style="margin-top:10px"><summary style="cursor:pointer;font-size:13px;color:var(--color-taupe)">Toutes les données ADEME disponibles sur ce logement (' + autresAdeme.length + ')</summary><div class="se-kv" style="margin-top:8px">' + autresAdeme.map((x) => kv(esc(x.label), esc(String(x.valeur)))).join('') + '</div></details>' : '') +
+        '</div>' +
         '<div class="se-card" style="margin-top:16px"><h3>Valorisation interne</h3>' +
         '<p class="se-hint">Prix au m² estimé à partir des ventes DVF comparables du secteur (même type de bien, surface à ±30 %) — gratuit, sans outil externe.</p>' +
         '<button class="se-btn ghost sm" style="margin-top:10px" data-act="robot-valorisation" data-id="' + b.id + '">Estimer via comparables DVF</button>' +
@@ -2737,20 +2789,23 @@
               '</div>' +
               '<div style="flex:0 0 auto">' + classeBadge(d.etiquette_dpe) + '</div>' +
             '</div>').join('');
+          const etage = etageDepuisAdresseBrute(latest.adresse_brut);
+          const autres = autresChampsAdeme(latest);
           return '<div class="se-list-item" style="align-items:stretch;flex-direction:column;gap:6px">' +
             '<div class="se-row" style="width:100%;justify-content:space-between;align-items:flex-start">' +
               '<div style="flex:1;min-width:0">' +
                 '<div style="font-size:13.5px;font-weight:500">' + esc(g.adresse) + '</div>' +
-                '<div class="se-hint">' + esc(latest.type_batiment || '') + (latest.surface_habitable_logement ? ' · ' + latest.surface_habitable_logement + ' m²' : '') + (latest.annee_construction ? ' · ' + latest.annee_construction : '') + '</div>' +
+                '<div class="se-hint">' + esc(latest.type_batiment || '') + (latest.surface_habitable_logement ? ' · ' + latest.surface_habitable_logement + ' m²' : '') + (latest.annee_construction ? ' · ' + latest.annee_construction : (latest.periode_construction ? ' · construit ' + esc(latest.periode_construction) : '')) + (etage ? ' · étage ' + esc(etage) + ' (estimé)' : '') + '</div>' +
                 '<div class="se-hint" style="margin-top:2px">' + (latest.conso_5_usages_par_m2_ep != null ? latest.conso_5_usages_par_m2_ep + ' kWhEP/m²/an' : '') + (latest.emission_ges_5_usages_par_m2 != null ? ' · ' + latest.emission_ges_5_usages_par_m2 + ' kgCO₂/m²/an' : '') + '</div>' +
               '</div>' +
               '<div style="flex:0 0 auto;text-align:right">' + classeBadge(latest.etiquette_dpe) + '<div class="se-hint" style="margin-top:2px">' + g.dpes.length + ' DPE</div><div style="margin-top:4px"><button class="se-btn ghost sm" data-act="dpe-fiche" data-key="' + esc(g.key || g.adresse) + '">Fiche</button></div></div>' +
             '</div>' +
             (g.dpes.length > 1 ? '<details style="width:100%"><summary style="cursor:pointer;font-size:12px;color:var(--color-taupe)">Historique des ' + g.dpes.length + ' diagnostics</summary><div class="se-list" style="margin-top:6px">' + historique + '</div></details>' : '') +
+            (autres.length ? '<details style="width:100%"><summary style="cursor:pointer;font-size:12px;color:var(--color-taupe)">Toutes les données ADEME (' + autres.length + ')</summary><div class="se-kv" style="margin-top:6px">' + autres.map((x) => kv(esc(x.label), esc(String(x.valeur)))).join('') + '</div></details>' : '') +
           '</div>';
         }).join('') + '</div>'
       : '<p class="se-muted" style="margin-top:10px">Lancez une recherche pour interroger la base DPE de l’ADEME (données réelles).</p>';
-    return head('Prospection', 'Recherche DPE', 'Diagnostics de performance énergétique — source ADEME (données réelles).', '') +
+    return head('Prospection', 'Recherche DPE', 'Diagnostics de performance énergétique — source ADEME (données réelles). L’étage affiché est une estimation extraite de l’adresse du DPE quand elle le mentionne, jamais une donnée certaine (l’ADEME ne la fournit pas en tant que telle) — chaque fiche propose aussi toutes les autres données ADEME disponibles sur ce logement.', '') +
       tabsRobot('robot-dpe') +
       '<div class="se-card" style="margin-bottom:16px">' +
         '<h3>Recherche DPE</h3>' +
@@ -2816,9 +2871,12 @@
         }).join('') + '</div>';
       }
     }
+    const etage = etageDepuisAdresseBrute((g.dpes[0] || {}).adresse_brut);
+    const autres = autresChampsAdeme(g.dpes[0] || {});
     return '<h3>Fiche DPE</h3><div style="font-size:15px;font-weight:600;margin-top:4px">' + esc(g.adresse) + '</div>' +
-      '<p class="se-muted">' + g.dpes.length + ' diagnostic(s) DPE · source ADEME</p>' +
+      '<p class="se-muted">' + g.dpes.length + ' diagnostic(s) DPE · source ADEME' + (etage ? ' · étage ' + esc(etage) + ' (estimé, non garanti)' : '') + '</p>' +
       '<div class="se-list" style="margin-top:12px">' + dpesHtml + '</div>' +
+      (autres.length ? '<details style="margin-top:12px"><summary style="cursor:pointer;font-size:13px;color:var(--color-taupe)">Toutes les données ADEME disponibles (' + autres.length + ')</summary><div class="se-kv" style="margin-top:8px">' + autres.map((x) => kv(esc(x.label), esc(String(x.valeur)))).join('') + '</div></details>' : '') +
       enrichHtml +
       '<div class="se-modal-foot">' +
         '<button class="se-btn ghost" type="button" data-act="modal-close">Fermer</button>' +
@@ -3640,7 +3698,7 @@
           const rb = robotBien(m.bienId);
           return '<div class="se-list-item">' +
             '<div style="flex:1;min-width:0"><div style="font-size:14px">' + esc((rb && rb.adresse) || 'Bien') + '</div>' +
-            '<div class="se-sub">' + esc((rb && rb.type) || '') + (rb && rb.ville ? ' · ' + esc(rb.ville) : '') + (rb && rb.dpe ? ' · DPE ' + esc(rb.dpe) : '') + '</div></div>' +
+            '<div class="se-sub">' + esc((rb && rb.type) || '') + (rb && rb.ville ? ' · ' + esc(rb.ville) : '') + (rb && rb.dpe ? ' · DPE ' + esc(rb.dpe) : '') + (rb && rb.etageEstime ? ' · étage ' + esc(rb.etageEstime) + ' (estimé)' : '') + '</div></div>' +
             (rb ? '<a class="se-btn ghost sm" href="#/robot-bien/' + rb.id + '">Démarcher</a>' : '') +
           '</div>';
         }).join('') + '</div>'
