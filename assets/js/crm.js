@@ -4789,7 +4789,7 @@
       '</div>' +
     '</div>';
 
-    const pdfRows = [['Prix', b ? euro(b.prix) : '—'], ['Surface', b && b.surface ? b.surface + ' m²' : '—'], ['Pièces', b && b.pieces ? b.pieces : '—'], ['Chambres', b && b.chambres ? b.chambres : '—'], ['Salles de bain', b && b.sdb ? b.sdb : '—'], ['Étage', b && b.etage != null ? (b.etage === 0 ? 'RDC' : b.etage) : '—'], ['DPE', b && b.dpe ? b.dpe : '—'], ['GES', b && b.ges ? b.ges : '—']];
+    const pdfRows = [['Prix', b ? euro(b.prix) : '—'], ['Surface', b && b.surface ? b.surface + ' m²' : '—'], ['Pièces', b && b.pieces ? b.pieces : '—'], ['Chambres', b && b.chambres != null ? b.chambres : '—'], ['Salles de bain', b && b.sdb != null ? b.sdb : '—'], ['Étage', b && b.etage != null ? (b.etage === 0 ? 'RDC' : b.etage) : '—'], ['DPE', b && b.dpe ? b.dpe : '—'], ['GES', b && b.ges ? b.ges : '—']];
     const pdfView = '<div class="se-pdf-preview">' +
       '<div class="se-pdf-head"><div class="se-pdf-logo">SEECRET</div><div class="se-pdf-tag">Fiche confidentielle</div></div>' +
       '<div class="se-pdf-body">' +
