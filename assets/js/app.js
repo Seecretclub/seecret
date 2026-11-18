@@ -168,7 +168,7 @@
         role: 'acheteur-vendeur',
         verifications: { identite: false, financement: false, bien: false },
         notifs: { email: true, whatsapp: true, visites: true, offres: true },
-        agent: { nom: 'Léa Marchand', role: 'Agent Seecret · Paris centre' }
+        agent: { nom: 'Gabriel Taieb', role: 'Agent Seecret · Paris centre' }
       },
       monBien: null,
       biens: seedBiens(),
