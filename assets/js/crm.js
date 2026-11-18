@@ -2630,26 +2630,27 @@
   // LinkedIn que l'agent a lui-même confirmé. On ne bascule jamais en payant tout seul : si
   // tous les quotas gratuits sont épuisés, on le dit clairement plutôt que de dépenser de
   // l'argent réel sans accord explicite à chaque fois.
-  function coordonneesProHtml(nom, contexte) {
+  function coordonneesProHtml(nom, societeNom, siren) {
     const r = (state.coordonneesPro || {})[nom];
+    const attrs = ' data-nom="' + esc(nom) + '" data-societe="' + esc(societeNom || '') + '" data-siren="' + esc(siren || '') + '"';
     let bloc;
     if (!r) {
-      bloc = '<button class="se-btn ghost sm" style="margin-top:8px" data-act="chercher-coordonnees-pro" data-nom="' + esc(nom) + '" data-societe="' + esc(contexte || '') + '">' + ICONS.mail + ' Chercher un email/téléphone pro (gratuit)</button>' +
+      bloc = '<button class="se-btn ghost sm" style="margin-top:8px"' + attrs + ' data-act="chercher-coordonnees-pro">' + ICONS.mail + ' Chercher un email/téléphone pro (gratuit)</button>' +
         '<p class="se-hint" style="margin-top:4px">Essaie successivement Societeinfo, Dropcontact puis Datagma (annuaires professionnels légaux) et s’arrête au premier résultat — seuls ceux dont la clé est configurée sont utilisés.</p>';
     } else if (r.chargement) {
       bloc = '<p class="se-hint" style="margin-top:8px">Recherche en cours sur les annuaires professionnels…</p>';
     } else if (r.erreur) {
-      bloc = '<p class="se-muted" style="margin-top:8px">La recherche a échoué (problème réseau). <button class="se-btn ghost sm" data-act="chercher-coordonnees-pro" data-nom="' + esc(nom) + '" data-societe="' + esc(contexte || '') + '" style="margin-left:4px">Réessayer</button></p>';
+      bloc = '<p class="se-muted" style="margin-top:8px">La recherche a échoué (problème réseau). <button class="se-btn ghost sm"' + attrs + ' data-act="chercher-coordonnees-pro" style="margin-left:4px">Réessayer</button></p>';
     } else if (r.trouve) {
       bloc = '<div class="se-kv" style="margin-top:8px">' +
         (r.email ? kv('Email pro', esc(r.email)) : '') +
         (r.telephone ? kv('Téléphone pro', esc(r.telephone)) : '') +
-        '</div><p class="se-hint" style="margin-top:4px">Source : ' + esc(r.source) + ' — coordonnée générique d’annuaire, à vérifier avant tout envoi.</p>';
+        '</div><p class="se-hint" style="margin-top:4px">Source : ' + esc(r.source) + ' — coordonnée d’annuaire (parfois générique à l’entreprise plutôt qu’à la personne), à vérifier avant tout envoi.</p>';
     } else if (r.tousEpuises) {
       bloc = '<p class="se-muted" style="margin-top:8px">Quotas gratuits épuisés sur tous les annuaires configurés (ou aucun n’est configuré). Passer en payant n’est jamais automatique — demandez-le explicitement si vous voulez activer un plan payant sur l’un d’eux.</p>';
     } else {
       bloc = '<p class="se-hint" style="margin-top:8px">Rien trouvé sur les annuaires essayés (' + ((r.etapes || []).map((e) => esc(e.fournisseur)).join(', ') || 'aucun fournisseur configuré') + ').</p>' +
-        '<button class="se-btn ghost sm" style="margin-top:6px" data-act="chercher-coordonnees-pro" data-nom="' + esc(nom) + '" data-societe="' + esc(contexte || '') + '">Réessayer</button>';
+        '<button class="se-btn ghost sm" style="margin-top:6px"' + attrs + ' data-act="chercher-coordonnees-pro">Réessayer</button>';
     }
     return '<div style="margin-top:10px;padding-top:10px;border-top:1px dashed var(--color-stroke-faint)">' + bloc + coordonneesLinkedinHtml(nom) + '</div>';
   }
@@ -2671,7 +2672,7 @@
     return bloc;
   }
 
-  function reseauxSociauxHtml(nom, label, contexte) {
+  function reseauxSociauxHtml(nom, label, contexte, societeNom, siren) {
     if (!nom) return '';
     return '<div class="se-row" style="gap:8px;flex-wrap:wrap;margin-top:10px">' +
       '<a class="se-btn ghost sm" target="_blank" rel="noopener" href="' + esc(lienLinkedIn(nom, contexte)) + '">' + ICONS.out + ' LinkedIn</a>' +
@@ -2679,7 +2680,7 @@
       '</div>' +
       '<p class="se-hint" style="margin-top:6px">Recherche de ' + esc(label || 'ce profil') + ' sur "' + esc(motsClesIdentite(nom, contexte)) + '"' + (contexte ? ' (société/ville ajoutées pour réduire les homonymes)' : '') + ' — vérifiez vous-même qu’il s’agit bien de la bonne personne avant tout contact.</p>' +
       recoupementHtml(nom) +
-      coordonneesProHtml(nom, contexte);
+      coordonneesProHtml(nom, societeNom, siren);
   }
 
   async function chercherRecoupement(nom) {
@@ -2695,12 +2696,12 @@
     commit();
   }
 
-  async function chercherCoordonneesPro(nom, societe) {
+  async function chercherCoordonneesPro(nom, societe, siren) {
     state.coordonneesPro = state.coordonneesPro || {};
     state.coordonneesPro[nom] = { chargement: true };
     render();
     try {
-      const params = new URLSearchParams({ nom: nom, societe: societe || '' });
+      const params = new URLSearchParams({ nom: nom, societe: societe || '', siren: siren || '' });
       const r = await fetch('/api/robot/coordonnees-pro?' + params.toString(), { credentials: 'same-origin' }).then((x) => x.json());
       if (r.ok && r.trouve) state.coordonneesPro[nom] = { trouve: true, email: r.email, telephone: r.telephone, source: r.source };
       else if (r.ok && r.tousEpuises) state.coordonneesPro[nom] = { tousEpuises: true, etapes: r.etapes };
@@ -2916,11 +2917,11 @@
         '<div style="font-size:20px;font-weight:700">' + esc(g.nom) + '</div>' +
         '<div class="se-hint" style="margin-top:4px">SIREN ' + esc(g.siren || '—') + ' · ' + (g.type === 'sci' ? 'SCI' : g.type === 'societe' ? 'Société' : 'Particulier') + '</div>' +
         (nomsDirigeants.length ? '<div class="se-hint" style="margin-top:4px">Dirigeants : ' + nomsDirigeants.map(esc).join(', ') + '</div>' : '') +
-        (!estPersonneMorale ? reseauxSociauxHtml(g.nom, 'ce propriétaire', ville) : '') +
+        (!estPersonneMorale ? reseauxSociauxHtml(g.nom, 'ce propriétaire', ville, '', '') : '') +
       '</div>' +
       (estPersonneMorale && nomsDirigeants.length
         ? '<div class="se-card" style="margin-top:16px"><h3>Identité des dirigeants</h3>' +
-          nomsDirigeants.map((n) => '<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--color-stroke-faint)"><b style="font-size:14px">' + esc(n) + '</b>' + reseauxSociauxHtml(n, 'ce dirigeant', contexteDirigeant) + '</div>').join('') +
+          nomsDirigeants.map((n) => '<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--color-stroke-faint)"><b style="font-size:14px">' + esc(n) + '</b>' + reseauxSociauxHtml(n, 'ce dirigeant', contexteDirigeant, g.nom, g.siren) + '</div>').join('') +
           '</div>'
         : '') +
       '<div class="se-card" style="margin-top:16px"><h3>Patrimoine identifié (' + biens.length + ')</h3>' + biensHtml + '</div>';
@@ -2972,7 +2973,7 @@
       body = '<div class="se-card"><h3>Propriétaire</h3><div class="se-kv" style="margin-top:12px">' +
         kv('Nom', esc(prop.nom || 'Non identifié')) + kv('Type', typeProp) +
         '</div>' +
-        (prop.nom && typeProp === 'Personne physique' ? reseauxSociauxHtml(prop.nom, 'ce propriétaire', b.ville || '') : '') +
+        (prop.nom && typeProp === 'Personne physique' ? reseauxSociauxHtml(prop.nom, 'ce propriétaire', b.ville || '', '', '') : '') +
         (prop.nom ? '' : '<p class="se-muted" style="margin-top:10px">Le propriétaire n’est pas encore identifié. Lancez l’enrichissement pour le rechercher.</p>') + '</div>';
     } else if (tab === 'societe') {
       const nomsDirigeants = (prop.dirigeants || []).map((d) => (typeof d === 'string' ? d : (d.nom || d.name || ''))).filter(Boolean);
@@ -2984,7 +2985,7 @@
         '</div>' +
         (nomsDirigeants.length
           ? '<div class="se-card" style="margin-top:16px"><h3>Cibler les dirigeants sur les réseaux</h3><p class="se-hint">Le ou les gérants de la ' + esc(typeProp) + ', pour les approcher directement.</p>' +
-            nomsDirigeants.map((n) => '<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--color-stroke-faint)"><b style="font-size:14px">' + esc(n) + '</b>' + reseauxSociauxHtml(n, 'ce dirigeant', [prop.nom, b.ville].filter(Boolean).join(' ')) + '</div>').join('') +
+            nomsDirigeants.map((n) => '<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--color-stroke-faint)"><b style="font-size:14px">' + esc(n) + '</b>' + reseauxSociauxHtml(n, 'ce dirigeant', [prop.nom, b.ville].filter(Boolean).join(' '), prop.nom, prop.siren) + '</div>').join('') +
             '</div>'
           : '');
     } else if (tab === 'contacts') {
@@ -5388,7 +5389,7 @@
     'celia-refuser': () => repondreActionCelia(false),
     'robot-valorisation': async (el) => { await estimerValorisation(el.getAttribute('data-id')); },
     'chercher-recoupement': async (el) => { await chercherRecoupement(el.getAttribute('data-nom')); },
-    'chercher-coordonnees-pro': async (el) => { await chercherCoordonneesPro(el.getAttribute('data-nom'), el.getAttribute('data-societe')); },
+    'chercher-coordonnees-pro': async (el) => { await chercherCoordonneesPro(el.getAttribute('data-nom'), el.getAttribute('data-societe'), el.getAttribute('data-siren')); },
     'enrichir-linkedin': async (el) => {
       const input = el.closest('.se-row') && el.closest('.se-row').querySelector('input.li-url-input');
       const url = input ? input.value.trim() : '';

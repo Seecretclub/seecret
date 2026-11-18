@@ -2176,16 +2176,28 @@ app.get('/api/robot/autres-mandats', requireAdmin, async (req, res) => {
 // clairement à l'agent à la place, pour qu'il décide lui-même d'activer un plan payant.
 function fournisseurConfigure(cle) { return !!(process.env[cle] && String(process.env[cle]).trim()); }
 
-async function appelSocieteinfo(nomComplet, societe) {
+// API réelle Societeinfo (https://societeinfo.com/api-doc/?ae=115) : base
+// https://societeinfo.com/app/rest/api/v2/, auth par paramètre "key" (pas "apiKey"),
+// recherche par SIREN (le plus fiable) ou, à défaut, par nom de société. Il n'existe
+// pas d'endpoint fiable par simple nom de personne : dans ce cas on ne tente rien.
+async function appelSocieteinfo(nomComplet, societe, siren) {
   if (!fournisseurConfigure('SOCIETEINFO_API_KEY')) return { statut: 'non_configure' };
+  if (!siren && !societe) return { statut: 'vide' };
   try {
-    const params = new URLSearchParams({ apiKey: process.env.SOCIETEINFO_API_KEY, q: societe || nomComplet });
-    const r = await fetch('https://api.societeinfo.com/v1/search?' + params.toString(), { signal: AbortSignal.timeout(15000) });
+    const base = 'https://societeinfo.com/app/rest/api/v2/contacts.json';
+    const url = siren
+      ? base + '/' + encodeURIComponent(siren) + '?' + new URLSearchParams({ key: process.env.SOCIETEINFO_API_KEY, withemail: 'true' }).toString()
+      : base + '?' + new URLSearchParams({ key: process.env.SOCIETEINFO_API_KEY, name: societe, withemail: 'true' }).toString();
+    const r = await fetch(url, { signal: AbortSignal.timeout(15000) });
     if (r.status === 402 || r.status === 429) return { statut: 'epuise' };
     const data = await r.json().catch(() => ({}));
-    const hit = (data.results || data.companies || [])[0];
-    const contact = (hit && hit.contact) || {};
-    if (contact.email || contact.phone) return { statut: 'trouve', email: contact.email || '', telephone: contact.phone || '', source: 'Societeinfo' };
+    const cible = normaliserNom(nomComplet);
+    const contacts = Array.isArray(data.contacts) ? data.contacts : [];
+    let hit = contacts.find((c) => normaliserNom(((c.firstName || '') + ' ' + (c.lastName || '')).trim()) === cible && String(c.level_code || '').toUpperCase() === 'DIRIGEANT');
+    if (!hit) hit = contacts.find((c) => normaliserNom(((c.firstName || '') + ' ' + (c.lastName || '')).trim()) === cible);
+    if (hit && (hit.email || '')) return { statut: 'trouve', email: hit.email || '', telephone: hit.phone || hit.telephone || '', source: 'Societeinfo (contact nominatif)' };
+    const generique = (data.company && (data.company.generic_email || data.company.generic_phone)) ? data.company : null;
+    if (generique) return { statut: 'trouve', email: generique.generic_email || '', telephone: generique.generic_phone || '', source: 'Societeinfo (générique société, pas nominatif)' };
     return { statut: 'vide' };
   } catch (e) { return { statut: 'erreur' }; }
 }
@@ -2238,13 +2250,14 @@ async function appelDatagma(prenom, nomFamille, societe) {
 app.get('/api/robot/coordonnees-pro', requireAdmin, async (req, res) => {
   const nomComplet = String(req.query.nom || '').trim();
   const societe = String(req.query.societe || '').trim();
+  const siren = String(req.query.siren || '').trim();
   if (!nomComplet) return res.status(400).json({ error: 'Nom requis.' });
   const parts = nomComplet.split(/\s+/);
   const prenom = parts[0] || '';
   const nomFamille = parts.slice(1).join(' ') || parts[0] || '';
 
   const fournisseurs = [
-    { nom: 'Societeinfo', fn: () => appelSocieteinfo(nomComplet, societe) },
+    { nom: 'Societeinfo', fn: () => appelSocieteinfo(nomComplet, societe, siren) },
     { nom: 'Dropcontact', fn: () => appelDropcontact(prenom, nomFamille, societe) },
     { nom: 'Datagma', fn: () => appelDatagma(prenom, nomFamille, societe) }
   ];
