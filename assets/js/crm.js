@@ -1795,6 +1795,19 @@
     return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
   }
 
+  // Les dates DVF sont au format JJ/MM/AAAA, celles de l'ADEME (date_reception_dpe
+  // notamment) au format ISO AAAA-MM-JJ : on essaie les deux plutôt que de se
+  // limiter à un seul format et de perdre silencieusement l'information.
+  function parseDateFlexible(s) {
+    return parseDateFR(s) || (/^\d{4}-\d{2}-\d{2}/.test(String(s || '').trim()) ? new Date(String(s).trim().slice(0, 10)) : null);
+  }
+
+  function joursDepuis(dateStr) {
+    const d = parseDateFlexible(dateStr);
+    if (!d || isNaN(d.getTime())) return null;
+    return Math.floor((Date.now() - d.getTime()) / (24 * 3600 * 1000));
+  }
+
   function dureeDetentionInfo(b) {
     const ventes = (b.dvfMutations || []).filter((m) => /vente/i.test(m.nature || ''));
     if (!ventes.length) return null;
@@ -2362,6 +2375,16 @@
       if (b.dpe === 'F' || b.dpe === 'G') {
         signaux.push({ bien: b, nature: 'Passoire thermique', explication: 'DPE classe ' + b.dpe + ' — interdiction progressive de location', source: 'ADEME', intensite: 'forte' });
       }
+      // Idée reprise d'outils de prospection concurrents (ex. Bluu chez Guy
+      // Hoquet) : un DPE commandé récemment précède souvent un projet de
+      // vente ou de mise en location — ce n'est jamais une certitude, mais
+      // un DPE qui vient d'être réalisé est un moment propice pour approcher
+      // le propriétaire pendant qu'il réfléchit encore à son projet.
+      const joursDpe = joursDepuis(b.dpeDate);
+      if (joursDpe != null && joursDpe <= 180) {
+        const mois = Math.max(1, Math.round(joursDpe / 30));
+        signaux.push({ bien: b, nature: 'DPE récent', explication: 'DPE réalisé il y a environ ' + mois + ' mois — souvent le signe d’un projet de vente ou de location en préparation (indice, pas une certitude)', source: 'ADEME', intensite: joursDpe <= 60 ? 'forte' : 'moyenne' });
+      }
       if (b.dvfMutations && b.dvfMutations.length) {
         const d = b.dvfMutations[0];
         signaux.push({ bien: b, nature: 'Mutation récente', explication: 'Vente du ' + d.date + ' · ' + d.valeur + ' €', source: 'DVF', intensite: 'moyenne' });
@@ -2668,10 +2691,19 @@
         kv('Adresse', esc(b.adresse)) + kv('Ville', esc(b.ville || '—')) + kv('Code postal', esc(b.codePostal || '—')) +
         kv('Type', esc(b.type || '—')) + kv('Surface habitable', b.surface_habitable_m2 != null ? b.surface_habitable_m2 + ' m²' : '—') + kv('Surface réf. DPE', b.surface_reference_dpe_m2 != null ? b.surface_reference_dpe_m2 + ' m²' : '—') + kv('Terrain', b.surface_terrain_m2 != null ? b.surface_terrain_m2 + ' m²' : '—') + kv('Contenance cadastrale', b.contenance_cadastrale_m2 != null ? b.contenance_cadastrale_m2 + ' m²' : '—') +
         kv('Pièces', b.pieces || '—') + kv('Chambres', b.chambres || '—') + kv('DPE', b.dpe || '—') +
+        kv('DPE réalisé le', (b.dpeDate ? dFR(b.dpeDate) : '—') + ((() => { const j = joursDepuis(b.dpeDate); return (j != null && j <= 180) ? ' <span class="se-badge ' + (j <= 60 ? 'open' : 'warn') + '" style="margin-left:6px">Récent — signe possible d’un projet</span>' : ''; })())) +
         kv('Construction', b.anneeConstruction || b.periodeConstruction || '—') +
         kv('Étage', b.etageEstime ? b.etageEstime + ' (estimé depuis l’adresse, non garanti)' : 'Non disponible — l’ADEME ne le fournit pas en donnée structurée') +
         '</div>' +
         (autresAdeme.length ? '<details style="margin-top:10px"><summary style="cursor:pointer;font-size:13px;color:var(--color-taupe)">Toutes les données ADEME disponibles sur ce logement (' + autresAdeme.length + ')</summary><div class="se-kv" style="margin-top:8px">' + autresAdeme.map((x) => kv(esc(x.label), esc(String(x.valeur)))).join('') + '</div></details>' : '') +
+        '</div>' +
+        '<div class="se-card" style="margin-top:16px"><h3>Compléments gratuits externes</h3>' +
+        '<p class="se-hint">L’ADEME et le cadastre public ne donnent ni étage fiable ni porte gauche/droite (ces données viennent du fichier fiscal DGFiP, réservé aux organismes publics ou à l’accès payant). En complément gratuit, façon cadastre.com/bercail.com :</p>' +
+        '<div class="se-row" style="gap:8px;flex-wrap:wrap;margin-top:10px">' +
+          '<a class="se-btn ghost sm" target="_blank" rel="noopener" href="https://immobilier.pappers.fr/">Pappers Immobilier (gratuit)</a>' +
+          '<button class="se-btn ghost sm" data-act="copier-contact" data-value="' + esc(b.adresse || '') + '">Copier l’adresse</button>' +
+        '</div>' +
+        '<p class="se-hint" style="margin-top:6px">Collez l’adresse copiée dans la barre de recherche de Pappers Immobilier pour voir ses données DVF, urbanisme et DPE sur ce bien et son immeuble.</p>' +
         '</div>' +
         '<div class="se-card" style="margin-top:16px"><h3>Valorisation interne</h3>' +
         '<p class="se-hint">Prix au m² estimé à partir des ventes DVF comparables du secteur (même type de bien, surface à ±30 %) — gratuit, sans outil externe.</p>' +
@@ -2690,7 +2722,9 @@
     } else if (tab === 'societe') {
       body = '<div class="se-card"><h3>Société & dirigeants</h3><div class="se-kv" style="margin-top:12px">' +
         kv('SIREN', esc(prop.siren || '—')) + kv('Dirigeants', (prop.dirigeants || []).join(', ') || '—') +
-        '</div>' + (typeProp === 'SCI' || typeProp === 'Société' ? '' : '<p class="se-muted" style="margin-top:10px">Ce bien est détenu par une personne physique (pas de société).</p>') + '</div>';
+        '</div>' +
+        (prop.siren ? '<div style="margin-top:12px"><a class="se-btn ghost sm" target="_blank" rel="noopener" href="https://www.pappers.fr/entreprise/' + encodeURIComponent(prop.siren) + '">Vérifier sur Pappers (gratuit)</a><p class="se-hint" style="margin-top:6px">Fiche légale publique et gratuite de la société : dirigeants, immatriculation, comptes publiés s’il y en a.</p></div>' : '') +
+        (typeProp === 'SCI' || typeProp === 'Société' ? '' : '<p class="se-muted" style="margin-top:10px">Ce bien est détenu par une personne physique (pas de société).</p>') + '</div>';
     } else if (tab === 'contacts') {
       body = '<div class="se-card"><h3>Coordonnées & vérifications</h3>' +
         ((b.contacts || []).length
@@ -2741,6 +2775,7 @@
         '<div class="se-row" style="gap:8px;flex-wrap:wrap;margin-top:10px">' +
 
           '<button class="se-btn" data-act="robot-ajouter" data-json="' + esc(JSON.stringify({ nom: prop.nom || '', prenom: '', email: ((b.contacts || []).find((c) => c.type === 'email') || {}).valeur || '', tel: ((b.contacts || []).find((c) => c.type === 'tel') || {}).valeur || '', type: prop.type || 'personne', siren: prop.siren || '', dirigeants: prop.dirigeants || [], adresseBien: b.adresse, ville: b.ville || '', parcelle: b.parcelle || '', dpe: b.dpe || '' })) + '">Ajouter comme prospect vendeur</button>' +
+          '<button class="se-btn ghost" data-act="prospection-message" data-id="' + b.id + '">Générer un message de prospection</button>' +
           '<button class="se-btn ghost" data-act="rechercher-telephones" data-id="' + b.id + '">Rechercher les téléphones (Exa)</button>' +
           '<button class="se-btn ghost" data-act="robot-favori" data-id="' + b.id + '">' + (b.favori ? '★ Favori' : '☆ Favori') + '</button>' +
           '<button class="se-btn ghost" data-act="robot-tache" data-id="' + b.id + '">Créer une tâche</button>' +
@@ -3194,6 +3229,60 @@
 
   function whatsappMessage(c) {
     return 'Bonjour ' + (c.prenom || '') + ',\n\nJe me permets de vous contacter au sujet de votre bien situé ' + (c.adresseBien || c.ville || 'dans votre secteur') + '.\n\nJe souhaiterais échanger avec vous afin de savoir si vous envisagez une évolution de votre situation immobilière.\n\nSeriez-vous disponible pour un court échange ?\n\nBien cordialement,\nGabriel Taieb\nSeecret';
+  }
+
+  // Signaux vendeurs détectés pour un seul bien (sous-ensemble de signauxVendeurs(),
+  // filtré) — réutilisé pour construire un message de prospection qui s'appuie sur
+  // de vraies données plutôt que sur une formule générique.
+  function signauxPourBien(b) {
+    return signauxVendeurs().filter((s) => s.bien && s.bien.id === b.id);
+  }
+
+  // Synthèse + argumentaire de prospection générés localement à partir des
+  // données déjà collectées (DPE, signaux, propriétaire) — sans appel à une IA
+  // externe, pour ne pas consommer le quota Gemini réservé à la dictée vocale.
+  // Toujours présenté comme un brouillon à relire et personnaliser, jamais un
+  // message à envoyer tel quel.
+  function messageProspectionBien(b) {
+    const prop = b.proprietaire || {};
+    const civilite = prop.type === 'personne' ? '' : '';
+    const nomDest = prop.nom ? prop.nom : (prop.type === 'sci' ? 'Madame, Monsieur' : 'Madame, Monsieur');
+    const signaux = signauxPourBien(b);
+    const argumentaire = [];
+    if (b.dpe === 'F' || b.dpe === 'G') {
+      argumentaire.push('votre bien est actuellement classé DPE ' + b.dpe + ', ce qui limite progressivement sa mise en location — un sujet que beaucoup de propriétaires anticipent en ce moment');
+    }
+    if (signaux.some((s) => s.nature === 'DPE récent')) {
+      argumentaire.push('un diagnostic énergétique a été réalisé récemment sur ce bien, ce qui correspond souvent à un projet en réflexion (vente, location, ou simple mise à jour)');
+    }
+    if (signaux.some((s) => s.nature === 'Détention longue')) {
+      argumentaire.push('ce bien est détenu depuis plusieurs années, une situation où beaucoup de propriétaires sont ouverts à un échange sur sa valorisation actuelle');
+    }
+    if (signaux.some((s) => /Permis|Extension|Surélévation|Réhabilitation/.test(s.nature))) {
+      argumentaire.push('une démarche d’urbanisme récente a été identifiée sur ce bien ou à proximité');
+    }
+    const corps = argumentaire.length
+      ? 'Je me permets de vous contacter car ' + argumentaire.join(', et par ailleurs ') + '.'
+      : 'Je me permets de vous contacter au sujet de votre bien situé ' + (b.adresse || 'dans votre secteur') + '.';
+    return 'Bonjour ' + nomDest + ',\n\n' + corps +
+      '\n\nSeecret accompagne régulièrement des propriétaires dans ce type de projet (vente, estimation, mise en conformité énergétique) et je serais heureux d’échanger avec vous, sans engagement, pour faire un point sur votre bien.' +
+      '\n\nSeriez-vous disponible pour un court échange dans les prochains jours ?' +
+      '\n\nBien cordialement,\nGabriel Taieb\nSeecret';
+  }
+
+  function prospectionMessageModal(b) {
+    const tel = String(((b.contacts || []).find((c) => c.type === 'tel') || {}).valeur || '').replace(/[^0-9]/g, '');
+    const signaux = signauxPourBien(b);
+    return '<h3>Message de prospection — brouillon</h3>' +
+      '<p class="se-muted">' + esc(b.adresse || 'Bien') + (b.dpe ? ' · DPE ' + esc(b.dpe) : '') + '</p>' +
+      (signaux.length ? '<p class="se-hint" style="margin-top:6px">Généré à partir de ' + signaux.length + ' signal(aux) détecté(s) : ' + signaux.map((s) => esc(s.nature)).join(', ') + '.</p>' : '<p class="se-hint" style="margin-top:6px">Aucun signal particulier détecté : message générique.</p>') +
+      '<div class="se-field" style="margin-top:12px"><label>Message (à relire et personnaliser avant tout envoi)</label><textarea class="se-textarea" id="prospection-msg" style="min-height:220px">' + esc(messageProspectionBien(b)) + '</textarea></div>' +
+      '<div class="se-modal-foot">' +
+        '<button class="se-btn ghost" type="button" data-act="modal-close">Fermer</button>' +
+        '<button class="se-btn" data-act="prospection-copier">Copier le message</button>' +
+        (tel ? '<a class="se-btn ghost" target="_blank" rel="noopener" href="https://wa.me/' + tel + '">Ouvrir WhatsApp</a>' : '') +
+      '</div>' +
+      '<p class="se-hint" style="margin-top:10px">Un brouillon n’est jamais envoyé automatiquement : c’est toujours vous qui décidez du canal (email, SMS, WhatsApp, courrier) et du moment.</p>';
   }
 
   /* ----------------------- Réseau (relance de masse) ---------------------- */
@@ -4845,6 +4934,24 @@
       const texte = msg ? msg.value : '';
       window.open('https://wa.me/' + tel + '?text=' + encodeURIComponent(texte), '_blank');
       toast('WhatsApp ouvert. Pensez à consigner le contact après échange.', 'info');
+    },
+    'prospection-message': (el) => {
+      const b = robotBien(el.getAttribute('data-id'));
+      if (!b) return;
+      modal = prospectionMessageModal(b);
+      render();
+    },
+    'prospection-copier': async () => {
+      const ta = document.getElementById('prospection-msg');
+      const texte = ta ? ta.value : '';
+      if (!texte) return;
+      try {
+        await navigator.clipboard.writeText(texte);
+        toast('Message copié.', 'ok');
+      } catch (e) {
+        ta.select();
+        try { document.execCommand('copy'); toast('Message copié.', 'ok'); } catch (e2) { toast('Copie impossible — sélectionnez le texte manuellement.', 'warn'); }
+      }
     },
     'reseau-envoyer': (el, id) => {
       const c = client(id);
