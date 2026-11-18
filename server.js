@@ -1283,7 +1283,8 @@ async function rechercherAnnonces(bien) {
 
   const liens = [];
   const ajouter = (obj) => {
-    const lien = obj && (obj.url || obj.link || obj.permalinkUrl || obj.displayedUrl || null);
+    if (!obj || !correspondAuBien(bien, obj)) return;
+    const lien = lienDe(obj) || obj.displayedUrl || null;
     if (lien && liens.indexOf(lien) === -1) liens.push(lien);
   };
   items.forEach((item) => {
