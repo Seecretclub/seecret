@@ -1593,7 +1593,8 @@ app.patch('/api/leads/:id', requireAdmin, (req, res) => {
   if (role === 'superadmin' && typeof body.agentId !== 'undefined') {
     lead.agentId = body.agentId ? String(body.agentId) : null;
   }
-  ['prenom', 'nom', 'email', 'tel', 'ville', 'typeBien', 'source', 'notes', 'financement'].forEach((k) => { if (typeof body[k] === 'string') lead[k] = body[k]; });
+  ['prenom', 'nom', 'email', 'tel', 'ville', 'typeBien', 'source', 'notes', 'financement', 'natureLead', 'civilite', 'adresse', 'raisonSociale', 'siren', 'representant'].forEach((k) => { if (typeof body[k] === 'string') lead[k] = body[k]; });
+  // (siren inclus ci-dessus : utile pour un lead société retrouvé ensuite dans les registres publics)
   ['budgetMin', 'budgetMax', 'piecesMin', 'surfaceMin', 'surfaceMax', 'apport'].forEach((k) => { if (body[k] !== undefined) lead[k] = Math.max(0, Number(body[k]) || 0); });
   if (Array.isArray(body.quartiers)) lead.quartiers = body.quartiers.map(String);
   if (typeof body.courtier === 'boolean') lead.courtier = body.courtier;
@@ -1652,8 +1653,12 @@ app.post('/api/recherches', requireAdmin, (req, res) => {
   const rec = {
     id: uid('r'), clientId: clientId, titre: String(body.titre || 'Recherche').trim(),
     type: String(body.type || ''), types: Array.isArray(body.types) ? body.types.map(String) : [],
-    prixMax: Math.max(0, Number(body.prixMax) || 0), piecesMin: Math.max(0, Number(body.piecesMin) || 0),
+    prixMin: Math.max(0, Number(body.prixMin) || 0), prixMax: Math.max(0, Number(body.prixMax) || 0),
+    piecesMin: Math.max(0, Number(body.piecesMin) || 0), chambresMin: Math.max(0, Number(body.chambresMin) || 0),
+    sdbMin: Math.max(0, Number(body.sdbMin) || 0),
     surfaceMin: Math.max(0, Number(body.surfaceMin) || 0), surfaceMax: Math.max(0, Number(body.surfaceMax) || 0),
+    etageMin: Math.max(0, Number(body.etageMin) || 0), etageMax: Math.max(0, Number(body.etageMax) || 0),
+    dernierEtageOk: !!body.dernierEtageOk,
     dpe: String(body.dpe || ''), delai: String(body.delai || ''), financement: String(body.financement || ''),
     apport: Math.max(0, Number(body.apport) || 0), courtier: !!body.courtier, bienAVendre: !!body.bienAVendre,
     quartiers: Array.isArray(body.quartiers) ? body.quartiers.map(String) : [],
@@ -1676,11 +1681,12 @@ app.patch('/api/recherches/:id', requireAdmin, (req, res) => {
   }
   const body = req.body || {};
   ['titre', 'type', 'delai', 'financement', 'dpe'].forEach((k) => { if (typeof body[k] === 'string') rec[k] = body[k]; });
-  ['prixMax', 'piecesMin', 'surfaceMin', 'surfaceMax', 'apport'].forEach((k) => { if (body[k] !== undefined) rec[k] = Math.max(0, Number(body[k]) || 0); });
+  ['prixMin', 'prixMax', 'piecesMin', 'chambresMin', 'sdbMin', 'surfaceMin', 'surfaceMax', 'etageMin', 'etageMax', 'apport'].forEach((k) => { if (body[k] !== undefined) rec[k] = Math.max(0, Number(body[k]) || 0); });
   if (Array.isArray(body.quartiers)) rec.quartiers = body.quartiers.map(String);
   if (Array.isArray(body.types)) rec.types = body.types.map(String);
   if (typeof body.courtier === 'boolean') rec.courtier = body.courtier;
   if (typeof body.bienAVendre === 'boolean') rec.bienAVendre = body.bienAVendre;
+  if (typeof body.dernierEtageOk === 'boolean') rec.dernierEtageOk = body.dernierEtageOk;
   writeDb(db);
   res.json({ ok: true, recherche: rec });
 });
@@ -2671,7 +2677,15 @@ app.post('/api/leads', requireAdmin, (req, res) => {
     financement: String(body.financement || ''), apport: Math.max(0, Number(body.apport) || 0),
     courtier: !!body.courtier, bienAVendre: !!body.bienAVendre, typeBien: String(body.typeBien || ''),
     notes: String(body.notes || ''), adresseBien: adresseBien, parcelle: String(body.parcelle || ''),
-    dpe: String(body.dpe || ''), creePar: req.lead.id, agentId: agentId, cree: nowISO()
+    dpe: String(body.dpe || ''),
+    // Distinct du `type` ci-dessus (réservé à personne/sci/societe côté Radar,
+    // sur le propriétaire d'un bien) : `natureLead` dit si CE lead du CRM est
+    // une personne physique ou une société (SCI, SARL immobilière…), avec son
+    // représentant/dirigeant si c'est le cas.
+    natureLead: String(body.natureLead || 'personne'), civilite: String(body.civilite || ''),
+    adresse: String(body.adresse || ''), raisonSociale: String(body.raisonSociale || ''),
+    representant: String(body.representant || ''),
+    creePar: req.lead.id, agentId: agentId, cree: nowISO()
   };
   db.leads.push(lead);
   writeDb(db);

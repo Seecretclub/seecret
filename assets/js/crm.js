@@ -312,25 +312,52 @@
 
   /* ------------------------------- scoring -------------------------------- */
 
+  // Étage comparable d'un bien : seules les biens du Radar ont un étage estimé
+  // numérique (etageEstime) — un bien du portefeuille saisi à la main n'a
+  // qu'un étage en texte libre, pas fiable à comparer. Mieux vaut ignorer le
+  // critère étage que de le faire échouer sur une donnée qu'on n'a pas.
+  const etageComparable = (b) => (typeof b.etageEstime === 'number' ? b.etageEstime : null);
+
   function scoreBien(b, c) {
     let s = 0;
-    // Secteur 30%
-    if (c.quartiers && c.quartiers.length) { if (c.quartiers.indexOf(b.quartier) > -1) s += 30; }
-    // Budget 30%
+    // Secteur 25%
+    if (c.quartiers && c.quartiers.length) { if (c.quartiers.indexOf(b.quartier) > -1) s += 25; }
+    // Budget 25%
     const max = c.prixMax || c.budgetMax;
-    if (max) { if (b.prix <= max * 1.05) s += 30; else if (b.prix <= max * 1.2) s += 15; }
-    // Surface 20%
-    if (c.surfaceMin) { if (b.surface >= c.surfaceMin) s += 20; else if (b.surface >= c.surfaceMin * 0.9) s += 10; }
-    // Pièces 20%
-    if (c.piecesMin) { if (b.pieces >= c.piecesMin) s += 20; }
+    if (max) { if (b.prix <= max * 1.05) s += 25; else if (b.prix <= max * 1.2) s += 12; }
+    // Surface 15%
+    if (c.surfaceMin) { if (b.surface >= c.surfaceMin) s += 15; else if (b.surface >= c.surfaceMin * 0.9) s += 7; }
+    // Pièces 15%
+    if (c.piecesMin) { if (b.pieces >= c.piecesMin) s += 15; }
+    // Type(s) 10%
+    const typesVoulus = (c.types && c.types.length) ? c.types : (c.type ? [c.type] : []);
+    if (typesVoulus.length) { if (typesVoulus.indexOf(b.type) > -1) s += 10; } else s += 10;
+    // Chambres / salles de bain / étage 10% au total
+    if (c.chambresMin) { if ((b.chambres || 0) >= c.chambresMin) s += 4; } else s += 4;
+    if (c.sdbMin) { if ((b.sdb || 0) >= c.sdbMin) s += 3; } else s += 3;
+    const etage = etageComparable(b);
+    if (c.etageMin || c.etageMax) {
+      if (etage == null) { /* donnée inconnue : ni bonus ni pénalité */ }
+      else if ((!c.etageMin || etage >= c.etageMin) && (!c.etageMax || etage <= c.etageMax)) s += 3;
+    } else s += 3;
     return Math.round(s);
   }
 
   function correspond(b, c) {
     const max = c.prixMax || c.budgetMax;
     if (max && b.prix > max * 1.2) return false;
+    if (c.surfaceMax && b.surface > c.surfaceMax * 1.1) return false;
     if (c.surfaceMin && b.surface < c.surfaceMin * 0.9) return false;
     if (b.quartier && c.quartiers && c.quartiers.length && c.quartiers.indexOf(b.quartier) === -1) return false;
+    const typesVoulus = (c.types && c.types.length) ? c.types : (c.type ? [c.type] : []);
+    if (b.type && typesVoulus.length && typesVoulus.indexOf(b.type) === -1) return false;
+    if (c.chambresMin && (b.chambres || 0) < c.chambresMin) return false;
+    if (c.sdbMin && (b.sdb || 0) < c.sdbMin) return false;
+    const etage = etageComparable(b);
+    if (etage != null) {
+      if (c.etageMin && etage < c.etageMin) return false;
+      if (c.etageMax && etage > c.etageMax) return false;
+    }
     return true;
   }
 
@@ -692,8 +719,19 @@
       if (ib > -1 && ir > -1 && ib <= ir) s += 5;
       else inconnus.push('DPE');
     } else { inconnus.push('DPE'); }
+    // Étage 5 — uniquement comparable quand l'étage a pu être estimé depuis
+    // l'adresse (etageEstime) ; les données DPE n'ont ni chambres ni salles
+    // de bain, ce critère ne peut donc pas être confronté ici (contrairement
+    // au portefeuille, cf. scoreBien).
+    if (rec.etageMin || rec.etageMax) {
+      tot += 5;
+      if (typeof rb.etageEstime === 'number' &&
+          (!rec.etageMin || rb.etageEstime >= rec.etageMin) &&
+          (!rec.etageMax || rb.etageEstime <= rec.etageMax)) s += 5;
+      else inconnus.push('Étage');
+    } else { inconnus.push('Étage'); }
     const score = tot ? Math.round(s / tot * 100) : 0;
-    const couverture = Math.round((1 - inconnus.length / 6) * 100);
+    const couverture = Math.round((1 - inconnus.length / 7) * 100);
     return { score, couverture, inconnus };
   }
 
@@ -3774,7 +3812,13 @@
         list.map((c) => '<tr>' +
           '<td><a href="#/client/' + c.id + '" style="color:inherit;text-decoration:none"><b style="font-weight:500">' + esc(nomClient(c)) + '</b> ' + badgeDemo(c) + '<div class="se-hint">' + esc(c.email) + '</div></a></td>' +
           '<td>' + (c.type === 'acquereur' ? 'Acquéreur' : c.type === 'vendeur' ? 'Vendeur' : 'Les deux') + '</td>' +
-          '<td>' + (c.type === 'vendeur' ? '<span class="se-hint">propriétaire</span>' : euro(c.budgetMin) + ' – ' + euro(c.budgetMax) + '<div class="se-hint">' + c.piecesMin + '+ pièces · ' + c.surfaceMin + '+ m² · ' + (c.quartiers || []).map(qLabel).join(', ') + '</div>') + '</td>' +
+          '<td>' + (() => {
+            if (c.type === 'vendeur') return '<span class="se-hint">propriétaire</span>';
+            const recs = ((state.recherchesServeur || []).concat(state.recherches)).filter((x) => x.clientId === c.id);
+            if (!recs.length) return '<span class="se-hint">Aucune recherche</span>';
+            const r0 = recs[0];
+            return (r0.prixMax ? '≤ ' + euro(r0.prixMax) : '—') + '<div class="se-hint">' + (r0.piecesMin ? r0.piecesMin + '+ pièces · ' : '') + (r0.quartiers || []).map(qLabel).join(', ') + (recs.length > 1 ? ' · +' + (recs.length - 1) + ' autre(s)' : '') + '</div>';
+          })() + '</td>' +
           '<td>' + badgeClient(c.statut) + '</td>' +
           '<td>' + (badgeTemperature(c) || '<span class="se-hint">—</span>') + '</td>' +
           '<td class="se-hint">' + esc(c.agent || '') + '</td>' +
@@ -3830,13 +3874,16 @@
 
       '<div class="se-split">' +
         '<div class="se-grid" style="gap:18px">' +
-          '<div class="se-card"><h3>Coordonnées</h3><div class="se-kv" style="margin-top:12px">' +
-            kv('Email', esc(c.email)) + kv('Téléphone', esc(c.tel)) + kv('Prénom', esc(c.prenom || '—')) +
+          '<div class="se-card"><h3>Identité</h3><div class="se-kv" style="margin-top:12px">' +
+            kv('Email', esc(c.email)) + kv('Téléphone', esc(c.tel)) +
+            kv('Civilité', c.civilite === 'homme' ? 'Homme' : c.civilite === 'femme' ? 'Femme' : '—') +
+            kv('Adresse', esc(c.adresse || '—')) +
+            kv('Nature', c.natureLead === 'societe' ? 'Société' : 'Personne physique') +
+            (c.natureLead === 'societe' ? (
+              kv('Raison sociale', esc(c.raisonSociale || '—')) + kv('SIREN', esc(c.siren || '—')) + kv('Représentant', esc(c.representant || '—'))
+            ) : '') +
             kv('Financement', esc(c.financement || '—')) + kv('Apport', c.apport ? euro(c.apport) : '—') + kv('Courtier', c.courtier ? 'Oui' : 'Non') +
             kv('Source', esc(c.source)) + kv('Agent', esc(c.agent || '—')) +
-            kv('Budget', c.type === 'vendeur' ? '—' : euro(c.budgetMin) + ' – ' + euro(c.budgetMax)) +
-            kv('Secteurs', (c.quartiers || []).map(qLabel).join(', ') || '—') +
-            kv('Critères', c.type === 'vendeur' ? '—' : (c.piecesMin || 0) + '+ pièces · ' + (c.surfaceMin || 0) + '+ m² · ' + (c.typeBien || 'tout')) +
             kv('Créé le', dFR(c.cree)) +
           '</div>' + (c.notes ? '<div class="se-note" style="margin-top:14px">' + esc(c.notes) + '</div>' : '') +
           (state.moi && state.moi.role === 'superadmin' && c.serverId ? (
@@ -4091,8 +4138,11 @@
           '</div>' +
         '</div>' +
         '<div class="se-card"><h3>Critères</h3><div class="se-kv" style="margin-top:12px">' +
-          kv('Budget max', euro(rec.prixMax)) + kv('Type', esc(rec.type || 'tout')) +
-          kv('Pièces min', rec.piecesMin || '—') + kv('Surface', (rec.surfaceMin ? rec.surfaceMin + ' m² min' : '—') + (rec.surfaceMax ? ' · ' + rec.surfaceMax + ' m² max' : '')) +
+          kv('Budget', (rec.prixMin ? euro(rec.prixMin) + ' – ' : '≤ ') + euro(rec.prixMax)) +
+          kv('Type(s)', (rec.types && rec.types.length ? rec.types.join(', ') : (rec.type || 'tout'))) +
+          kv('Pièces min', rec.piecesMin || '—') + kv('Chambres min', rec.chambresMin || '—') + kv('Salles de bain min', rec.sdbMin || '—') +
+          kv('Surface', (rec.surfaceMin ? rec.surfaceMin + ' m² min' : '—') + (rec.surfaceMax ? ' · ' + rec.surfaceMax + ' m² max' : '')) +
+          kv('Étage', (rec.etageMin ? rec.etageMin + ' min' : '—') + (rec.etageMax ? ' · ' + rec.etageMax + ' max' : '') + (rec.dernierEtageOk ? ' · dernier étage OK' : '')) +
           kv('DPE', rec.dpe ? rec.dpe + ' ou mieux' : 'Indifférent') +
           kv('Délai', esc(rec.delai || '—')) +
           kv('Secteurs', secteurs || '—') +
@@ -4663,30 +4713,31 @@
   }
 
   function clientModal(c) {
-    const v = c || { type: 'acquereur', prenom: '', nom: '', email: '', tel: '', statut: 'prospect', source: 'Candidature', budgetMin: '', budgetMax: '', quartiers: [], piecesMin: '', surfaceMin: '', typeBien: '', notes: '', agent: state.agent.prenom + ' ' + state.agent.nom };
-    return '<h3>' + (c ? 'Modifier le client' : 'Nouveau client') + '</h3><p class="se-muted">Les critères servent au matching.</p>' +
+    const v = c || { type: 'acquereur', natureLead: 'personne', civilite: '', prenom: '', nom: '', email: '', tel: '', adresse: '', raisonSociale: '', siren: '', representant: '', statut: 'prospect', source: 'Candidature', notes: '', agent: state.agent.prenom + ' ' + state.agent.nom };
+    return '<h3>' + (c ? 'Modifier le lead' : 'Nouveau lead') + '</h3><p class="se-muted">L’identité du lead. Ce qu’il recherche se renseigne à part, dans sa (ou ses) recherche(s).</p>' +
       '<form data-form="client" data-id="' + (c ? c.id : '') + '"><div class="se-form-grid">' +
         field('Type', 'type', v.type, { type: 'select', options: [{ value: 'acquereur', label: 'Acquéreur' }, { value: 'vendeur', label: 'Vendeur' }, { value: 'mixte', label: 'Acheteur & vendeur' }] }) +
         field('Statut', 'statut', v.statut, { type: 'select', options: Object.keys(ST_CLIENT).map((k) => ({ value: k, label: ST_CLIENT[k].label })) }) +
+        field('Nature du lead', 'natureLead', v.natureLead || 'personne', { type: 'select', options: [{ value: 'personne', label: 'Personne physique' }, { value: 'societe', label: 'Société (SCI, SARL immobilière…)' }] }) +
+        field('Civilité', 'civilite', v.civilite || '', { type: 'select', options: [{ value: '', label: 'Non précisée' }, { value: 'homme', label: 'Homme' }, { value: 'femme', label: 'Femme' }] }) +
         field('Prénom', 'prenom', v.prenom) + field('Nom', 'nom', v.nom) +
         field('Email', 'email', v.email, { type: 'email' }) + field('Téléphone', 'tel', v.tel) +
-        field('Budget min (€)', 'budgetMin', v.budgetMin, { type: 'number' }) +
-        field('Budget max (€)', 'budgetMax', v.budgetMax, { type: 'number' }) +
-        field('Pièces min', 'piecesMin', v.piecesMin, { type: 'number' }) +
-        field('Surface min (m²)', 'surfaceMin', v.surfaceMin, { type: 'number' }) +
-        field('Type de bien', 'typeBien', v.typeBien, { type: 'select', options: [{ value: '', label: 'Indifférent' }].concat(TYPES.map((t) => ({ value: t, label: t }))) }) +
+        field('Adresse', 'adresse', v.adresse || '', { full: true, placeholder: '12 rue de la Paix, 75002 Paris' }) +
+        field('Raison sociale (si société)', 'raisonSociale', v.raisonSociale || '', { placeholder: 'SCI Les Tilleuls' }) +
+        field('SIREN (si société)', 'siren', v.siren || '', { placeholder: '552032534' }) +
+        field('Représentant / dirigeant (si société)', 'representant', v.representant || '', { full: true, placeholder: 'Nom du gérant qui agit au nom de la société sur Seecret' }) +
         field('Source', 'source', v.source, { type: 'select', options: ['Candidature', 'Site web', 'Instagram', 'Recommandation', 'Bouche à oreille', 'Portail'].map((s) => ({ value: s, label: s })) }) +
-        '<div class="se-field full"><label>Secteurs recherchés</label><div class="se-chips">' +
-          QUARTIERS.map((q) => '<button type="button" class="se-chip" data-act="q-toggle" data-id="' + q.id + '" aria-pressed="' + ((v.quartiers || []).indexOf(q.id) > -1) + '">' + q.label + '</button>').join('') +
-        '</div></div>' +
-        field('Notes', 'notes', v.notes, { type: 'textarea', full: true, placeholder: 'Ce qu’il faut retenir de ce client…' }) +
-      '</div><div class="se-modal-foot"><button class="se-btn ghost" type="button" data-act="modal-close">Annuler</button><button class="se-btn" type="submit">' + (c ? 'Enregistrer' : 'Créer le client') + '</button></div></form>';
+        field('Notes', 'notes', v.notes, { type: 'textarea', full: true, placeholder: 'Ce qu’il faut retenir de ce lead…' }) +
+      '</div><div class="se-modal-foot"><button class="se-btn ghost" type="button" data-act="modal-close">Annuler</button><button class="se-btn" type="submit">' + (c ? 'Enregistrer' : 'Créer le lead') + '</button></div></form>';
   }
 
-  function bienModal(b) {
-    const v = b || { ref: 'SC-' + Math.floor(1000 + Math.random() * 8999), titre: '', adresse: '', type: 'Appartement', quartier: 'p11', surface: '', pieces: '', chambres: '', sdb: '', etage: '', dpe: 'D', prix: '', statut: 'mandat', proprio: '', description: '', atouts: [], photos: [] };
-    return '<h3>' + (b ? 'Modifier le bien' : 'Nouveau bien') + '</h3><p class="se-muted">Référence, mandat et photos.</p>' +
+  function bienModal(b, proprietaireId) {
+    const v = b || { ref: 'SC-' + Math.floor(1000 + Math.random() * 8999), titre: '', adresse: '', type: 'Appartement', quartier: 'p11', surface: '', pieces: '', chambres: '', sdb: '', etage: '', dpe: 'D', prix: '', statut: 'mandat', proprio: proprietaireId || '', description: '', atouts: [], photos: [] };
+    return '<h3>' + (b ? 'Modifier le bien' : 'Nouveau bien') + '</h3><p class="se-muted">Référence, mandat et photos. Le propriétaire (lead) est obligatoire — c’est lui qui porte le mandat.</p>' +
       '<form data-form="bien" data-id="' + (b ? b.id : '') + '"><div class="se-form-grid">' +
+        (state.clients.length
+          ? field('Propriétaire', 'proprio', v.proprio || (b && b.proprietaireId) || '', { type: 'select', options: state.clients.map((c) => ({ value: c.id, label: nomClient(c) })) })
+          : '<div class="se-field full"><label>Propriétaire</label><p class="se-muted">Aucun lead enregistré. <button type="button" class="se-btn ghost sm" data-act="client-nouveau">' + ICONS.plus + ' Créer le propriétaire</button></p></div>') +
         field('Référence', 'ref', v.ref) +
         field('Adresse', 'adresse', v.adresse, { full: true, placeholder: '12 rue de la Verrerie, Paris 4e' }) +
         field('Type', 'type', v.type, { type: 'select', options: TYPES.map((t) => ({ value: t, label: t })) }) +
@@ -4699,26 +4750,66 @@
         field('Salles de bain', 'sdb', v.sdb, { type: 'number' }) +
         field('Étage', 'etage', v.etage) + field('DPE', 'dpe', v.dpe, { type: 'select', options: ['A', 'B', 'C', 'D', 'E', 'F', 'G'].map((d) => ({ value: d, label: d })) }) +
         field('Prix (€)', 'prix', v.prix, { type: 'number' }) +
-        field('Propriétaire', 'proprio', v.proprio || (b && b.proprietaireId) || '', { type: 'select', options: [{ value: '', label: '— aucun —' }].concat(state.clients.map((c) => ({ value: c.id, label: nomClient(c) }))) }) +
         field('Description', 'description', v.description, { type: 'textarea', full: true }) +
       '</div><div class="se-modal-foot"><button class="se-btn ghost" type="button" data-act="modal-close">Annuler</button><button class="se-btn" type="submit">' + (b ? 'Enregistrer' : 'Créer le bien') + '</button></div></form>';
   }
 
   function rechercheModal(r, clientId) {
-    const v = r || { clientId: clientId || (state.clients[0] && state.clients[0].id), titre: '', type: 'Appartement', prixMax: 2000000, piecesMin: 3, surfaceMin: 80, dpe: '', quartiers: [], alertes: true };
+    const v = r || {
+      clientId: clientId || (state.clients.filter((c) => c.type !== 'vendeur')[0] && state.clients.filter((c) => c.type !== 'vendeur')[0].id),
+      titre: '', types: [], prixMin: 0, prixMax: 2000000, piecesMin: 3, chambresMin: 0, sdbMin: 0, surfaceMin: 80, surfaceMax: 0,
+      etageMin: 0, etageMax: 0, dernierEtageOk: false, dpe: '', quartiers: [], alertes: true
+    };
+    const typesSelectionnes = (v.types && v.types.length) ? v.types : (v.type ? [v.type] : []);
+    const chercheurs = state.clients.filter((c) => c.type !== 'vendeur');
     return '<h3>' + (r ? 'Modifier la recherche' : 'Nouvelle recherche') + '</h3><p class="se-muted">Le CRM confrontera ces critères au portefeuille et aux données publiques (DPE ADEME).</p>' +
       '<form data-form="recherche" data-id="' + (r ? r.id : '') + '"><div class="se-form-grid">' +
-        field('Client', 'clientId', v.clientId, { type: 'select', options: state.clients.filter((c) => c.type !== 'vendeur').map((c) => ({ value: c.id, label: nomClient(c) })) }) +
-        field('Type', 'type', v.type, { type: 'select', options: [{ value: '', label: 'Indifférent' }].concat(TYPES.map((t) => ({ value: t, label: t }))) }) +
+        (chercheurs.length
+          ? field('Lead', 'clientId', v.clientId, { type: 'select', options: chercheurs.map((c) => ({ value: c.id, label: nomClient(c) })) })
+          : '<div class="se-field full"><label>Lead</label><p class="se-muted">Aucun lead acquéreur/mixte enregistré. <button type="button" class="se-btn ghost sm" data-act="client-nouveau">' + ICONS.plus + ' Créer le lead</button></p></div>') +
+        '<div class="se-field full"><div class="se-row" style="justify-content:flex-end"><button type="button" class="se-btn ghost sm" data-act="client-nouveau">' + ICONS.plus + ' Nouveau lead</button></div></div>' +
         field('Intitulé', 'titre', v.titre, { full: true, placeholder: 'Trois pièces et plus, rive gauche' }) +
+        '<div class="se-field full"><label>Type(s) de bien</label><div class="se-chips">' +
+          TYPES.map((t) => '<button type="button" class="se-chip" data-act="q-toggle" data-group="types" data-id="' + esc(t) + '" aria-pressed="' + (typesSelectionnes.indexOf(t) > -1) + '">' + esc(t) + '</button>').join('') +
+        '</div><p class="se-hint">Aucune case cochée = tous types acceptés.</p></div>' +
+        field('Budget min (€)', 'prixMin', v.prixMin || '', { type: 'number' }) +
         field('Budget max (€)', 'prixMax', v.prixMax, { type: 'number' }) +
         field('Pièces min', 'piecesMin', v.piecesMin, { type: 'number' }) +
+        field('Chambres min', 'chambresMin', v.chambresMin || '', { type: 'number' }) +
+        field('Salles de bain min', 'sdbMin', v.sdbMin || '', { type: 'number' }) +
         field('Surface min (m²)', 'surfaceMin', v.surfaceMin, { type: 'number' }) +
+        field('Surface max (m²)', 'surfaceMax', v.surfaceMax || '', { type: 'number' }) +
+        field('Étage min', 'etageMin', v.etageMin || '', { type: 'number' }) +
+        field('Étage max', 'etageMax', v.etageMax || '', { type: 'number' }) +
         field('DPE (classe acceptée)', 'dpe', v.dpe || '', { type: 'select', options: [{ value: '', label: 'Indifférent' }].concat(DPE_ORDER.map((c) => ({ value: c, label: c + ' ou mieux' }))) }) +
+        '<div class="se-field"><label>Dernier étage</label><label class="se-row" style="gap:6px;margin-top:6px"><input type="checkbox" name="dernierEtageOk" ' + (v.dernierEtageOk ? 'checked' : '') + '/> Dernier étage accepté (voire recherché)</label></div>' +
         '<div class="se-field full"><label>Secteurs</label><div class="se-chips">' +
-          QUARTIERS.map((q) => '<button type="button" class="se-chip" data-act="q-toggle" data-id="' + q.id + '" aria-pressed="' + ((v.quartiers || []).indexOf(q.id) > -1) + '">' + q.label + '</button>').join('') +
-        '</div></div>' +
+          QUARTIERS.map((q) => '<button type="button" class="se-chip" data-act="q-toggle" data-group="quartiers" data-id="' + q.id + '" aria-pressed="' + ((v.quartiers || []).indexOf(q.id) > -1) + '">' + q.label + '</button>').join('') +
+        '</div><p class="se-hint">Aucun secteur coché = tous secteurs acceptés.</p></div>' +
       '</div><div class="se-modal-foot"><button class="se-btn ghost" type="button" data-act="modal-close">Annuler</button><button class="se-btn" type="submit">' + (r ? 'Enregistrer' : 'Créer la recherche') + '</button></div></form>';
+  }
+
+  // Petites modales de « suite logique » : après la création d'un lead, d'un
+  // bien ou d'une recherche, on propose l'étape suivante cohérente plutôt que
+  // de forcer l'agent à y penser lui-même (lead → bien/recherche, bien → sa
+  // recherche si le propriétaire est aussi acquéreur).
+  function suiteLeadModal(c) {
+    const peutVendre = c.type === 'vendeur' || c.type === 'mixte';
+    const peutChercher = c.type === 'acquereur' || c.type === 'mixte';
+    return '<h3>Lead créé</h3><p class="se-muted">' + esc(nomClient(c)) + ' est enregistré. Étape suivante ?</p>' +
+      '<div class="se-modal-foot" style="flex-wrap:wrap;gap:8px;justify-content:flex-start">' +
+        (peutVendre ? '<button class="se-btn" data-act="suite-bien" data-id="' + c.id + '">' + ICONS.plus + ' Créer son bien à vendre</button>' : '') +
+        (peutChercher ? '<button class="se-btn' + (peutVendre ? ' ghost' : '') + '" data-act="suite-recherche" data-id="' + c.id + '">' + ICONS.plus + ' Créer sa recherche</button>' : '') +
+        '<button class="se-btn ghost" data-act="suite-plus-tard-lead" data-id="' + c.id + '">Plus tard, voir sa fiche</button>' +
+      '</div>';
+  }
+
+  function suiteBienModal(b, c) {
+    return '<h3>Bien créé</h3><p class="se-muted">' + esc(nomClient(c)) + ', propriétaire de « ' + esc(b.titre) + ' », est aussi acquéreur. Créer sa recherche maintenant ?</p>' +
+      '<div class="se-modal-foot">' +
+        '<button class="se-btn" data-act="suite-recherche" data-id="' + c.id + '">' + ICONS.plus + ' Créer sa recherche</button>' +
+        '<button class="se-btn ghost" data-act="suite-plus-tard-bien" data-id="' + b.id + '">Plus tard, voir le bien</button>' +
+      '</div>';
   }
 
   function previewModal(bienId, clientId, tab) {
@@ -4890,10 +4981,26 @@
     },
     'client-nouveau': () => { modal = clientModal(null); render(); },
     'client-editer': (el, id) => { modal = clientModal(client(id)); render(); },
-    'bien-nouveau': () => { modal = bienModal(null); render(); },
+    'bien-nouveau': () => {
+      if (!state.clients.length) {
+        toast('Créez d’abord le lead propriétaire à rattacher à ce bien.', 'warn');
+        modal = clientModal(null);
+      } else modal = bienModal(null);
+      render();
+    },
     'bien-editer': (el, id) => { modal = bienModal(bien(id)); render(); },
-    'recherche-nouvelle': (el, id) => { modal = rechercheModal(null, id); render(); },
+    'recherche-nouvelle': (el, id) => {
+      if (!id && !state.clients.filter((c) => c.type !== 'vendeur').length) {
+        toast('Créez d’abord un lead acquéreur (ou mixte) à rattacher à cette recherche.', 'warn');
+        modal = clientModal(null);
+      } else modal = rechercheModal(null, id);
+      render();
+    },
     'recherche-editer': (el, id) => { modal = rechercheModal(recherche(id)); render(); },
+    'suite-bien': (el, id) => { modal = bienModal(null, id); render(); },
+    'suite-recherche': (el, id) => { modal = rechercheModal(null, id); render(); },
+    'suite-plus-tard-lead': (el, id) => { modal = null; render(); location.hash = '#/client/' + id; },
+    'suite-plus-tard-bien': (el, id) => { modal = null; render(); location.hash = '#/bien/' + id; },
     'recherche-envoyer': (el, id) => {
       const rec = recherche(id);
       const n = biensCompatibles(rec, 40).length;
@@ -5790,15 +5897,16 @@
     if (kind === 'client') {
       const id = form.getAttribute('data-id');
       const existing = id ? client(id) : null;
-      const quartiers = $$('.se-chip[aria-pressed="true"]', form).map((c) => c.getAttribute('data-id'));
       const obj = {
-        id: id || uid('c'), type: data.get('type'), prenom: String(data.get('prenom') || '').trim(),
+        id: id || uid('c'), type: data.get('type'), natureLead: data.get('natureLead') || 'personne',
+        civilite: data.get('civilite') || '', prenom: String(data.get('prenom') || '').trim(),
         nom: String(data.get('nom') || '').trim(), email: String(data.get('email') || ''), tel: String(data.get('tel') || ''),
+        adresse: String(data.get('adresse') || '').trim(),
+        raisonSociale: String(data.get('raisonSociale') || '').trim(), siren: String(data.get('siren') || '').trim(),
+        representant: String(data.get('representant') || '').trim(),
         statut: data.get('statut'), source: data.get('source'),
-        budgetMin: chiffres(data.get('budgetMin')), budgetMax: chiffres(data.get('budgetMax')),
-        piecesMin: chiffres(data.get('piecesMin')), surfaceMin: chiffres(data.get('surfaceMin')),
-        typeBien: data.get('typeBien'), quartiers, notes: String(data.get('notes') || ''),
-        tags: [], agent: state.agent.prenom + ' ' + state.agent.nom,
+        notes: String(data.get('notes') || ''),
+        tags: existing ? existing.tags : [], agent: state.agent.prenom + ' ' + state.agent.nom,
         cree: id ? (existing ? existing.cree : nowISO()) : nowISO()
       };
       if (!obj.nom && !obj.prenom) { toast('Un nom est nécessaire.', 'warn'); return; }
@@ -5837,10 +5945,19 @@
         state.clients.push(obj);
         programmerRelances(obj.id, nomClient(obj));
       }
-      modal = null;
       commit();
-      toast('Client enregistré.' + (id ? '' : ' 3 relances programmées (J+1, J+3, J+7).'), 'ok');
-      location.hash = '#/client/' + obj.id;
+      if (id) {
+        modal = null;
+        toast('Modifications enregistrées.', 'ok');
+        location.hash = '#/client/' + obj.id;
+      } else {
+        // Suite logique : on propose tout de suite de créer le bien et/ou
+        // la recherche de ce lead, plutôt que de le laisser filer sur sa
+        // fiche sans suite (cf. retour explicite : lead → bien/recherche).
+        modal = suiteLeadModal(obj);
+        toast('Lead enregistré. 3 relances programmées (J+1, J+3, J+7).', 'ok');
+      }
+      render();
       return;
     }
 
@@ -5918,6 +6035,7 @@
         cree: existing ? existing.cree : nowISO()
       };
       if (!obj.titre || !obj.prix) { toast('Titre et prix sont nécessaires.', 'warn'); return; }
+      if (!obj.proprietaireId) { toast('Un propriétaire (lead) est nécessaire pour créer ce bien.', 'warn'); return; }
       if (existing && existing.serverId) {
         try {
           const r = await fetch('/api/biens/' + existing.serverId, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(obj) });
@@ -5931,24 +6049,45 @@
       }
       if (id) { const i = state.biens.findIndex((b) => b.id === id); state.biens[i] = Object.assign(existing, obj); }
       else state.biens.push(obj);
-      modal = null;
       commit();
-      toast('Bien enregistré.', 'ok');
-      location.hash = '#/bien/' + obj.id;
+      if (id) {
+        modal = null;
+        toast('Modifications enregistrées.', 'ok');
+        location.hash = '#/bien/' + obj.id;
+      } else {
+        const proprio = client(obj.proprietaireId);
+        if (proprio && (proprio.type === 'acquereur' || proprio.type === 'mixte')) {
+          // Suite logique : ce propriétaire est aussi acquéreur — on propose
+          // de créer sa recherche tout de suite plutôt que de l'oublier.
+          modal = suiteBienModal(obj, proprio);
+        } else {
+          modal = null;
+          location.hash = '#/bien/' + obj.id;
+        }
+        toast('Bien enregistré.', 'ok');
+      }
+      render();
       return;
     }
 
     if (kind === 'recherche') {
       const id = form.getAttribute('data-id');
       const existing = id ? recherche(id) : null;
+      const types = $$('.se-chip[data-group="types"][aria-pressed="true"]', form).map((c) => c.getAttribute('data-id'));
       const obj = {
         id: id || uid('r'), clientId: data.get('clientId'), titre: String(data.get('titre') || 'Recherche').trim(),
-        type: data.get('type'), prixMax: chiffres(data.get('prixMax')), piecesMin: chiffres(data.get('piecesMin')),
-        surfaceMin: chiffres(data.get('surfaceMin')), dpe: String(data.get('dpe') || ''),
-        quartiers: $$('.se-chip[aria-pressed="true"]', form).map((c) => c.getAttribute('data-id')),
-        statut: 'active', alertes: true,
+        type: types[0] || '', types: types,
+        prixMin: chiffres(data.get('prixMin')), prixMax: chiffres(data.get('prixMax')),
+        piecesMin: chiffres(data.get('piecesMin')), chambresMin: chiffres(data.get('chambresMin')), sdbMin: chiffres(data.get('sdbMin')),
+        surfaceMin: chiffres(data.get('surfaceMin')), surfaceMax: chiffres(data.get('surfaceMax')),
+        etageMin: chiffres(data.get('etageMin')), etageMax: chiffres(data.get('etageMax')),
+        dernierEtageOk: data.get('dernierEtageOk') === 'on',
+        dpe: String(data.get('dpe') || ''),
+        quartiers: $$('.se-chip[data-group="quartiers"][aria-pressed="true"]', form).map((c) => c.getAttribute('data-id')),
+        statut: existing ? existing.statut : 'active', alertes: existing ? existing.alertes : true,
         cree: existing ? existing.cree : nowISO()
       };
+      if (!obj.clientId) { toast('Un lead est nécessaire pour créer cette recherche.', 'warn'); return; }
       if (existing && existing.serverId) {
         try {
           const r = await fetch('/api/recherches/' + existing.serverId, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(obj) });
