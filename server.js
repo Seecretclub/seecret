@@ -1370,9 +1370,14 @@ app.get('/api/catalogue', requireAuth, (req, res) => {
   // Même recherche que bienDuMembre(), mais sans créer de brouillon ici —
   // consulter le catalogue ne doit pas avoir d'effet de bord sur "mon bien".
   const monBien = db.biens.find((x) => x.leadId === req.lead.id || (x.email || '').toLowerCase() === (req.lead.email || '').toLowerCase());
+  // Seuls deux statuts existent réellement pour un membre : "avant-première"
+  // (visible, visites pas encore ouvertes) et "ouvert" (visite ouverte). Dès
+  // qu'un bien passe sous offre, sous compromis ou vendu, il quitte purement
+  // et simplement la plateforme — ce ne sont pas des badges à afficher, ce
+  // sont des étapes internes au suivi de la vente par l'agence (CRM).
   const biens = db.biens.filter((b) =>
     b.validation === 'valide' &&
-    b.statut !== 'vendu' && b.statut !== 'brouillon' &&
+    (b.statut === 'avant-premiere' || b.statut === 'ouvert') &&
     (!monBien || b.id !== monBien.id)
   );
   res.json({ ok: true, biens: biens.map(bienPublic) });
@@ -1387,14 +1392,18 @@ app.patch('/api/mon-bien', requireAuth, (req, res) => {
     .forEach((k) => { if (body[k] !== undefined) b[k] = Math.max(0, Number(body[k]) || 0); });
   if (typeof body.ascenseur === 'boolean') b.ascenseur = body.ascenseur;
   if (Array.isArray(body.annexes)) b.annexes = body.annexes.map(String).slice(0, 20);
-  if (['brouillon', 'ouvert', 'mandat', 'avant-premiere'].indexOf(body.statut) > -1) {
+  // Avant ce correctif, un membre pouvait aussi passer directement à "ouvert"
+  // (visite ouverte) ou "mandat" ("en vente") ici — un raccourci qui
+  // court-circuitait entièrement l'agent. Seul le passage brouillon→avant-
+  // première (publier son annonce pour relecture) reste une action du
+  // membre ; l'ouverture des visites passe désormais UNIQUEMENT par
+  // POST /api/mon-bien/visibilite (demande) → décision de l'agent, et
+  // "mandat" est un statut interne au CRM que seul l'agent manie.
+  if (['brouillon', 'avant-premiere'].indexOf(body.statut) > -1) {
     const avant = b.statut;
     b.statut = body.statut;
-    if (avant === 'brouillon' && (b.statut === 'avant-premiere' || b.statut === 'ouvert' || b.statut === 'mandat')) {
+    if (avant === 'brouillon' && b.statut === 'avant-premiere') {
       logActivite(req.db, { leadId: req.lead.id, bienId: b.id, type: 'mise_au_catalogue', auteur: nomComplet(req.lead) });
-    }
-    if (avant !== 'ouvert' && b.statut === 'ouvert') {
-      logActivite(req.db, { leadId: req.lead.id, bienId: b.id, type: 'ouverture_visites', auteur: nomComplet(req.lead) });
     }
   }
   writeDb(req.db);
@@ -1428,15 +1437,18 @@ app.patch('/api/mon-bien/photos', requireAuth, (req, res) => {
 });
 
 // ---- Demande de visibilité ----
+// Seule demande possible côté membre, désormais : l'ouverture des visites.
+// "vente" (mandat) n'est plus une cible atteignable depuis la plateforme —
+// c'est un statut interne au CRM, piloté par l'agent (fiche bien côté CRM).
 app.post('/api/mon-bien/visibilite', requireAuth, (req, res) => {
   const b = bienDuMembre(req.db, req.lead);
-  const cible = (req.body && req.body.demande) === 'vente' ? 'vente' : 'ouvert';
+  const cible = 'ouvert';
   b.statutDemande = cible;
   b.demandeAt = nowISO();
   const demande = {
     id: uid('d'), type: 'statut', leadId: req.lead.id, bienId: b.id, email: req.lead.email,
     nom: nomComplet(req.lead),
-    message: cible === 'vente' ? 'Demande de mise en vente' : 'Demande de passage en visite ouverte',
+    message: 'Demande de passage en visite ouverte',
     role: cible, montant: 0, statut: 'nouvelle', source: 'Espace membre', cree: nowISO()
   };
   req.db.demandes.unshift(demande);

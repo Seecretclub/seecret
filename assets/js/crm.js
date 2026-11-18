@@ -1524,8 +1524,8 @@
     // fiche détaillée (c'est précisément ce qui manquait : avant, seuls les
     // boutons génériques « Accepter/Refuser l'adhésion » apparaissaient ici,
     // sans rapport avec une modification de bien).
-    const actionsModif = (d.type === 'modification' && n)
-      ? '<button class="se-btn sm" data-act="demande-modif-editer" data-id="' + d.id + '">Modifier le bien</button>' +
+    const actionsModif = ((d.type === 'modification' || d.type === 'statut') && n)
+      ? '<button class="se-btn sm" data-act="demande-modif-editer" data-id="' + d.id + '">' + (d.type === 'statut' ? 'Voir le bien' : 'Modifier le bien') + '</button>' +
         '<button class="se-btn soft sm" data-act="demande-modif-valider" data-id="' + d.id + '">Valider</button>' +
         '<button class="se-btn ghost sm" data-act="demande-modif-refuser" data-id="' + d.id + '">Refuser</button>'
       : '';
@@ -3294,6 +3294,17 @@
               ? (n
                   ? (b ? '<button class="se-btn block" data-act="demande-modif-editer" data-id="' + d.id + '">Modifier le bien</button>' : '') +
                     '<button class="se-btn soft block" style="margin-top:8px" data-act="demande-modif-valider" data-id="' + d.id + '">Valider la modification</button>' +
+                    '<button class="se-btn danger ghost block" style="margin-top:8px" data-act="demande-modif-refuser" data-id="' + d.id + '">Refuser</button>'
+                  : '<span class="se-hint">Demande traitée.</span>')
+              : d.type === 'statut'
+              // Même défaut que pour les demandes de modification : « Accepter
+              // / Suspendre l'adhésion » n'a aucun sens pour une demande de
+              // passage en visite ouverte. Le décisionnaire serveur applique
+              // déjà b.statut = 'ouvert' sur « valider » — seul le libellé
+              // et les actions proposées à l'agent étaient à corriger ici.
+              ? (n
+                  ? (b ? '<button class="se-btn block" data-act="demande-modif-editer" data-id="' + d.id + '">Voir / modifier le bien</button>' : '') +
+                    '<button class="se-btn soft block" style="margin-top:8px" data-act="demande-modif-valider" data-id="' + d.id + '">Valider le passage en visite ouverte</button>' +
                     '<button class="se-btn danger ghost block" style="margin-top:8px" data-act="demande-modif-refuser" data-id="' + d.id + '">Refuser</button>'
                   : '<span class="se-hint">Demande traitée.</span>')
               : ((n ? (bloquee

@@ -87,6 +87,14 @@
     'sous-compromis': { label: 'Sous compromis', cls: 'offer' },
     vendu: { label: 'Vendu', cls: 'muted' }
   };
+  // Ce que voit un membre dans le catalogue des AUTRES biens se limite à deux
+  // statuts réels : avant-première (visible, visites pas encore ouvertes) et
+  // ouvert (visite ouverte). Dès qu'un bien passe sous offre, sous compromis
+  // ou vendu, il quitte la plateforme — ce sont des étapes internes au suivi
+  // de la vente par l'agence, pas des statuts à afficher aux membres. (Le
+  // libellé complet de STATUTS ci-dessus reste utile par ailleurs pour que
+  // le membre voie le vrai statut de SON PROPRE bien sur sa page "Mon bien".)
+  const surLaPlateforme = (statut) => statut === 'avant-premiere' || statut === 'ouvert';
 
   const TYPES = ['Appartement', 'Maison', 'Duplex', 'Loft', 'Hôtel particulier', 'Terrain'];
 
@@ -296,7 +304,7 @@
   // Un membre sans bien (acheteur simple) ne voit jamais les avant-premières.
   const visiblesPourMembre = (list) => {
     const estAcheteur = state.membre && state.membre.typeMembre === 'membre_acheteur';
-    return list.filter((b) => b.statut !== 'vendu' && b.statut !== 'brouillon' && (!estAcheteur || b.statut === 'ouvert'));
+    return list.filter((b) => surLaPlateforme(b.statut) && (!estAcheteur || b.statut === 'ouvert'));
   };
   const nomQuartier = (id) => (QUARTIERS.find((q) => q.id === id) || { label: id }).label;
   const prixM2 = (b) => (b.surface ? Math.round(b.prix / b.surface) : 0);
@@ -687,7 +695,7 @@
     const f = state.__filtres || {};
     const estAcheteur = state.membre && state.membre.typeMembre === 'membre_acheteur';
     const biens = tousBiens().filter((b) => {
-      if (b.statut === 'vendu' || b.statut === 'brouillon') return false;
+      if (!surLaPlateforme(b.statut)) return false;
       // Un membre sans bien (acheteur simple) ne voit jamais les avant-premières.
       if (estAcheteur && b.statut !== 'ouvert') return false;
       if (f.q) { const hay = (b.titre + ' ' + b.label + ' ' + b.type + ' ' + b.description).toLowerCase(); if (hay.indexOf(f.q.toLowerCase()) === -1) return false; }
@@ -774,9 +782,8 @@
         '<div class="ed-panel"><p class="se-muted">Votre fiche est en cours de préparation. Rechargez la page dans un instant.</p></div>';
     }
     const photos = b.photos || [];
-    const STATUT = { brouillon: 'Brouillon', mandat: 'Mandat signé', 'avant-premiere': 'Avant-première', ouvert: 'Ouvert aux visites', 'sous-offre': 'Sous offre', vendu: 'Vendu' };
     const demande = b.statutDemande;
-    const libelleDemande = demande === 'vente' ? 'mise en vente' : 'passage en visite ouverte';
+    const libelleDemande = 'passage en visite ouverte';
     const champ = (label, name, value, opt) => {
       const o = opt || {};
       return '<div class="se-field ' + (o.full ? 'full' : '') + '"><label>' + label + '</label>' +
@@ -815,11 +822,15 @@
         '<div style="display:flex;flex-direction:column;gap:18px">' +
           '<div class="ed-panel">' +
             '<span class="ed-kicker">Statut de mon bien</span>' +
-            '<div class="se-grid" style="gap:8px;margin-top:12px">' +
-              '<button class="se-btn ' + (b.statut === 'brouillon' ? '' : 'ghost') + ' block" type="button" data-act="statut-bien" data-statut="brouillon">Brouillon</button>' +
-              '<button class="se-btn ' + (b.statut === 'ouvert' ? '' : 'ghost') + ' block" type="button" data-act="statut-bien" data-statut="ouvert">Visite ouverte</button>' +
-              '<button class="se-btn ' + (b.statut === 'mandat' ? '' : 'ghost') + ' block" type="button" data-act="statut-bien" data-statut="mandat">En vente</button>' +
-            '</div>' +
+            '<div style="margin-top:10px">' + badge(b.statut) + '</div>' +
+            (b.statut === 'avant-premiere' && !demande
+              ? '<p class="se-hint" style="margin-top:10px">Votre bien est visible des membres, mais les visites ne sont pas encore ouvertes. Quand vous êtes prêt·e à recevoir des demandes de visite, envoyez une demande à votre agent.</p>' +
+                '<button class="se-btn block" type="button" data-act="visibilite" style="margin-top:10px">Demander l’ouverture des visites</button>'
+              : demande
+                ? '<p class="se-hint" style="margin-top:10px">Demande de ' + libelleDemande + ' envoyée à votre agent, en attente de validation.</p>'
+                : b.statut === 'brouillon'
+                  ? '<p class="se-hint" style="margin-top:10px">Votre fiche est en brouillon : complétez-la puis publiez-la pour la rendre visible aux membres.</p>'
+                  : '<p class="se-hint" style="margin-top:10px">Le suivi de ce statut se fait désormais avec votre agent.</p>') +
           '</div>' +
           '<form class="ed-panel" data-form="mon-bien">' +
             '<h3>Mon annonce</h3>' +
@@ -1128,11 +1139,11 @@
           '<a class="se-btn light" href="#/mon-bien">Déposer mon bien ' + ICONS.arrow + '</a>' +
         '</div>';
 
-    const aLaUne = state.biens.filter((b) => b.statut !== 'vendu').slice(0, 3);
-    const plusSuivis = state.biens.filter((b) => b.statut !== 'vendu' && b.statut !== 'brouillon').sort((a, b) => (b.suiveurs || 0) - (a.suiveurs || 0)).slice(0, 5);
+    const aLaUne = state.biens.filter((b) => surLaPlateforme(b.statut)).slice(0, 3);
+    const plusSuivis = state.biens.filter((b) => surLaPlateforme(b.statut)).sort((a, b) => (b.suiveurs || 0) - (a.suiveurs || 0)).slice(0, 5);
     const rec = state.recherche || {};
     const matchs = state.biens.filter((b) => {
-      if (b.statut === 'vendu' || b.statut === 'brouillon') return false;
+      if (!surLaPlateforme(b.statut)) return false;
       if (rec.quartiers && rec.quartiers.length && rec.quartiers.indexOf(b.quartier) === -1) return false;
       if (rec.types && rec.types.length && rec.types.indexOf(b.type) === -1) return false;
       if (rec.prixMax && b.prix > Number(rec.prixMax)) return false;
@@ -1343,7 +1354,7 @@
   function viewCatalogue() {
     const f = state.__filtres || {};
     const biens = tousBiens().filter((b) => {
-      if (b.statut === 'vendu' || b.statut === 'brouillon') return false;
+      if (!surLaPlateforme(b.statut)) return false;
       if (f.q) {
         const hay = (b.titre + ' ' + b.label + ' ' + b.type + ' ' + b.description).toLowerCase();
         if (hay.indexOf(f.q.toLowerCase()) === -1) return false;
@@ -1752,22 +1763,12 @@
       } catch (e) { toast(e.message || 'Action impossible.', 'warn'); }
     },
     'visibilite': async (el) => {
-      const demande = el.getAttribute('data-demande') === 'vente' ? 'vente' : 'ouvert';
       try {
-        await API.send('POST', '/api/mon-bien/visibilite', { demande: demande });
-        state.monBien.statutDemande = demande;
+        await API.send('POST', '/api/mon-bien/visibilite', { demande: 'ouvert' });
+        state.monBien.statutDemande = 'ouvert';
         render();
-        toast(demande === 'vente' ? 'Demande de mise en vente envoyée.' : 'Demande de visite ouverte envoyée.');
+        toast('Demande de visite ouverte envoyée à votre agent.');
       } catch (e) { toast(e.message, 'warn'); }
-    },
-    'statut-bien': async (el) => {
-      const statut = el.getAttribute('data-statut');
-      try {
-        const r = await API.send('PATCH', '/api/mon-bien', { statut: statut });
-        state.monBien = Object.assign({ mien: true }, r.bien);
-        render();
-        toast('Statut mis à jour.', 'ok');
-      } catch (e) { toast(e.message || 'Mise à jour impossible.', 'warn'); }
     },
     'adhesion-envoyer': async () => {
       try {
