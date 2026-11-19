@@ -2111,7 +2111,10 @@ app.post('/api/robot/dossier', requireAdmin, async (req, res) => {
 // Persistance des biens détectés par le Radar (résultats de prospection)
 app.get('/api/robot-biens', requireAdmin, (req, res) => {
   const db = readDb();
-  res.json({ ok: true, biens: db.robotBiens || [] });
+  // dpeAuto : détections du moteur quotidien (voir scannerDpeRecherchesActives
+  // plus bas), gardées à part de `biens` (voir le commentaire sur db.dpeAuto)
+  // pour ne jamais être écrasées par la sauvegarde complète du Radar manuel.
+  res.json({ ok: true, biens: db.robotBiens || [], dpeAuto: db.dpeAuto || [], scanLog: db.dpeScanLog || [] });
 });
 
 app.post('/api/robot-biens', requireAdmin, (req, res) => {
@@ -2132,57 +2135,245 @@ const ADEME_URL = 'https://data.ademe.fr/data-fair/api/v1/datasets/dpe03existant
 // tout ce qu'elle contient — c'est aussi ce qui permet d'ajouter des
 // critères sans dépendre d'un redéploiement si l'ADEME ajoute des champs.
 
-app.get('/api/robot/dpe', requireAdmin, async (req, res) => {
+// Extrait de l'ancien handler de /api/robot/dpe pour être réutilisé tel
+// quel par le moteur quotidien (scannerDpeRecherchesActives, plus bas) :
+// même construction de requête, même appel ADEME, mêmes erreurs — on ne
+// veut pas que la recherche manuelle et le scan automatique divergent.
+async function interrogerAdemeDpe(q) {
   const clauses = [];
   const qParts = [];
-  const adresse = String(req.query.adresse || '').trim();
-  const ville = normalizeVille(String(req.query.ville || '').trim());
-  const codePostal = String(req.query.code_postal || '').trim();
-  if (adresse) qParts.push(adresse);
-  if (ville) qParts.push(ville);
-  if (codePostal) qParts.push(codePostal);
-  const q = qParts.join(' ');
-  const classes = String(req.query.classes || '').toUpperCase().split(',').map((s) => s.trim()).filter((c) => /^[A-G]$/.test(c));
-  const dateDebut = String(req.query.date_debut || '').trim();
-  const dateFin = String(req.query.date_fin || '').trim();
-  const surfaceMin = String(req.query.surface_min || '').trim();
-  const surfaceMax = String(req.query.surface_max || '').trim();
-  const type = String(req.query.type || '').trim().toLowerCase();
-  const tri = String(req.query.tri || 'recent').trim();
-  const limit = Math.min(100, Math.max(10, Number(req.query.limit) || 50));
+  if (q.adresse) qParts.push(q.adresse);
+  if (q.ville) qParts.push(q.ville);
+  if (q.codePostal) qParts.push(q.codePostal);
+  const qText = qParts.join(' ');
+  if (!qText) return { ok: false, statut: 400, error: 'Saisissez une ville, une adresse ou un code postal.' };
 
-  if (!q) return res.status(400).json({ error: 'Saisissez une ville, une adresse ou un code postal.' });
-
-  // Géo = full-text `q` (fiable) ; critères structurés = `qs` (sans code_postal_ban, bloqué par le WAF ADEME)
+  const classes = (q.classes || []).map((c) => String(c).toUpperCase().trim()).filter((c) => /^[A-G]$/.test(c));
   if (classes.length === 1) clauses.push('etiquette_dpe:' + classes[0]);
   else if (classes.length > 1) clauses.push('(' + classes.map((c) => 'etiquette_dpe:' + c).join(' OR ') + ')');
-  if (dateDebut || dateFin) clauses.push('date_reception_dpe:[' + (dateDebut || '*') + ' TO ' + (dateFin || '*') + ']');
-  if (surfaceMin || surfaceMax) clauses.push('surface_habitable_logement:[' + (surfaceMin || '*') + ' TO ' + (surfaceMax || '*') + ']');
-  if (type && type !== 'tout') clauses.push('type_batiment:' + type);
+  if (q.dateDebut || q.dateFin) clauses.push('date_reception_dpe:[' + (q.dateDebut || '*') + ' TO ' + (q.dateFin || '*') + ']');
+  if (q.surfaceMin || q.surfaceMax) clauses.push('surface_habitable_logement:[' + (q.surfaceMin || '*') + ' TO ' + (q.surfaceMax || '*') + ']');
+  if (q.type && q.type !== 'tout') clauses.push('type_batiment:' + q.type);
 
   const params = new URLSearchParams();
-  params.set('size', String(limit));
-  if (q) params.set('q', q);
+  params.set('size', String(Math.min(100, Math.max(10, Number(q.limit) || 50))));
+  params.set('q', qText);
   if (clauses.length) params.set('qs', clauses.join(' AND '));
   const sortMap = {
     recent: '-date_reception_dpe', ancien: 'date_reception_dpe',
     surface_desc: '-surface_habitable_logement', surface_asc: 'surface_habitable_logement',
     classe_asc: 'etiquette_dpe', classe_desc: '-etiquette_dpe'
   };
-  if (sortMap[tri]) params.set('sort', sortMap[tri]);
+  if (sortMap[q.tri || 'recent']) params.set('sort', sortMap[q.tri || 'recent']);
 
   try {
     const r = await fetch(ADEME_URL + '?' + params.toString(), { headers: { 'User-Agent': 'Seecret/1.0 (immo-data-robot)', 'Accept': 'application/json' }, signal: AbortSignal.timeout(90000) });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) {
       const hint = (data.meta && data.meta.hints) ? ' ' + data.meta.hints.join(' ') : '';
-      return res.status(502).json({ error: (data.detail || ('Erreur ADEME ' + r.status)) + hint });
+      return { ok: false, statut: 502, error: (data.detail || ('Erreur ADEME ' + r.status)) + hint };
     }
-    res.json({ ok: true, source: 'ADEME dpe03existant', total: data.total || 0, count: (data.results || []).length, results: data.results || [] });
+    return { ok: true, total: data.total || 0, results: data.results || [] };
   } catch (e) {
-    res.status(502).json({ error: 'API ADEME injoignable.' });
+    return { ok: false, statut: 502, error: 'API ADEME injoignable.' };
+  }
+}
+
+app.get('/api/robot/dpe', requireAdmin, async (req, res) => {
+  const r = await interrogerAdemeDpe({
+    adresse: String(req.query.adresse || '').trim(),
+    ville: normalizeVille(String(req.query.ville || '').trim()),
+    codePostal: String(req.query.code_postal || '').trim(),
+    classes: String(req.query.classes || '').split(','),
+    dateDebut: String(req.query.date_debut || '').trim(),
+    dateFin: String(req.query.date_fin || '').trim(),
+    surfaceMin: String(req.query.surface_min || '').trim(),
+    surfaceMax: String(req.query.surface_max || '').trim(),
+    type: String(req.query.type || '').trim().toLowerCase(),
+    tri: String(req.query.tri || 'recent').trim(),
+    limit: req.query.limit
+  });
+  if (!r.ok) return res.status(r.statut || 502).json({ error: r.error });
+  res.json({ ok: true, source: 'ADEME dpe03existant', total: r.total, count: r.results.length, results: r.results });
+});
+
+// ---- Moteur quotidien de prospection DPE ----
+// Le CRM (assets/js/crm.js : rechercherDpePourRecherche/mapSignalRobotBien)
+// permet déjà à un agent de lancer, recherche par recherche, une requête
+// ADEME DPE ciblée pour trouver des biens réels correspondant à un acheteur,
+// et de les ajouter au Radar (db.robotBiens). Ce qui suit fait exactement
+// la même chose, mais automatiquement pour TOUTES les recherches actives,
+// sans qu'un agent ait besoin de cliquer — c'est le « moteur quotidien »
+// demandé. Même logique de conversion ADEME → bien du Radar (portée ici
+// côté serveur pour pouvoir tourner sans navigateur ouvert), même
+// dédoublonnage par adresse, même absence de filtre sur le prix (l'ADEME ne
+// fournit aucune estimation de prix exploitable — décision actée : pas de
+// prix estimé, matching sur secteur/surface/type/pièces uniquement).
+//
+// Point de vigilance (vérifié par recherche documentaire, pas par test en
+// conditions réelles — ce sandbox n'atteint pas data.ademe.fr) : le DPE
+// « logements existants » de l'ADEME ne contient PAS de champ fiable de
+// nombre de pièces (seule la surface habitable est structurée). Le critère
+// « pièces » de scoreRobotBien (crm.js) est déjà écrit pour être best-effort
+// et ne jamais bloquer un match quand `pieces` est absent — rien à changer
+// ici, mais autant le documenter pour ne pas prétendre à un matching plus
+// précis que ce que la donnée permet réellement.
+const QUARTIERS_CP = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+  .map((n) => ({ id: 'p' + n, label: 'Paris ' + n + (n === 1 ? 'ᵉʳ' : 'ᵉ'), cp: '750' + String(n).padStart(2, '0') }))
+  .concat([
+    { id: 'boulogne', label: 'Boulogne-Billancourt', cp: '92100' },
+    { id: 'neuilly', label: 'Neuilly-sur-Seine', cp: '92200' },
+    { id: 'vincennes', label: 'Vincennes', cp: '94300' }
+  ]);
+const quartierDeCpServeur = (cp) => QUARTIERS_CP.find((q) => q.cp === String(cp || '').trim()) || null;
+const secteurDeQuartier = (id) => QUARTIERS_CP.find((q) => q.id === id) || null;
+const adresseKeyServeur = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+const DPE_ORDER_SERVEUR = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
+// Même regex que côté CRM (voir crm.js, etageDepuisAdresseBrute) : l'étage
+// n'est jamais une donnée ADEME structurée, seulement une extraction best
+// effort depuis l'adresse brute du DPE quand elle le mentionne en texte libre.
+const ETAGE_RE_SERVEUR = /(?<![a-zàâäéèêëïîôöùûüÿñç])(?:étage|etage|ét\.?|et\.?)\s*n?°?\s*(rdc|rez[- ]de[- ]chauss[ée]e|\d{1,2})\b/i;
+function etageDepuisAdresseBrute(adresseBrut) {
+  const m = ETAGE_RE_SERVEUR.exec(String(adresseBrut || ''));
+  if (!m) return null;
+  const v = m[1].toLowerCase();
+  return /rdc|rez/.test(v) ? 'RDC' : v;
+}
+
+// Conversion d'une ligne ADEME DPE brute vers le même format de « bien du
+// Radar » que mapSignalRobotBien() côté CRM (assets/js/crm.js) — gardé
+// volontairement identique champ à champ pour que les deux chemins
+// (recherche manuelle et scan automatique) alimentent exactement la même
+// structure, lue par scoreRobotBien/viewRobotBien sans distinction.
+function dpeVersRobotBien(s) {
+  const secteur = quartierDeCpServeur(s.code_postal_ban);
+  return {
+    id: s.numero_dpe ? 'dpe-' + s.numero_dpe : (s.parcelle || uid('rb')),
+    signalId: null,
+    adresse: s.adresse_ban || s.adresse_brut || '',
+    ville: s.nom_commune_ban || '',
+    codePostal: s.code_postal_ban || '',
+    type: s.type_batiment || '',
+    surface_habitable_m2: (s.surface_habitable_logement != null) ? Number(s.surface_habitable_logement) : null,
+    surface_reference_dpe_m2: (s.surface_habitable_immeuble != null) ? Number(s.surface_habitable_immeuble) : null,
+    surface_terrain_m2: null,
+    contenance_cadastrale_m2: null,
+    parcelle: s.parcelle || '',
+    quartiers: secteur ? [secteur.id] : [],
+    dpe: s.etiquette_dpe || '',
+    dpeId: s.numero_dpe || '',
+    dpeDate: s.date_reception_dpe || null,
+    anneeConstruction: s.annee_construction || null,
+    periodeConstruction: s.periode_construction || null,
+    etageEstime: etageDepuisAdresseBrute(s.adresse_brut),
+    proprietaire: { nom: '', type: 'personne', siren: '', dirigeants: [] },
+    contacts: [],
+    confidence_geocoding: null,
+    confidence_geocoding_source: 'BAN',
+    confidence_owner: null,
+    confidence_owner_source: null,
+    dateDetection: nowISO(),
+    statutProspection: 'nouveau',
+    coords: null,
+    ademeBrut: s,
+    source: 'dpe-auto'
+  };
+}
+
+// Exécute, pour chaque recherche active ayant au moins un secteur, la même
+// requête ADEME que l'agent lancerait manuellement (voir
+// rechercherDpePourRecherche côté CRM), et ajoute dans db.dpeAuto les biens
+// pas déjà connus (dédoublonnage par adresse, contre db.robotBiens ET
+// db.dpeAuto). N'appelle PAS l'enrichissement propriétaire
+// (/api/robot/enrichir) : ce pipeline dépend du moteur Python, non
+// configuré en production à ce jour — l'agent reste libre de lancer cet
+// enrichissement manuellement sur les biens détectés, comme pour un bien
+// trouvé via la recherche DPE manuelle.
+//
+// db.dpeAuto est une collection SÉPARÉE de db.robotBiens, et c'est
+// volontaire : côté CRM, POST /api/robot-biens remplace tout le tableau
+// db.robotBiens avec l'état en mémoire du navigateur de l'agent
+// (saveRobotBiens(), voir crm.js) — si ce moteur ajoutait directement dans
+// db.robotBiens, un agent qui a le CRM ouvert au moment où le scan
+// quotidien tourne écraserait les détections du jour à la prochaine action
+// qui déclenche cette sauvegarde. db.dpeAuto n'est jamais réécrit par ce
+// chemin client, donc jamais à risque d'être effacé par inadvertance ;
+// côté CRM, robotBiens() lit désormais les deux collections combinées.
+async function scannerDpeRecherchesActives(db) {
+  const recherches = (db.recherches || []).filter((r) => r.statut !== 'archivee' && Array.isArray(r.quartiers) && r.quartiers.length);
+  db.dpeAuto = Array.isArray(db.dpeAuto) ? db.dpeAuto : [];
+  const dejaConnues = new Set((db.robotBiens || []).concat(db.dpeAuto).map((b) => adresseKeyServeur(b.adresse)));
+  const nouveaux = [];
+  const erreurs = [];
+  const typeMap = { Appartement: 'appartement', Maison: 'maison' };
+  for (const rec of recherches) {
+    const secteurs = (rec.quartiers || []).map(secteurDeQuartier).filter(Boolean);
+    for (const sec of secteurs) {
+      const types = (rec.types && rec.types.length) ? rec.types : (rec.type ? [rec.type] : []);
+      const type = types.map((t) => typeMap[t]).find(Boolean) || '';
+      const classes = rec.dpe ? DPE_ORDER_SERVEUR.slice(0, DPE_ORDER_SERVEUR.indexOf(rec.dpe) + 1) : [];
+      const r = await interrogerAdemeDpe({
+        codePostal: sec.cp, ville: sec.label,
+        surfaceMin: rec.surfaceMin ? String(rec.surfaceMin) : '',
+        type: type, classes: classes, tri: 'recent', limit: 20
+      });
+      if (!r.ok) { erreurs.push({ rechercheId: rec.id, secteur: sec.id, erreur: r.error }); continue; }
+      r.results.forEach((row) => {
+        const key = adresseKeyServeur(row.adresse_ban || row.adresse_brut);
+        if (!key || dejaConnues.has(key)) return;
+        dejaConnues.add(key);
+        const b = dpeVersRobotBien(row);
+        b.rechercheOrigine = rec.id;
+        nouveaux.push(b);
+      });
+    }
+  }
+  if (nouveaux.length) {
+    db.dpeAuto = db.dpeAuto.concat(nouveaux);
+  }
+  db.dpeScanLog = db.dpeScanLog || [];
+  db.dpeScanLog.unshift({
+    at: nowISO(), recherchesScannees: recherches.length, biensAjoutes: nouveaux.length,
+    erreurs: erreurs.length ? erreurs.slice(0, 5) : []
+  });
+  db.dpeScanLog = db.dpeScanLog.slice(0, 30);
+  return { recherchesScannees: recherches.length, biensAjoutes: nouveaux.length, erreurs: erreurs };
+}
+
+app.post('/api/robot/dpe/scan-quotidien', requireAdmin, async (req, res) => {
+  const db = readDb();
+  try {
+    const resultat = await scannerDpeRecherchesActives(db);
+    writeDb(db);
+    res.json({ ok: true, resultat: resultat });
+  } catch (e) {
+    res.status(500).json({ error: 'Scan impossible : ' + ((e && e.message) || 'erreur') });
   }
 });
+
+// Lancé une première fois peu après le démarrage du serveur (pour ne pas
+// faire attendre le tout premier déploiement jusqu'au lendemain), puis
+// toutes les 24h — c'est la partie réellement « quotidienne » du moteur :
+// sans action de l'agent, en production. Volontairement silencieux en cas
+// d'échec (ADEME temporairement indisponible, par exemple) : le prochain
+// passage réessaiera, et le détail de chaque passage reste consultable via
+// db.dpeScanLog (exposé par GET /api/robot-biens) pour que l'agent voie que
+// le moteur tourne même quand il ne trouve rien de nouveau.
+const UNE_JOURNEE_MS = 24 * 60 * 60 * 1000;
+function planifierScanDpeQuotidien() {
+  const executer = async () => {
+    try {
+      const db = readDb();
+      const resultat = await scannerDpeRecherchesActives(db);
+      writeDb(db);
+      console.log('[moteur DPE quotidien] ' + resultat.recherchesScannees + ' recherche(s) scannée(s), ' + resultat.biensAjoutes + ' bien(s) ajouté(s).');
+    } catch (e) {
+      console.error('[moteur DPE quotidien] échec :', (e && e.message) || e);
+    }
+  };
+  setTimeout(executer, 60 * 1000);
+  setInterval(executer, UNE_JOURNEE_MS);
+}
 
 // Pipeline d'enrichissement complet : adresse → cadastre → sauvegarde parcelle → dossier propriétaire
 // Enrichissement d'une parcelle précise : sauvegarde → dossier propriétaire (SCI/dirigeants/contacts)
@@ -3976,4 +4167,5 @@ app.listen(PORT, () => {
   } else {
     console.warn('  Email : NON configuré (ni RESEND_API_KEY ni EMAIL_USER/EMAIL_PASS) — aucun email ne sera envoyé');
   }
+  planifierScanDpeQuotidien();
 });
