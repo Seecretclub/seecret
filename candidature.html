@@ -372,6 +372,7 @@
       Le parcours d'adhésion a besoin de JavaScript. Activez-le puis rechargez la page.
     </div>
   </noscript>
+  <script src="assets/js/integrations.js"></script>
   <script>
   (function () {
     'use strict';
@@ -1270,7 +1271,9 @@
       }
     }
 
-    function envoyer() {
+    let envoiEnCours = false;
+    async function envoyer() {
+      if (envoiEnCours) return;
       const dossier = JSON.parse(JSON.stringify(rep));
       const nom = (rep.vous.prenom + ' ' + rep.vous.nom).trim();
       const role = rep.projet;
@@ -1322,13 +1325,27 @@
       }
       } catch (e) { /* stockage indisponible : la démo continue */ }
 
-      // Envoi au serveur : source de vérité du CRM (data.json).
-      fetch('/api/candidature', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(dossier)
-      }).then((r) => { if (!r.ok) return r.json().then((e) => { throw new Error(e.error || 'Erreur serveur'); }); })
-        .catch((e) => console.error('[candidature] envoi serveur échoué :', e.message));
+      // Envoi au serveur : source de vérité du CRM (data.json). On attend sa
+      // réponse : avant, un refus du serveur passait inaperçu et le candidat
+      // voyait « candidature envoyée » alors que l'agence ne recevait rien.
+      envoiEnCours = true;
+      const bouton = document.querySelector('[data-act="suivant"]');
+      if (bouton) { bouton.disabled = true; bouton.textContent = 'Envoi en cours…'; }
+      try {
+        const turnstileToken = window.SeecretTurnstile ? await window.SeecretTurnstile.jeton() : '';
+        const r = await fetch('/api/candidature', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(Object.assign({}, dossier, { turnstileToken: turnstileToken }))
+        });
+        if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || 'Erreur serveur'); }
+      } catch (e) {
+        envoiEnCours = false;
+        erreur = 'Votre candidature n’a pas pu être envoyée. ' + String(e.message || 'Erreur réseau.').replace(/\.?$/, '.') + ' Réessayez dans un instant.';
+        render();
+        return;
+      }
+      envoiEnCours = false;
 
       envoye = true;
       render();

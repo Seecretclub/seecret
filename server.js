@@ -2,6 +2,28 @@
 
 require('dotenv').config();
 
+// Sentry : alerte et détail de chaque erreur serveur (activé seulement si
+// SENTRY_DSN est défini). Aucune donnée personnelle envoyée : pas de cookies,
+// pas d'en-têtes d'authentification, pas de corps de requête.
+const Sentry = process.env.SENTRY_DSN ? require('@sentry/node') : null;
+if (Sentry) {
+  Sentry.init({
+    dsn: process.env.SENTRY_DSN,
+    environment: process.env.SENTRY_ENVIRONMENT || 'production',
+    sendDefaultPii: false,
+    tracesSampleRate: 0,
+    beforeSend(event) {
+      if (event.request) {
+        delete event.request.cookies;
+        delete event.request.data;
+        if (event.request.headers) { delete event.request.headers.cookie; delete event.request.headers.authorization; }
+      }
+      if (event.user) event.user = { id: event.user.id };
+      return event;
+    }
+  });
+}
+
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
@@ -210,8 +232,45 @@ app.get('/api/comparables', requireAdmin, (req, res) => {
   }
 });
 
+// Clés PUBLIQUES utilisées par le navigateur (le DSN Sentry et la clé de site
+// Turnstile sont conçus pour être visibles ; les secrets restent côté serveur).
+app.get('/api/config-public', (req, res) => {
+  res.json({
+    sentryDsn: String(process.env.SENTRY_DSN_FRONT || process.env.SENTRY_DSN || ''),
+    sentryEnvironment: process.env.SENTRY_ENVIRONMENT || 'production',
+    turnstileSiteKey: String(process.env.TURNSTILE_SITE_KEY || '')
+  });
+});
+
+// Cloudflare Turnstile : vérifie qu'un humain a envoyé le formulaire
+// (candidature, envoi d'un code de connexion). Sans TURNSTILE_SECRET_KEY, la
+// vérification est désactivée. Si Cloudflare est injoignable, on laisse
+// passer plutôt que de bloquer de vrais candidats.
+async function verifierTurnstile(req) {
+  const secret = process.env.TURNSTILE_SECRET_KEY;
+  if (!secret) return true;
+  const token = String((req.body && req.body.turnstileToken) || '');
+  if (!token) return false;
+  try {
+    const r = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ secret: secret, response: token, remoteip: req.ip || '' }).toString(),
+      signal: AbortSignal.timeout(8000)
+    });
+    const d = await r.json().catch(() => ({}));
+    return !!d.success;
+  } catch (e) {
+    console.error('[turnstile] vérification impossible, requête acceptée :', e.message);
+    return true;
+  }
+}
+const MSG_TURNSTILE = 'Vérification anti-robot échouée : rechargez la page et réessayez.';
+
 app.post('/api/candidature', async (req, res) => {
-  const dossier = req.body;
+  if (!(await verifierTurnstile(req))) return res.status(403).json({ error: MSG_TURNSTILE });
+  const dossier = Object.assign({}, req.body);
+  delete dossier.turnstileToken;
   if (!dossier || typeof dossier !== 'object' || !dossier.vous) {
     return res.status(400).json({ error: 'Dossier invalide' });
   }
@@ -870,7 +929,8 @@ function emailValidationLegere(prenom, texte) {
 }
 
 // 1) L'admin valide le lead → le client reçoit un email avec un code et un lien.
-app.post('/api/auth/enroll', (req, res) => {
+app.post('/api/auth/enroll', async (req, res) => {
+  if (!(await verifierTurnstile(req))) return res.status(403).json({ error: MSG_TURNSTILE });
   const email = String((req.body && req.body.email) || '').trim().toLowerCase();
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/.test(email)) {
     return res.status(400).json({ error: 'Adresse email invalide' });
@@ -3036,6 +3096,39 @@ async function appelDatagma(prenom, nomFamille, societe) {
   } catch (e) { return { statut: 'erreur' }; }
 }
 
+// FullEnrich (https://docs.fullenrich.com, API v2) : emails professionnels et
+// téléphones, à partir du nom + société. Traitement asynchrone : on lance
+// l'enrichissement puis on interroge le résultat (≈ 30 à 60 s). Les emails
+// PERSONNELS ne sont jamais demandés. Résultat marqué « à vérifier ».
+async function appelFullEnrich(prenom, nomFamille, societe) {
+  if (!fournisseurConfigure('FULLENRICH_API_KEY')) return { statut: 'non_configure' };
+  if (!prenom || !nomFamille || !societe) return { statut: 'vide' };
+  const H = { Authorization: 'Bearer ' + process.env.FULLENRICH_API_KEY, 'Content-Type': 'application/json' };
+  try {
+    const lancement = await fetch('https://app.fullenrich.com/api/v2/contact/enrich/bulk', {
+      method: 'POST', headers: H, signal: AbortSignal.timeout(15000),
+      body: JSON.stringify({ name: 'Seecret — ' + societe.slice(0, 60), data: [{ first_name: prenom, last_name: nomFamille, company_name: societe, enrich_fields: ['contact.work_emails', 'contact.phones'] }] })
+    });
+    if (lancement.status === 402 || lancement.status === 429) return { statut: 'epuise' };
+    const ld = await lancement.json().catch(() => ({}));
+    if (!lancement.ok || !ld.enrichment_id) return { statut: 'erreur' };
+    for (let i = 0; i < 15; i++) {
+      await new Promise((ok) => setTimeout(ok, 5000));
+      const r = await fetch('https://app.fullenrich.com/api/v2/contact/enrich/bulk/' + encodeURIComponent(ld.enrichment_id), { headers: H, signal: AbortSignal.timeout(15000) });
+      if (r.status === 400) continue; // pas encore prêt
+      const d = await r.json().catch(() => ({}));
+      if (r.status === 402 || d.status === 'CREDITS_INSUFFICIENT') return { statut: 'epuise' };
+      if (d.status !== 'FINISHED') { if (['CANCELED', 'UNKNOWN', 'RATE_LIMIT'].indexOf(d.status) > -1) return { statut: 'erreur' }; continue; }
+      const info = (d.data && d.data[0] && d.data[0].contact_info) || {};
+      const email = (info.most_probable_work_email && info.most_probable_work_email.email) || '';
+      const telephone = (info.most_probable_phone && info.most_probable_phone.number) || '';
+      if (email || telephone) return { statut: 'trouve', email: email, telephone: telephone, source: 'FullEnrich (base fournisseur, à vérifier)' };
+      return { statut: 'vide' };
+    }
+    return { statut: 'vide' };
+  } catch (e) { return { statut: 'erreur' }; }
+}
+
 app.get('/api/robot/coordonnees-pro', requireAdmin, async (req, res) => {
   const nomComplet = String(req.query.nom || '').trim();
   const societe = String(req.query.societe || '').trim();
@@ -3048,7 +3141,8 @@ app.get('/api/robot/coordonnees-pro', requireAdmin, async (req, res) => {
   const fournisseurs = [
     { nom: 'Societeinfo', fn: () => appelSocieteinfo(nomComplet, societe, siren) },
     { nom: 'Dropcontact', fn: () => appelDropcontact(prenom, nomFamille, societe) },
-    { nom: 'Datagma', fn: () => appelDatagma(prenom, nomFamille, societe) }
+    { nom: 'Datagma', fn: () => appelDatagma(prenom, nomFamille, societe) },
+    { nom: 'FullEnrich', fn: () => appelFullEnrich(prenom, nomFamille, societe) }
   ];
   const etapes = [];
   for (const f of fournisseurs) {
@@ -4396,7 +4490,7 @@ app.use((err, req, res, next) => {
 const AI_PROVIDER = (process.env.AI_PROVIDER || (process.env.ANTHROPIC_API_KEY ? 'anthropic' : (process.env.GEMINI_API_KEY ? 'gemini' : 'anthropic'))).toLowerCase();
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-5-20250929';
+const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-5';
 // Configurable pour les tests (pointé vers un faux serveur qui imite l'API
 // Anthropic) — en production, reste toujours l'API officielle par défaut.
 const ANTHROPIC_API_BASE = process.env.ANTHROPIC_API_BASE || 'https://api.anthropic.com';
@@ -5022,6 +5116,8 @@ app.get('/crm.html', (req, res, next) => {
   if (ROLES_STAFF.indexOf(role) === -1) return res.redirect('/espace.html');
   next();
 });
+
+if (Sentry) Sentry.setupExpressErrorHandler(app);
 
 // Seules les pages HTML et les ressources publiques sont servies : jamais le
 // code du serveur, la documentation interne, les outils, les dépendances, ni
