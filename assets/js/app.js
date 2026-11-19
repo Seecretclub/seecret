@@ -1106,6 +1106,7 @@
       try { const r = await API.get('/api/mon-recherche'); state.recherche = Object.assign({}, state.recherche, r.recherche); } catch (e) { /* pas de recherche */ }
       try { const d = await API.get('/api/documents'); state.docs = d.documents || []; } catch (e) { /* pas de docs */ }
       try { const n = await API.get('/api/mes-notifications'); state.mesNotifications = n.notifications || []; } catch (e) { /* pas de notifications */ }
+      try { const md = await API.get('/api/mandat?apercu=0'); state.mandatActif = md.mandat || null; } catch (e) { /* pas de mandat */ }
     } catch (e) {
       state.membre = null;
       state.session = null;
@@ -1602,6 +1603,13 @@
         '</div>' +
         '<div class="se-grid" style="gap:18px">' +
           '<div class="ed-panel">' +
+            '<div class="se-row" style="justify-content:space-between"><h3 style="margin:0">Mandat de recherche</h3>' + (state.mandatActif ? '<span class="se-badge open">Signé</span>' : '<span class="se-badge muted">Non signé</span>') + '</div>' +
+            (state.mandatActif
+              ? '<p class="se-muted" style="margin:6px 0 0">N° ' + esc(state.mandatActif.numero) + ' · signé le ' + dateFR(state.mandatActif.signeLe) + ' · valable jusqu’au ' + dateFR(state.mandatActif.expireLe) + '.</p>' +
+                '<a class="se-btn ghost block" style="margin-top:12px" href="/api/mandat/' + encodeURIComponent(state.mandatActif.id) + '/document" target="_blank" rel="noopener">Voir mon mandat signé</a>'
+              : '<p class="se-muted" style="margin:6px 0 0">Il vous sera proposé à votre première demande de visite. Gratuit : les honoraires ne sont dus qu’à l’achat.</p>') +
+          '</div>' +
+          '<div class="ed-panel">' +
             '<h3>Connexions récentes</h3>' +
             '<div class="se-list" style="margin-top:8px">' +
               ((m.connexions || []).length
@@ -1843,6 +1851,19 @@
     'outils-compare': () => { location.hash = '#/outils'; },
     'more': () => { modal = moreSheet(); render(); },
     'visite-open': (el, id) => { modal = visiteModal(id); render(); },
+    'mandat-ouvrir': () => { ouvrirMandat(); },
+    'mandat-code': async (el) => {
+      const statut = document.querySelector('[data-mandat-statut]');
+      el.disabled = true;
+      try {
+        const r = await API.send('POST', '/api/mandat/code', {});
+        if (statut) statut.textContent = 'Code envoyé à ' + r.envoyeA + ' (valable 10 minutes).';
+        el.textContent = 'Renvoyer un code';
+      } catch (e) {
+        if (statut) statut.textContent = e.message || 'Envoi impossible.';
+      }
+      setTimeout(() => { el.disabled = false; }, 30000);
+    },
     'offre-open': (el, id) => { modal = offreModal(id); render(); },
     'finaliser-adhesion': (el) => {
       const m = manquesAdhesion();
@@ -1942,15 +1963,63 @@
 
   function visiteModal(id) {
     const b = bien(id);
-    const creneaux = ['Jeudi 6 novembre, 18 h', 'Vendredi 7 novembre, 12 h', 'Samedi 8 novembre, 10 h'];
+    const demain = new Date(Date.now() + 24 * 3600 * 1000);
+    const pad = (n) => String(n).padStart(2, '0');
+    const min = demain.getFullYear() + '-' + pad(demain.getMonth() + 1) + '-' + pad(demain.getDate()) + 'T08:00';
+    const champ = (n, requis) => '<input class="se-input" type="datetime-local" name="creneau' + n + '" min="' + min + '" step="900"' + (requis ? ' required' : '') + ' style="margin-top:6px"/>';
     return '<h3>Demander une visite</h3><p class="se-muted">' + esc(b ? b.titre : '') + ' · ' + esc(b ? b.label : '') + '</p>' +
       '<form data-form="visite" data-bien="' + id + '">' +
-        '<div class="se-field"><label>Créneaux proposés</label>' +
-          creneaux.map((c, i) => '<label class="se-switch" style="margin:6px 0"><input type="radio" name="creneau" value="' + esc(c) + '"' + (i === 0 ? ' checked' : '') + '/> ' + esc(c) + '</label>').join('') +
-        '</div>' +
+        '<div class="se-field"><label>Vos disponibilités (jusqu’à 3 créneaux)</label>' + champ(1, true) + champ(2, false) + champ(3, false) + '</div>' +
         '<div class="se-field" style="margin-top:14px"><label>Message à l’agent (optionnel)</label><textarea class="se-textarea" name="note" style="min-height:80px" placeholder="Je suis disponible en fin de journée…"></textarea></div>' +
+        '<p class="se-hint" style="margin-top:10px">' + (state.mandatActif ? 'Votre mandat de recherche est signé : l’agent confirme le créneau et vous envoie l’adresse par email et WhatsApp.' : 'Étape suivante : la signature en ligne de votre mandat de recherche (gratuit, honoraires dus uniquement à l’achat). L’adresse vous est envoyée à la confirmation de la visite.') + '</p>' +
         '<div class="se-modal-foot"><button class="se-btn ghost" type="button" data-act="modal-close">Annuler</button><button class="se-btn" type="submit">Envoyer la demande</button></div>' +
       '</form>';
+  }
+
+  // ---- Mandat de recherche : lecture, code par email, signature ----
+  function mandatModal(info) {
+    if (!info) return '<h3>Mandat de recherche</h3><p class="se-muted">Chargement du mandat…</p>';
+    if (info.indisponible) {
+      return '<h3>Demande enregistrée</h3><p class="se-muted">' + esc(info.message) + '</p><div class="se-modal-foot"><button class="se-btn" type="button" data-act="modal-close">Fermer</button></div>';
+    }
+    if (info.signeOk) {
+      const m = info.mandat || {};
+      return '<h3>Mandat signé</h3>' +
+        '<p class="se-muted">Mandat n° ' + esc(m.numero || '') + ' signé le ' + esc(dateFR(m.signeLe)) + '. Une copie vient de vous être envoyée par email.</p>' +
+        '<p style="margin-top:10px">Votre agent confirme maintenant le créneau de visite : vous recevrez <b>l’heure et l’adresse</b> par email et par WhatsApp.</p>' +
+        (info.visitePossible && !info.visitePossible.ok ? '<p class="se-hint" style="margin-top:8px">' + esc(info.visitePossible.raison) + '</p>' : '') +
+        '<div class="se-modal-foot"><a class="se-btn ghost" href="/api/mandat/' + encodeURIComponent(m.id || '') + '/document" target="_blank" rel="noopener">Voir mon mandat</a><button class="se-btn" type="button" data-act="modal-close">Fermer</button></div>';
+    }
+    if (info.mandat && info.mandat.statut === 'signe') {
+      return '<h3>Mandat déjà signé</h3><p class="se-muted">Votre mandat de recherche n° ' + esc(info.mandat.numero) + ' est valable jusqu’au ' + esc(dateFR(info.mandat.expireLe)) + '. Votre agent confirme la visite et vous envoie l’adresse.</p><div class="se-modal-foot"><button class="se-btn" type="button" data-act="modal-close">Fermer</button></div>';
+    }
+    return '<h3>Signez votre mandat de recherche</h3>' +
+      '<p class="se-muted">Gratuit, sans engagement d’achat : les honoraires ne sont dus qu’à la signature de l’acte de vente d’un bien présenté par l’agence. Ce mandat permet à votre agent de vous transmettre l’adresse et d’organiser la visite.</p>' +
+      '<div class="se-mandat-texte">' + (info.apercu || '') + '</div>' +
+      '<form data-form="mandat-signer" style="margin-top:14px">' +
+        '<div class="se-field"><label>Votre adresse postale</label><input class="se-input" name="adresse" autocomplete="street-address" required placeholder="12 rue de l’Exemple, 75011 Paris"/></div>' +
+        '<label class="se-switch" style="margin:12px 0 6px;align-items:flex-start"><input type="checkbox" name="accepte" required/> <span>J’ai lu le mandat de recherche et j’en accepte les termes.</span></label>' +
+        '<label class="se-switch" style="margin:6px 0;align-items:flex-start"><input type="checkbox" name="demarrage" checked/> <span>Je demande que les visites puissent avoir lieu avant la fin de mon délai de rétractation de 14 jours (je conserve mon droit de rétractation).</span></label>' +
+        '<div class="se-row" style="gap:8px;margin-top:12px;align-items:flex-end;flex-wrap:wrap">' +
+          '<button class="se-btn ghost" type="button" data-act="mandat-code">Recevoir mon code par email</button>' +
+          '<span class="se-hint" data-mandat-statut></span>' +
+        '</div>' +
+        '<div class="se-field" style="margin-top:12px"><label>Code reçu par email</label><input class="se-input" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" required placeholder="6 chiffres"/></div>' +
+        '<div class="se-modal-foot"><button class="se-btn ghost" type="button" data-act="modal-close">Plus tard</button><button class="se-btn" type="submit">Signer le mandat</button></div>' +
+      '</form>';
+  }
+
+  async function ouvrirMandat() {
+    modal = mandatModal(null);
+    render();
+    try {
+      const info = await API.get('/api/mandat');
+      if (info.mandat && info.mandat.statut === 'signe') state.mandatActif = info.mandat;
+      modal = mandatModal(info);
+    } catch (e) {
+      modal = '<h3>Mandat indisponible</h3><p class="se-muted">' + esc(e.message || 'Réessayez dans un instant.') + '</p><div class="se-modal-foot"><button class="se-btn" type="button" data-act="modal-close">Fermer</button></div>';
+    }
+    render();
   }
 
   function offreModal(id) {
@@ -1991,8 +2060,15 @@
   /* ================================ events ================================ */
 
   document.addEventListener('click', (e) => {
+    // Un bouton « submit » dans une modale ne doit jamais être intercepté :
+    // le fond de la modale porte data-act="modal-close", et le
+    // preventDefault() ci-dessous annulait l'envoi de TOUS les formulaires
+    // affichés en modale (demande de visite, offre, mandat…).
+    if (e.target.closest('button[type="submit"], input[type="submit"]')) return;
     const el = e.target.closest('[data-act]');
     if (!el) return;
+    const zoneProtegee = e.target.closest('[data-stop]');
+    if (zoneProtegee && !zoneProtegee.contains(el)) return;
     const act = el.getAttribute('data-act');
     if (act === 'offre-preset') {
       const form = el.closest('form');
@@ -2122,7 +2198,8 @@
 
     if (kind === 'visite') {
       const bienId = form.getAttribute('data-bien');
-      const creneau = String(data.get('creneau') || '');
+      const creneaux = ['creneau1', 'creneau2', 'creneau3'].map((k) => String(data.get(k) || '')).filter(Boolean);
+      const creneau = creneaux.map((c) => c.replace('T', ' à ')).join(' · ');
       const note = String(data.get('note') || '');
       // La demande part vraiment vers le serveur (et donc vers l'agent dans
       // le CRM) depuis cette correction — avant, elle n'était écrite que
@@ -2130,16 +2207,39 @@
       // à l'agence. Le serveur refuse aussi la demande si le bien est
       // encore en avant-première (pas encore ouvert aux visites).
       try {
-        await API.send('POST', '/api/visites', { bienId: bienId, creneau: creneau, note: note });
+        if (!creneaux.length) { toast('Proposez au moins un créneau.', 'warn'); return; }
+        const rep = await API.send('POST', '/api/visites', { bienId: bienId, creneaux: creneaux, note: note });
         state.visites.unshift({
           id: uid('v'), bienId: bienId, sens: 'envoyee', creneau: creneau,
           note: note, statut: 'demandee', at: nowISO(), demandeur: (state.profil.prenom + ' ' + state.profil.nom).trim()
         });
-        modal = null;
         commit();
-        toast('Demande envoyée. Votre agent confirme sous 24 h.');
+        if (rep.mandatRequis) { await ouvrirMandat(); return; }
+        modal = null;
+        render();
+        toast('Demande envoyée. Votre agent confirme le créneau et vous envoie l’adresse.');
       } catch (e) {
         toast((e && e.message) || 'Demande impossible pour l’instant.', 'warn');
+      }
+      return;
+    }
+
+    if (kind === 'mandat-signer') {
+      const bouton = form.querySelector('button[type="submit"]');
+      if (bouton) bouton.disabled = true;
+      try {
+        const res = await API.send('POST', '/api/mandat/signer', {
+          adresse: String(data.get('adresse') || ''),
+          accepte: data.get('accepte') === 'on',
+          demarrageAnticipe: data.get('demarrage') === 'on',
+          code: String(data.get('code') || '')
+        });
+        state.mandatActif = res.mandat;
+        modal = mandatModal({ signeOk: true, mandat: res.mandat, visitePossible: res.visitePossible });
+        render();
+      } catch (err) {
+        if (bouton) bouton.disabled = false;
+        toast(err.message || 'Signature impossible.', 'warn');
       }
       return;
     }

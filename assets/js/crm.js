@@ -979,7 +979,8 @@
         fetch('/api/offres', { headers: { accept: 'application/json' } })
       ]);
       const leads = rl.ok ? (await rl.json()).leads || [] : [];
-      const demandes = rd.ok ? (await rd.json()).demandes || [] : [];
+      const rdj = rd.ok ? await rd.json() : {};
+      const demandes = rdj.demandes || [];
       state.tachesVerif = rt.ok ? ((await rt.json()).tasks || []) : [];
       state.activites = ra.ok ? ((await ra.json()).activites || []) : [];
       const offresServeur = ro.ok ? ((await ro.json()).offres || []) : [];
@@ -1052,6 +1053,7 @@
         if (rnj.ok && Array.isArray(rnj.traitees)) state.notificationsTraitees = rnj.traitees;
       } catch (e) { /* pas de notifications persistées */ }
 
+      state.agenceManquants = Array.isArray(rdj.agenceManquants) ? rdj.agenceManquants : (state.agenceManquants || []);
       demandes.forEach((d) => {
         const id = 'srv-' + d.id;
         const fresh = {
@@ -1060,7 +1062,9 @@
           statut: d.statut || 'nouvelle',
           source: d.source || 'Espace membre', cree: d.cree || nowISO(),
           role: d.role, serveur: true,
-          montant: d.montant || 0, offreId: d.offreId || null, bienId: d.bienId || null, leadId: d.leadId || d.clientId || null, bienAdresse: d.bienAdresse || ''
+          montant: d.montant || 0, offreId: d.offreId || null, bienId: d.bienId || null, leadId: d.leadId || d.clientId || null, bienAdresse: d.bienAdresse || '',
+          creneaux: d.creneaux || [], creneauxLisibles: d.creneauxLisibles || [], note: d.note || '',
+          mandat: d.mandat || null, visitePossible: d.visitePossible || null, rdv: d.rdv || null
         };
         const existing = state.demandes.find((x) => x.id === id);
         if (existing) Object.assign(existing, fresh);
@@ -1553,6 +1557,7 @@
         '<p>' + esc(d.message || '') + (b ? ' <span class="se-hint">· ' + esc(b.titre) + '</span>' : '') + '</p>' +
         '<div class="se-mail-actions" style="margin-top:8px;flex-wrap:wrap;gap:6px">' +
           actionsModif +
+          (d.type === 'visite' && n ? badgeMandat(d) : '') +
           '<button class="se-btn ghost sm" data-act="demande-ouvrir" data-id="' + d.id + '">Voir la fiche</button>' +
           badgeStatut +
         '</div>' +
@@ -3673,6 +3678,8 @@
                     '<button class="se-btn soft block" style="margin-top:8px" data-act="demande-modif-valider" data-id="' + d.id + '">Valider la modification</button>' +
                     '<button class="se-btn danger ghost block" style="margin-top:8px" data-act="demande-modif-refuser" data-id="' + d.id + '">Refuser</button>'
                   : '<span class="se-hint">Demande traitée.</span>')
+              : d.type === 'visite'
+              ? actionsVisiteHtml(d)
               : d.type === 'statut'
               // Même défaut que pour les demandes de modification : « Accepter
               // / Suspendre l'adhésion » n'a aucun sens pour une demande de
@@ -3695,6 +3702,57 @@
           '</div>' +
         '</div>' +
       '</div>';
+  }
+
+  // ---- Visites : mandat de recherche puis confirmation avec adresse ----
+  function badgeMandat(d) {
+    const m = d.mandat;
+    if (m && m.statut === 'signe') return '<span class="se-badge open">Mandat signé</span>';
+    return '<span class="se-badge warn">Mandat à signer</span>';
+  }
+
+  function actionsVisiteHtml(d) {
+    const m = d.mandat;
+    const possible = d.visitePossible || { ok: false };
+    const creneaux = (d.creneauxLisibles && d.creneauxLisibles.length) ? d.creneauxLisibles : (d.creneau ? [d.creneau] : []);
+    const premier = (d.creneaux || [])[0] || '';
+    const infoMandat = m && m.statut === 'signe'
+      ? '<div class="se-kv" style="margin-top:4px">' + kv('Mandat', 'n° ' + esc(m.numero) + ' · signé le ' + dFR(m.signeLe)) + kv('Valable jusqu’au', dFR(m.expireLe)) + kv('Rétractation', m.demarrageAnticipe ? 'exécution immédiate demandée' : 'jusqu’au ' + dFR(m.retractationFin)) + '</div>' +
+        '<a class="se-btn ghost sm" style="margin-top:8px" href="/api/mandat/' + encodeURIComponent(m.id) + '/document" target="_blank" rel="noopener">Voir le mandat signé</a>'
+      : '<p class="se-hint" style="margin-top:4px">' + ((state.agenceManquants || []).length
+          ? 'Le mandat ne peut pas encore être proposé : identité de l’agence incomplète dans Railway (' + esc(state.agenceManquants.join(', ')) + ').'
+          : 'Le membre doit signer son mandat de recherche depuis son espace avant que la visite puisse être confirmée.') + '</p>';
+    if (d.statut !== 'nouvelle') {
+      return '<div>' + badgeMandat(d) + '</div>' + (d.rdv ? '<p class="se-hint" style="margin-top:8px">Visite confirmée pour le ' + esc(d.rdv.date.split('-').reverse().join('/')) + ' à ' + esc(d.rdv.heure) + '. Adresse envoyée au membre.</p>' : '<span class="se-hint">Demande traitée.</span>') + infoMandat;
+    }
+    return '<div>' + badgeMandat(d) + '</div>' + infoMandat +
+      '<div style="margin-top:14px"><div class="se-hint" style="margin-bottom:6px">Créneaux proposés par le membre</div>' +
+        (creneaux.length ? creneaux.map((c) => '<div style="font-size:13.5px">' + esc(c) + '</div>').join('') : '<div class="se-hint">—</div>') +
+      '</div>' +
+      '<form data-form="visite-confirmer" data-id="' + d.id + '" style="margin-top:14px">' +
+        '<div class="se-row" style="gap:8px;flex-wrap:wrap">' +
+          '<div class="se-field" style="flex:1;min-width:140px"><label>Date</label><input class="se-input" type="date" name="date" value="' + esc(premier.slice(0, 10)) + '" required/></div>' +
+          '<div class="se-field" style="flex:0 1 150px;min-width:130px"><label>Heure</label><input class="se-input" type="time" name="heure" value="' + esc(premier.slice(11, 16)) + '" required/></div>' +
+        '</div>' +
+        (possible.ok ? '' : '<p class="se-hint" style="margin-top:8px;color:var(--color-alert)">' + esc(possible.raison || 'Mandat non signé.') + '</p>') +
+        '<button class="se-btn soft block" style="margin-top:10px" type="submit"' + (possible.ok || possible.apresRetractation ? '' : ' disabled') + '>Confirmer la visite et envoyer l’adresse</button>' +
+      '</form>' +
+      '<button class="se-btn danger ghost block" style="margin-top:8px" data-act="visite-refuser-agent" data-id="' + d.id + '">Refuser la demande</button>';
+  }
+
+  async function confirmerVisite(id, date, heure) {
+    const d = state.demandes.find((x) => x.id === id || x.serverDemandeId === id);
+    if (!d || !d.serverDemandeId) return;
+    try {
+      const r = await fetch('/api/demandes/' + d.serverDemandeId + '/decision', { method: 'POST', headers: { 'content-type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ decision: 'valider', rdv: { date: date, heure: heure } }) });
+      const res = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(res.error || 'Erreur serveur');
+      d.statut = 'validee';
+      d.rdv = res.rdv || { date: date, heure: heure };
+      if (res.notif && res.notif.tel) d.__whatsapp = 'https://wa.me/' + String(res.notif.tel).replace(/[^0-9]/g, '') + '?text=' + encodeURIComponent(res.notif.waMessage || '');
+      commit();
+      ouvrirNotifieModal(res.notif, 'Visite confirmée — adresse envoyée');
+    } catch (e) { toast('Confirmation impossible : ' + (e.message || 'erreur'), 'warn'); }
   }
 
   async function decisionDemande(id, decision, motif) {
@@ -5182,7 +5240,7 @@
     const c = client(clientId);
     const t = tab || 'email';
     const pdf = b ? ('/api/biens/' + (b.serverId || b.id) + '/pdf') : '';
-    const msgDefaut = 'Bonjour ' + (c ? c.prenom : '') + ', voici un bien qui correspond à votre recherche : ' + (b ? b.titre : '') + ' — ' + (b ? euro(b.prix) : '') + (b && b.adresse ? ' (' + b.adresse + ')' : '') + '. Souhaitez-vous le visiter ?';
+    const msgDefaut = 'Bonjour ' + (c ? c.prenom : '') + ', voici un bien qui correspond à votre recherche : ' + (b ? b.titre : '') + ' — ' + (b ? euro(b.prix) : '') + (b && b.quartier ? ' (' + (QUARTIERS.find((q) => q.id === b.quartier) || {}).label + ')' : '') + '. Souhaitez-vous le visiter ? L’adresse vous sera communiquée à la confirmation de la visite.';
     const msg = state.__previewMsg !== undefined ? state.__previewMsg : msgDefaut;
     const ph = photo(b);
     const photos = (b && b.photos) || [];
@@ -5459,6 +5517,7 @@
     'accepter-adhesion': async (el, id) => { await decisionDemande(id, 'valider'); },
     'suspendre-adhesion': (el, id) => { modal = suspendreModal(id); render(); },
     'refuser-adhesion': async (el, id) => { await decisionDemande(id, 'refuser'); },
+    'visite-refuser-agent': async (el, id) => { await decisionDemande(id, 'refuser'); },
     // Actions dédiées aux demandes de modification : ouvrir directement le
     // formulaire du bien concerné (modale, sans quitter la page), ou valider/
     // refuser la demande en un clic — decisionDemande() applique déjà le
@@ -6469,6 +6528,13 @@
       if (data.get('prix') !== null) d.prix = Number(data.get('prix')) || 0;
       commit();
       toast('Fiche mise à jour.', 'ok');
+      return;
+    }
+
+    if (kind === 'visite-confirmer') {
+      const date = String(data.get('date') || ''), heure = String(data.get('heure') || '');
+      if (!date || !heure) { toast('Indiquez la date et l’heure.', 'warn'); return; }
+      await confirmerVisite(form.getAttribute('data-id'), date, heure);
       return;
     }
 

@@ -83,7 +83,30 @@ function readDb() {
   return db;
 }
 
-function writeDb(db) { fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2)); }
+// Écriture atomique : on écrit dans un fichier temporaire puis on le renomme.
+// Un arrêt du serveur (ou un disque plein) au milieu d'une écriture ne peut
+// donc plus laisser un data.json tronqué : on garde l'ancienne version entière.
+// Une copie datée est faite une fois par jour (14 jours conservés).
+const BACKUP_DIR = path.join(DATA_DIR, 'backups');
+let derniereSauvegarde = '';
+function sauvegardeQuotidienne() {
+  const jour = new Date().toISOString().slice(0, 10);
+  if (derniereSauvegarde === jour) return;
+  try {
+    fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    const cible = path.join(BACKUP_DIR, 'data-' + jour + '.json');
+    if (!fs.existsSync(cible)) fs.copyFileSync(DATA_FILE, cible);
+    fs.readdirSync(BACKUP_DIR).filter((f) => /^data-\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort().reverse().slice(14)
+      .forEach((f) => { try { fs.unlinkSync(path.join(BACKUP_DIR, f)); } catch (e) {} });
+    derniereSauvegarde = jour;
+  } catch (e) { console.error('[sauvegarde] échec :', e.message); }
+}
+function writeDb(db) {
+  const tmp = DATA_FILE + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(db, null, 2));
+  fs.renameSync(tmp, DATA_FILE);
+  sauvegardeQuotidienne();
+}
 
 // Journal d'activité unifié : une seule source de vérité pour tout ce qui arrive
 // à un lead/bien (candidature, admission, mise au catalogue, offres, relances
@@ -800,7 +823,7 @@ function ficheProduitHtml(bien) {
     (photos[0] ? '<img src="' + photo(photos[0]) + '" style="width:100%;max-height:420px;object-fit:cover;display:block;margin:28px 0 18px;border-radius:12px;"/>' : ''),
     (photos.length > 1 ? '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:28px;">' + photos.slice(1).map((p) => '<img src="' + photo(p) + '" style="width:118px;height:88px;object-fit:cover;border-radius:8px;"/>').join('') + '</div>' : ''),
     '<h1 style="font-family:Georgia,serif;font-weight:400;font-size:40px;line-height:1.1;margin:0 0 6px;">' + (bien.titre || '') + '</h1>',
-    '<div style="color:#5f5a54;font-size:16px;margin-bottom:24px;">' + (bien.adresse || '') + (bien.codePostal ? ' ' + bien.codePostal : '') + (bien.ville ? ' ' + bien.ville : '') + '</div>',
+    '<div style="color:#5f5a54;font-size:16px;margin-bottom:24px;">' + escHtml([labelQuartier(bien.quartier) || '', bien.codePostal || '', bien.ville || ''].filter(Boolean).join(' · ')) + ' — adresse communiquée à la confirmation de la visite</div>',
     '<table style="width:100%;border-collapse:collapse;margin-bottom:28px;">' + rows.map((r, i) => '<tr style="border-top:' + (i === 0 ? '1px solid #e3dfd9' : '') + '"><td style="padding:12px 0;border-bottom:1px solid #eeebe6;color:#5f5a54;width:40%;font-size:13px;text-transform:uppercase;letter-spacing:.08em;">' + r[0] + '</td><td style="padding:12px 0;border-bottom:1px solid #eeebe6;font-size:15px;">' + r[1] + '</td></tr>').join('') + '</table>',
     (bien.description ? '<p style="font-size:15.5px;line-height:1.7;color:#4e4759;">' + bien.description + '</p>' : ''),
     '<div style="margin-top:36px;padding-top:18px;border-top:1px solid #eeebe6;font-size:11px;color:#9a948c;text-align:center;">Document strictement confidentiel. Voir sur Seecret pour plus d\'informations.</div>',
@@ -1124,6 +1147,23 @@ const upload = multer({
   }
 });
 
+// Les photos des biens restent publiques (emails, catalogue), mais une pièce
+// d'identité, un justificatif de financement ou un titre de propriété n'est
+// servi qu'à son propriétaire et à l'agence.
+app.use('/uploads', (req, res, next) => {
+  const fichier = '/uploads/' + path.basename(decodeURIComponent(req.path || ''));
+  const db = readDb();
+  const titulaire = db.leads.find((l) => (l.documents || []).some((d) => d.fichier === fichier));
+  if (!titulaire) return next();
+  const token = getCookie(req, SESSION_COOKIE);
+  const session = token ? db.sessions.find((x) => x.id === sha256(token)) : null;
+  const lecteur = session ? db.leads.find((l) => l.id === session.leadId) : null;
+  if (lecteur && (lecteur.id === titulaire.id || ROLES_STAFF.indexOf(roleOf(lecteur)) > -1)) {
+    res.setHeader('Cache-Control', 'private, no-store');
+    return next();
+  }
+  return res.status(404).send('Introuvable');
+});
 app.use('/uploads', express.static(UPLOADS_DIR, { maxAge: '1h' }));
 app.use('/vendor/simplewebauthn', express.static(path.join(__dirname, 'node_modules/@simplewebauthn/browser/esm')));
 
@@ -1350,6 +1390,18 @@ function bienPublic(b) {
   };
 }
 
+// Version catalogue d'un bien, vue par les AUTRES membres : ni adresse exacte
+// ni coordonnées GPS. L'adresse n'est communiquée qu'à la confirmation d'une
+// visite (mandat signé + validation de l'agent), par email et WhatsApp.
+function bienCatalogue(b) {
+  const p = bienPublic(b);
+  delete p.adresse;
+  delete p.lat;
+  delete p.lon;
+  p.adresseMasquee = true;
+  return p;
+}
+
 function nomComplet(lead) {
   return ((lead.prenom || '') + ' ' + (lead.nom || '')).trim() || lead.email || 'Membre';
 }
@@ -1380,12 +1432,18 @@ app.get('/api/catalogue', requireAuth, (req, res) => {
     (b.statut === 'avant-premiere' || b.statut === 'ouvert') &&
     (!monBien || b.id !== monBien.id)
   );
-  res.json({ ok: true, biens: biens.map(bienPublic) });
+  res.json({ ok: true, biens: biens.map(bienCatalogue) });
 });
 
 app.patch('/api/mon-bien', requireAuth, (req, res) => {
   const b = bienDuMembre(req.db, req.lead);
   const body = req.body || {};
+  // Une fois le bien validé par l'agence, plus aucune modification directe :
+  // tout changement passe par une demande de modification (POST
+  // /api/mon-bien/modification) que l'agent valide dans le CRM.
+  if (b.validation === 'valide') {
+    return res.status(409).json({ error: 'Votre bien est validé par l’agence : envoyez une demande de modification, votre agent la valide.' });
+  }
   ['titre', 'description', 'adresse', 'codePostal', 'ville', 'type', 'quartier', 'transaction', 'etage', 'dpe', 'ges', 'etat', 'exterieur']
     .forEach((k) => { if (typeof body[k] === 'string') b[k] = body[k].slice(0, 400); });
   ['surface', 'pieces', 'chambres', 'sdb', 'prix', 'surfaceExterieur', 'anneeConstruction', 'charges']
@@ -1817,10 +1875,27 @@ app.patch('/api/recherches/:id', requireAdmin, (req, res) => {
 });
 
 // ---- Fiche produit (HTML imprimable en PDF) ----
+// Clé serveur (créée une fois, sur le volume) pour signer les liens de fiche.
+function cleServeur() {
+  const fichier = path.join(DATA_DIR, 'secret.key');
+  try { return fs.readFileSync(fichier, 'utf8').trim(); } catch (e) {
+    const cle = crypto.randomBytes(32).toString('hex');
+    try { fs.writeFileSync(fichier, cle, { mode: 0o600 }); } catch (e2) {}
+    return cle;
+  }
+}
+function jetonFiche(bienId) { return crypto.createHmac('sha256', cleServeur()).update('fiche:' + bienId).digest('hex').slice(0, 32); }
+
 app.get('/api/biens/:id/pdf', (req, res) => {
   const db = readDb();
   const bien = db.biens.find((b) => b.id === req.params.id);
-  if (!bien) return res.status(404).send('Bien introuvable');
+  // Accès : lien signé envoyé par l'agence (?t=…), ou session de l'agence.
+  const token = getCookie(req, SESSION_COOKIE);
+  const session = token ? db.sessions.find((x) => x.id === sha256(token)) : null;
+  const lecteur = session ? db.leads.find((l) => l.id === session.leadId) : null;
+  const staff = lecteur && ROLES_STAFF.indexOf(roleOf(lecteur)) > -1;
+  const jetonOk = bien && typeof req.query.t === 'string' && req.query.t.length === 32 && crypto.timingSafeEqual(Buffer.from(req.query.t), Buffer.from(jetonFiche(bien.id)));
+  if (!bien || (!staff && !jetonOk)) return res.status(404).send('Fiche introuvable');
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(ficheProduitHtml(bien));
 });
@@ -1843,7 +1918,7 @@ app.post('/api/biens/:id/envoi', requireAdmin, async (req, res) => {
         from: '"Bonjour Seecret" <' + FROM_EMAIL + '>',
         to: email,
         subject: (bien.titre || 'Un bien') + ' — ' + (bien.prix ? bien.prix.toLocaleString('fr-FR') + ' €' : ''),
-        html: emailBienPreview(bien, nom, message) + '<p style="font-size:13px;color:#5f5a54;margin:18px 0 0;">Téléchargez la fiche confidentielle complète : <a href="' + originOf(req) + '/api/biens/' + bien.id + '/pdf" style="color:#3b2b4a;">voir la fiche (PDF)</a></p>'
+        html: emailBienPreview(bien, nom, message) + '<p style="font-size:13px;color:#5f5a54;margin:18px 0 0;">Téléchargez la fiche confidentielle complète : <a href="' + originOf(req) + '/api/biens/' + bien.id + '/pdf?t=' + jetonFiche(bien.id) + '" style="color:#3b2b4a;">voir la fiche (PDF)</a></p>'
       });
       emailEnvoye = true;
     } catch (err) { emailErreur = (err && err.message) || 'Erreur SMTP'; }
@@ -1902,26 +1977,335 @@ app.post('/api/mes-notifications/:id/lu', requireAuth, (req, res) => {
 });
 
 // ---- Visites (demande du membre) ----
+// ============================================================================
+// MANDAT DE RECHERCHE — signature électronique simple par code envoyé par email
+// ----------------------------------------------------------------------------
+// Parcours : le membre demande une visite → s'il n'a pas de mandat valide, il
+// signe le mandat de recherche (code à usage unique reçu par email) → l'agent
+// confirme la visite (date + heure) → l'adresse exacte part par email (et par
+// WhatsApp, un clic de l'agent). L'adresse n'est JAMAIS envoyée avant.
+//
+// Preuves conservées pour chaque signature : texte exact du mandat (gelé),
+// empreinte SHA-256, date et heure, IP, navigateur, email de réception du code.
+// C'est une signature électronique « simple » au sens du règlement eIDAS :
+// valable, mais à faire valider (niveau suffisant ?) par le conseil de l'agence.
+// Le texte du mandat est un MODÈLE : à relire et valider avant mise en ligne.
+//
+// Identité de l'agence : variables d'environnement (Railway → Variables). Tant
+// que les mentions obligatoires manquent, aucun mandat n'est proposé au membre.
+// ============================================================================
+const MANDAT_VERSION = 'MR-2026-11-v1';
+const MANDAT_CODE_TTL = 10 * 60 * 1000;
+
+function agence() {
+  return {
+    raisonSociale: String(process.env.AGENCE_RAISON_SOCIALE || '').trim(),
+    forme: String(process.env.AGENCE_FORME || '').trim(),
+    siren: String(process.env.AGENCE_SIREN || '').trim(),
+    adresse: String(process.env.AGENCE_ADRESSE || '').trim(),
+    carteT: String(process.env.AGENCE_CARTE_T || '').trim(),
+    garantie: String(process.env.AGENCE_GARANTIE || '').trim(),
+    rcp: String(process.env.AGENCE_RCP || '').trim(),
+    representant: String(process.env.AGENCE_REPRESENTANT || '').trim(),
+    tauxAcquereur: Number(process.env.AGENCE_TAUX_ACQUEREUR || 5),
+    tauxMixte: Number(process.env.AGENCE_TAUX_MIXTE || 3),
+    assiette: String(process.env.AGENCE_ASSIETTE || 'du prix de vente du bien hors honoraires (prix net vendeur)').trim(),
+    nonContournementMois: Number(process.env.AGENCE_NON_CONTOURNEMENT_MOIS || 12)
+  };
+}
+const AGENCE_OBLIGATOIRE = { raisonSociale: 'AGENCE_RAISON_SOCIALE', adresse: 'AGENCE_ADRESSE', carteT: 'AGENCE_CARTE_T', garantie: 'AGENCE_GARANTIE' };
+function agenceManquants() {
+  const a = agence();
+  return Object.keys(AGENCE_OBLIGATOIRE).filter((k) => !a[k]).map((k) => AGENCE_OBLIGATOIRE[k]);
+}
+
+function ajouterMois(date, mois) { const d = new Date(date); d.setMonth(d.getMonth() + mois); return d; }
+function dateLongue(iso) {
+  try { return new Date(iso).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Europe/Paris' }); } catch (e) { return String(iso); }
+}
+function dateHeure(iso) {
+  try { return new Date(iso).toLocaleString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'Europe/Paris' }); } catch (e) { return String(iso); }
+}
+
+// Le mandat applicable : signé, non expiré, non révoqué (le plus récent).
+function mandatApplicable(db, leadId) {
+  const now = Date.now();
+  return (db.mandats || [])
+    .filter((m) => m.leadId === leadId && m.statut === 'signe' && new Date(m.expireLe).getTime() > now)
+    .sort((a, b) => new Date(b.signature.at) - new Date(a.signature.at))[0] || null;
+}
+
+// Une visite peut-elle être confirmée sous ce mandat ? (délai de rétractation)
+function mandatPermetVisite(m, dateVisite) {
+  if (!m) return { ok: false, raison: 'Le membre n’a pas encore signé son mandat de recherche.' };
+  const quand = dateVisite ? new Date(dateVisite).getTime() : Date.now();
+  if (!m.demarrageAnticipe && quand < new Date(m.retractationFin).getTime()) {
+    return { ok: false, apresRetractation: true, raison: 'Mandat signé le ' + dateLongue(m.signature.at) + ', sans demande d’exécution immédiate : la visite doit avoir lieu après la fin du délai de rétractation (' + dateLongue(m.retractationFin) + ').' };
+  }
+  return { ok: true };
+}
+
+function resumeMandat(m) {
+  if (!m) return null;
+  return {
+    id: m.id, numero: m.numero, statut: m.statut, version: m.version, taux: m.taux,
+    cree: m.cree, signeLe: m.signature ? m.signature.at : null, expireLe: m.expireLe || null,
+    retractationFin: m.retractationFin || null, demarrageAnticipe: !!m.demarrageAnticipe,
+    empreinte: m.document && m.document.sha256 ? m.document.sha256 : null
+  };
+}
+
+function prochainNumeroMandat(db) {
+  const annee = new Date().getFullYear();
+  const n = (db.mandats || []).filter((m) => String(m.numero || '').indexOf('MR-' + annee + '-') === 0).length + 1;
+  return 'MR-' + annee + '-' + String(n).padStart(4, '0');
+}
+
+function criteresTexte(r) {
+  if (!r) return 'Tout bien présenté par le mandataire via la plateforme Seecret.';
+  const bits = [];
+  const types = (Array.isArray(r.types) && r.types.length) ? r.types : (r.type ? [r.type] : []);
+  if (types.length) bits.push('type : ' + types.join(', '));
+  if (Array.isArray(r.quartiers) && r.quartiers.length) bits.push('secteurs : ' + r.quartiers.map(labelQuartier).filter(Boolean).join(', '));
+  if (r.prixMax) bits.push('budget maximum : ' + Number(r.prixMax).toLocaleString('fr-FR') + ' €');
+  if (r.surfaceMin) bits.push('surface minimale : ' + r.surfaceMin + ' m²');
+  if (r.piecesMin) bits.push(r.piecesMin + ' pièces minimum');
+  return bits.length ? bits.join(' ; ') + '.' : 'Tout bien présenté par le mandataire via la plateforme Seecret.';
+}
+
+// Texte du mandat (modèle à faire valider). `s` = données du signataire figées
+// au moment de la signature ; sans `s`, c'est l'aperçu montré avant signature.
+function mandatCorpsHtml(m, s) {
+  const a = m.agence;
+  const e = escHtml;
+  const blanc = '<span style="color:#b0472c">[à compléter]</span>';
+  const v = (x) => (x ? e(x) : blanc);
+  const signataire = s || {};
+  return [
+    '<h1>Mandat de recherche d’un bien immobilier</h1>',
+    '<p class="ref">Mandat n° ' + (m.numero ? e(m.numero) : 'attribué à la signature') + ' — non exclusif — modèle ' + e(m.version) + '</p>',
+    '<h2>Entre les soussignés</h2>',
+    '<p><b>Le mandant</b> : ' + e(m.mandant.prenom + ' ' + m.mandant.nom) + ', adresse électronique ' + e(m.mandant.email) + (m.mandant.tel ? ', téléphone ' + e(m.mandant.tel) : '') + ', demeurant ' + (signataire.adresse ? e(signataire.adresse) : '<i>adresse indiquée lors de la signature</i>') + '.</p>',
+    '<p><b>Le mandataire</b> : ' + v(a.raisonSociale) + (a.forme ? ', ' + e(a.forme) : '') + (a.siren ? ', SIREN ' + e(a.siren) : '') + ', dont le siège est ' + v(a.adresse) + ', titulaire de la carte professionnelle « Transaction sur immeubles et fonds de commerce » n° ' + v(a.carteT) + ', garantie financière : ' + v(a.garantie) + (a.rcp ? ', assurance responsabilité civile professionnelle : ' + e(a.rcp) : '') + (a.representant ? ', représenté par ' + e(a.representant) : '') + '. Activité régie par la loi n° 70-9 du 2 janvier 1970 (loi Hoguet) et son décret d’application n° 72-678 du 20 juillet 1972.</p>',
+    '<h2>1. Objet</h2>',
+    '<p>Le mandant charge le mandataire, qui accepte, de rechercher et de lui présenter un bien immobilier en vue de son acquisition, de lui faire visiter les biens retenus et de l’assister jusqu’à la signature de l’acte authentique. Critères de recherche : ' + e(m.criteres) + ' Le présent mandat couvre également tout bien présenté au mandant par le mandataire sur la plateforme Seecret pendant sa durée.</p>',
+    '<h2>2. Durée</h2>',
+    '<p>Le mandat est consenti pour une durée de douze (12) mois à compter de sa signature. Il prend fin de plein droit à son terme, sans reconduction tacite. Le mandant peut le résilier à tout moment par écrit (courrier ou email), sans frais ; la résiliation ne remet pas en cause les stipulations de l’article 6 pour les biens déjà présentés.</p>',
+    '<h2>3. Rémunération du mandataire</h2>',
+    '<p>En cas d’acquisition d’un bien présenté par le mandataire, le mandant versera au mandataire des honoraires de <b>' + e(String(m.taux).replace('.', ',')) + ' % TTC ' + e(a.assiette) + '</b>, conformément au barème affiché par le mandataire. Ces honoraires sont à la charge du mandant (acquéreur). Les prix communiqués sur la plateforme sont exprimés honoraires inclus.</p>',
+    '<p>Conformément à l’article 6 de la loi du 2 janvier 1970, <b>aucune somme n’est due ni ne peut être exigée avant que l’opération ait été effectivement conclue</b>, c’est-à-dire constatée par un acte authentique de vente. Les visites, la présentation des biens et la signature du présent mandat ne donnent lieu à aucun paiement.</p>',
+    '<h2>4. Obligations du mandataire</h2>',
+    '<p>Le mandataire s’engage à rechercher des biens correspondant aux critères du mandant, à lui communiquer les informations utiles, à organiser les visites et à l’informer de l’avancement de sa mission. Il rendra compte de sa mission sur simple demande.</p>',
+    '<h2>5. Confidentialité</h2>',
+    '<p>Les biens présentés sur la plateforme Seecret sont confidentiels (« off-market »). Le mandant s’engage à ne communiquer à aucun tiers les informations reçues, notamment l’adresse des biens, l’identité des propriétaires et les documents transmis.</p>',
+    '<h2>6. Non-contournement</h2>',
+    '<p>Pendant la durée du mandat et pendant ' + e(String(a.nonContournementMois)) + ' mois après son expiration ou sa résiliation, le mandant s’interdit d’acquérir, directement ou par personne interposée, un bien qui lui a été présenté par le mandataire sans l’intermédiaire de celui-ci. À défaut, il sera redevable envers le mandataire d’une indemnité égale au montant des honoraires prévus à l’article 3.</p>',
+    '<h2>7. Droit de rétractation</h2>',
+    '<p>Le mandat étant conclu à distance, le mandant dispose d’un délai de quatorze (14) jours à compter de sa signature pour se rétracter, sans motif ni frais, par courrier ou par email adressé au mandataire (articles L. 221-18 et suivants du Code de la consommation). Si le mandant demande expressément que l’exécution du mandat (organisation de visites) commence avant la fin de ce délai, il conserve son droit de rétractation ; aucune somme n’est due à ce titre.</p>',
+    '<p>Exécution avant la fin du délai de rétractation : <b>' + (s ? (s.demarrageAnticipe ? 'demandée expressément par le mandant' : 'non demandée — les visites auront lieu après la fin du délai') : '<i>choix effectué lors de la signature</i>') + '</b>.</p>',
+    '<h2>8. Données personnelles</h2>',
+    '<p>Les données du mandant sont traitées par le mandataire pour l’exécution du présent mandat et conservées pendant la durée nécessaire à cette exécution puis aux obligations légales (dont le registre des mandats). Le mandant dispose d’un droit d’accès, de rectification et d’effacement en écrivant au mandataire.</p>',
+    '<h2>9. Signature électronique et remise</h2>',
+    '<p>Le présent mandat est signé électroniquement par la saisie d’un code à usage unique adressé à l’adresse électronique du mandant. Le mandataire conserve le texte signé, son empreinte numérique, la date et l’heure de signature et les éléments techniques de la signature. Un exemplaire est remis au mandant par email dès la signature. Le mandat est inscrit au registre des mandats du mandataire sous le numéro ci-dessus.</p>'
+  ].join('');
+}
+
+function mandatDocumentHtml(corps, signatureHtml) {
+  return '<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mandat de recherche</title>' +
+    '<style>body{margin:0;background:#faf9f7;color:#141210;font:15px/1.65 Georgia,"Times New Roman",serif}main{max-width:760px;margin:0 auto;padding:32px 20px 48px}h1{font-weight:400;font-size:28px;line-height:1.2;margin:0 0 4px}h2{font-size:15px;letter-spacing:.04em;text-transform:uppercase;margin:26px 0 6px;font-family:Arial,sans-serif}.ref{color:#5f5a54;font-size:13px;margin:0 0 18px;font-family:Arial,sans-serif}.sig{margin-top:30px;padding:18px 20px;border:1px solid #d9d3cb;border-radius:14px;background:#fff;font:13px/1.6 Arial,sans-serif}.sig code{word-break:break-all}@media print{body{background:#fff}}</style></head><body><main>' +
+    corps + (signatureHtml || '') + '</main></body></html>';
+}
+
+function preparerMandat(db, lead) {
+  const a = agence();
+  const r = rechercheDuMembre(db, lead);
+  const m = {
+    id: uid('mdt'), numero: null, version: MANDAT_VERSION, type: 'recherche', perimetre: 'global',
+    leadId: lead.id, statut: 'a_signer', cree: nowISO(),
+    taux: lead.projet === 'mixte' ? a.tauxMixte : a.tauxAcquereur,
+    agence: a,
+    mandant: { prenom: lead.prenom || '', nom: lead.nom || '', email: lead.email || '', tel: lead.tel || '' },
+    criteres: criteresTexte(r),
+    code: null, signature: null, document: null
+  };
+  db.mandats = Array.isArray(db.mandats) ? db.mandats : [];
+  db.mandats.push(m);
+  return m;
+}
+
+function mandatEnCours(db, leadId) {
+  return (db.mandats || []).filter((m) => m.leadId === leadId && m.statut === 'a_signer').slice(-1)[0] || null;
+}
+
+// État du mandat pour le membre connecté (et texte à lire avant de signer).
+app.get('/api/mandat', requireAuth, (req, res) => {
+  const db = req.db;
+  const actif = mandatApplicable(db, req.lead.id);
+  if (actif) return res.json({ ok: true, mandat: resumeMandat(actif), visitePossible: mandatPermetVisite(actif) });
+  if (req.query.apercu === '0') return res.json({ ok: true, mandat: null });
+  const manquants = agenceManquants();
+  if (manquants.length) return res.json({ ok: true, mandat: null, indisponible: true, message: 'Le mandat de recherche est en cours de mise en place par l’agence. Votre demande de visite est bien enregistrée : votre agent revient vers vous rapidement.' });
+  let m = mandatEnCours(db, req.lead.id);
+  if (!m) m = preparerMandat(db, req.lead);
+  else {
+    // Brouillon non signé : on le remet à jour (identité de l'agence, barème,
+    // critères) pour que le texte signé soit exactement celui affiché.
+    const a = agence();
+    m.agence = a;
+    m.taux = req.lead.projet === 'mixte' ? a.tauxMixte : a.tauxAcquereur;
+    m.criteres = criteresTexte(rechercheDuMembre(db, req.lead));
+    m.mandant = { prenom: req.lead.prenom || '', nom: req.lead.nom || '', email: req.lead.email || '', tel: req.lead.tel || '' };
+  }
+  writeDb(db);
+  res.json({ ok: true, mandat: resumeMandat(m), apercu: mandatCorpsHtml(m, null) });
+});
+
+// Envoi du code à usage unique (6 chiffres, 10 minutes, 5 envois par heure).
+app.post('/api/mandat/code', requireAuth, async (req, res) => {
+  const db = req.db;
+  if (agenceManquants().length) return res.status(409).json({ error: 'Le mandat n’est pas encore disponible.' });
+  const m = mandatEnCours(db, req.lead.id);
+  if (!m) return res.status(404).json({ error: 'Aucun mandat à signer.' });
+  const heure = Date.now() - 60 * 60 * 1000;
+  m.envoisCode = (m.envoisCode || []).filter((t) => t > heure);
+  if (m.envoisCode.length >= 5) return res.status(429).json({ error: 'Trop de codes demandés. Réessayez dans une heure.' });
+  const code = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+  m.code = { hash: sha256(m.id + ':' + code), expire: Date.now() + MANDAT_CODE_TTL, tentatives: 0, envoyeA: req.lead.email, envoyeLe: nowISO() };
+  m.envoisCode.push(Date.now());
+  writeDb(db);
+  let emailEnvoye = false;
+  if (mailer && req.lead.email) {
+    try {
+      await mailer.sendMail({
+        from: '"Bonjour Seecret" <' + FROM_EMAIL + '>', to: req.lead.email,
+        subject: 'Votre code de signature : ' + code,
+        html: emailValidationLegere(req.lead.prenom || '', 'Voici votre code pour signer votre mandat de recherche : <b style="font-size:22px;letter-spacing:.2em;color:#141210">' + code + '</b><br>Il est valable 10 minutes. Si vous n’êtes pas à l’origine de cette demande, ignorez cet email.')
+      });
+      emailEnvoye = true;
+    } catch (err) { console.error('[mandat] email du code échoué :', err.message); }
+  }
+  if (!emailEnvoye) return res.status(502).json({ error: 'L’email n’a pas pu être envoyé. Réessayez dans un instant ou contactez votre agent.' });
+  res.json({ ok: true, envoyeA: req.lead.email.replace(/^(.).*(@.*)$/, '$1•••$2') });
+});
+
+// Signature : vérification du code, gel du texte, empreinte, preuves, remise par email.
+app.post('/api/mandat/signer', requireAuth, async (req, res) => {
+  const db = req.db;
+  const body = req.body || {};
+  const m = mandatEnCours(db, req.lead.id);
+  if (!m) return res.status(404).json({ error: 'Aucun mandat à signer.' });
+  const adresse = String(body.adresse || '').trim().slice(0, 300);
+  if (adresse.length < 8) return res.status(400).json({ error: 'Indiquez votre adresse postale complète.' });
+  if (body.accepte !== true) return res.status(400).json({ error: 'Vous devez accepter les termes du mandat.' });
+  if (!m.code || Date.now() > m.code.expire) return res.status(400).json({ error: 'Code expiré : demandez un nouveau code.' });
+  if (m.code.tentatives >= 5) return res.status(429).json({ error: 'Trop de tentatives : demandez un nouveau code.' });
+  const code = String(body.code || '').replace(/\D/g, '');
+  if (sha256(m.id + ':' + code) !== m.code.hash) {
+    m.code.tentatives++;
+    writeDb(db);
+    return res.status(400).json({ error: 'Code incorrect.' });
+  }
+  const signeLe = nowISO();
+  m.numero = prochainNumeroMandat(db); // numéro au registre des mandats, attribué à la signature
+  const signataire = { adresse: adresse, demarrageAnticipe: body.demarrageAnticipe === true };
+  const corps = mandatCorpsHtml(m, signataire);
+  const empreinte = crypto.createHash('sha256').update(corps, 'utf8').digest('hex');
+  const ip = clientIp(req);
+  const ua = (req.get('user-agent') || '').slice(0, 300);
+  const blocSignature = '<div class="sig"><b>Signé électroniquement</b> par ' + escHtml(m.mandant.prenom + ' ' + m.mandant.nom) +
+    ' le ' + escHtml(dateHeure(signeLe)) + ' (heure de Paris).<br>Méthode : code à usage unique envoyé à ' + escHtml(m.code.envoyeA) + ' le ' + escHtml(dateHeure(m.code.envoyeLe)) + '.<br>Adresse IP : ' + escHtml(ip) +
+    '<br>Empreinte SHA-256 du texte signé : <code>' + empreinte + '</code><br>Mandat n° ' + escHtml(m.numero) + ' — valable jusqu’au ' + escHtml(dateLongue(ajouterMois(signeLe, 12).toISOString())) + '.</div>';
+  m.statut = 'signe';
+  m.signature = { at: signeLe, ip: ip, ua: ua, methode: 'code-email', email: m.code.envoyeA, codeEnvoyeLe: m.code.envoyeLe };
+  m.adresseMandant = adresse;
+  m.demarrageAnticipe = signataire.demarrageAnticipe;
+  m.document = { html: mandatDocumentHtml(corps, blocSignature), sha256: empreinte };
+  m.expireLe = ajouterMois(signeLe, 12).toISOString();
+  m.retractationFin = new Date(new Date(signeLe).getTime() + 14 * 24 * 3600 * 1000).toISOString();
+  m.code = null;
+  // Les demandes de visite en attente de ce membre passent « mandat signé ».
+  (db.demandes || []).forEach((d) => {
+    if (d.type === 'visite' && d.leadId === req.lead.id && d.statut === 'nouvelle') {
+      d.mandatId = m.id;
+      const t = (db.tasks || []).find((x) => x.demandeId === d.id && x.statut === 'en_attente');
+      if (t && t.titre && t.titre.indexOf('mandat signé') === -1) t.titre += ' — mandat signé, visite à confirmer';
+    }
+  });
+  logActivite(db, { leadId: req.lead.id, type: 'mandat_signe', auteur: nomComplet(req.lead) + ' (mandat ' + m.numero + ')' });
+  writeDb(db);
+  // Remise d'un exemplaire au mandant (obligatoire) : le texte signé complet.
+  if (mailer && req.lead.email) {
+    mailer.sendMail({
+      from: '"Bonjour Seecret" <' + FROM_EMAIL + '>', to: req.lead.email,
+      subject: 'Votre mandat de recherche signé — n° ' + m.numero,
+      html: m.document.html
+    }).catch((err) => console.error('[mandat] remise par email échouée :', err.message));
+  }
+  res.json({ ok: true, mandat: resumeMandat(m), visitePossible: mandatPermetVisite(m) });
+});
+
+// Document signé : lisible par son signataire et par l'agence uniquement.
+app.get('/api/mandat/:id/document', requireAuth, (req, res) => {
+  const m = (req.db.mandats || []).find((x) => x.id === req.params.id);
+  const staff = ROLES_STAFF.indexOf(roleOf(req.lead)) > -1;
+  if (!m || (!staff && m.leadId !== req.lead.id)) return res.status(404).send('Mandat introuvable');
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(m.document ? m.document.html : mandatDocumentHtml(mandatCorpsHtml(m, null), '<div class="sig">Mandat non signé.</div>'));
+});
+
+// Liste des mandats (CRM).
+app.get('/api/mandats', requireAdmin, (req, res) => {
+  const db = readDb();
+  res.json({ ok: true, agenceManquants: agenceManquants(), mandats: (db.mandats || []).map((m) => Object.assign(resumeMandat(m), { leadId: m.leadId, mandant: m.mandant })) });
+});
+
+// Créneaux proposés par le membre : jusqu'à 3, au format « AAAA-MM-JJTHH:MM ».
+function creneauxPropres(liste) {
+  return (Array.isArray(liste) ? liste : []).map((c) => String(c || '').trim()).filter((c) => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(c)).slice(0, 3);
+}
+function creneauLisible(c) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(c || '');
+  if (!m) return String(c || '');
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], 12));
+  return d.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' }) + ' à ' + m[4] + ' h ' + m[5];
+}
+
 app.post('/api/visites', requireAuth, (req, res) => {
-  const bienId = String((req.body && req.body.bienId) || '');
-  const creneau = String((req.body && req.body.creneau) || '').slice(0, 120);
-  const note = String((req.body && req.body.note) || '').slice(0, 500);
+  const body = req.body || {};
+  const bienId = String(body.bienId || '');
+  const creneaux = creneauxPropres(body.creneaux);
+  const creneauLibre = String(body.creneau || '').slice(0, 120);
+  const note = String(body.note || '').slice(0, 500);
   if (!bienId) return res.status(400).json({ error: 'Bien requis' });
   const bien = req.db.biens.find((b) => b.id === bienId);
   if (!bien) return res.status(404).json({ error: 'Bien introuvable' });
-  if (!bienOuvertAuxVisites(bien)) {
+  // Seul un bien validé et en « visite ouverte » peut être visité (pas un
+  // bien sous offre ou sous compromis, retiré du catalogue membre).
+  if (bien.statut !== 'ouvert' || bien.validation !== 'valide') {
     return res.status(409).json({ error: 'Ce bien est en avant-première : le propriétaire n’a pas encore ouvert les visites. Suivez-le pour être informé dès que ce sera possible.' });
   }
-  const demande = {
-    id: uid('d'), type: 'visite', leadId: req.lead.id, bienId: bienId, email: req.lead.email,
-    nom: nomComplet(req.lead), message: (note || ('Créneau souhaité : ' + (creneau || 'non précisé'))),
-    creneau: creneau, statut: 'nouvelle', source: 'Espace membre', cree: nowISO()
-  };
-  req.db.demandes.unshift(demande);
-  creerTacheDemande(req.db, demande, 'Demande de visite de ' + nomComplet(req.lead));
-  logActivite(req.db, { leadId: bien.leadId || null, bienId: bienId, type: 'visite_demandee', auteur: nomComplet(req.lead) + ' (acquéreur)' });
+  if (!creneaux.length && !creneauLibre) return res.status(400).json({ error: 'Proposez au moins un créneau.' });
+  const texteCreneaux = creneaux.length ? creneaux.map(creneauLisible).join(' · ') : creneauLibre;
+  const mandat = mandatApplicable(req.db, req.lead.id);
+  // Une seule demande en attente par membre et par bien : une nouvelle
+  // demande met à jour les créneaux au lieu de créer un doublon.
+  let demande = req.db.demandes.find((d) => d.type === 'visite' && d.leadId === req.lead.id && d.bienId === bienId && d.statut === 'nouvelle');
+  const nouvelle = !demande;
+  if (nouvelle) {
+    demande = { id: uid('d'), type: 'visite', leadId: req.lead.id, bienId: bienId, email: req.lead.email, nom: nomComplet(req.lead), statut: 'nouvelle', source: 'Espace membre', cree: nowISO() };
+    req.db.demandes.unshift(demande);
+  }
+  demande.creneaux = creneaux;
+  demande.creneau = texteCreneaux;
+  demande.note = note;
+  demande.message = 'Créneaux proposés : ' + texteCreneaux + (note ? '\n' + note : '');
+  demande.mandatId = mandat ? mandat.id : null;
+  if (nouvelle) {
+    creerTacheDemande(req.db, demande, 'Demande de visite de ' + nomComplet(req.lead) + (mandat ? ' — mandat signé, visite à confirmer' : ' — mandat à signer'));
+    logActivite(req.db, { leadId: bien.leadId || null, bienId: bienId, type: 'visite_demandee', auteur: nomComplet(req.lead) + ' (acquéreur)' });
+  }
   writeDb(req.db);
-  res.json({ ok: true, id: demande.id });
+  res.json({ ok: true, id: demande.id, mandatRequis: !mandat, mandat: resumeMandat(mandat), mandatDisponible: agenceManquants().length === 0 });
 });
 
 // ---- Offres (Silent Offer) ----
@@ -2344,7 +2728,7 @@ app.post('/api/robot/dpe/scan-quotidien', requireAdmin, async (req, res) => {
   const db = readDb();
   try {
     const resultat = await scannerDpeRecherchesActives(db);
-    writeDb(db);
+    enregistrerScanDpe(db);
     res.json({ ok: true, resultat: resultat });
   } catch (e) {
     res.status(500).json({ error: 'Scan impossible : ' + ((e && e.message) || 'erreur') });
@@ -2360,12 +2744,22 @@ app.post('/api/robot/dpe/scan-quotidien', requireAdmin, async (req, res) => {
 // db.dpeScanLog (exposé par GET /api/robot-biens) pour que l'agent voie que
 // le moteur tourne même quand il ne trouve rien de nouveau.
 const UNE_JOURNEE_MS = 24 * 60 * 60 * 1000;
+// Le scan attend longtemps l'ADEME : entre sa lecture de la base et la fin du
+// scan, des agents ou des membres ont pu écrire. On relit donc la base au
+// dernier moment et on n'y reporte que les deux champs que le scan possède.
+function enregistrerScanDpe(dbScan) {
+  const frais = readDb();
+  frais.dpeAuto = dbScan.dpeAuto || [];
+  frais.dpeScanLog = dbScan.dpeScanLog || [];
+  writeDb(frais);
+}
+
 function planifierScanDpeQuotidien() {
   const executer = async () => {
     try {
       const db = readDb();
       const resultat = await scannerDpeRecherchesActives(db);
-      writeDb(db);
+      enregistrerScanDpe(db);
       console.log('[moteur DPE quotidien] ' + resultat.recherchesScannees + ' recherche(s) scannée(s), ' + resultat.biensAjoutes + ' bien(s) ajouté(s).');
     } catch (e) {
       console.error('[moteur DPE quotidien] échec :', (e && e.message) || e);
@@ -3714,7 +4108,17 @@ app.post('/api/tasks/:id/refuser', requireAdmin, (req, res) => {
 
 app.get('/api/demandes', requireAdmin, (req, res) => {
   const db = readDb();
-  res.json({ ok: true, demandes: db.demandes });
+  const demandes = db.demandes.map((d) => {
+    if (d.type !== 'visite') return d;
+    const actif = d.leadId ? mandatApplicable(db, d.leadId) : null;
+    const enCours = !actif && d.leadId ? mandatEnCours(db, d.leadId) : null;
+    return Object.assign({}, d, {
+      mandat: resumeMandat(actif || enCours),
+      visitePossible: mandatPermetVisite(actif),
+      creneauxLisibles: (d.creneaux || []).map(creneauLisible)
+    });
+  });
+  res.json({ ok: true, demandes: demandes, agenceManquants: agenceManquants() });
 });
 
 app.patch('/api/demandes/:id', requireAdmin, (req, res) => {
@@ -3787,6 +4191,33 @@ app.post('/api/demandes/:id/decision', requireAdmin, async (req, res) => {
     });
     writeDb(db);
     return res.json({ ok: true, decision: 'suspendre', lien: lien, tel: tel, prenom: prenom, notif: notif });
+  }
+
+  if (d.type === 'visite') {
+    const rdv = (req.body && req.body.rdv) || {};
+    const date = String(rdv.date || ''), heure = String(rdv.heure || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(heure)) return res.status(400).json({ error: 'Indiquez la date et l’heure de la visite.' });
+    const mandat = lead ? mandatApplicable(db, lead.id) : null;
+    const autorise = mandatPermetVisite(mandat, date + 'T' + heure + ':00+01:00');
+    if (!autorise.ok) return res.status(409).json({ error: autorise.raison });
+    const bienVisite = db.biens.find((x) => x.id === d.bienId);
+    if (!bienVisite) return res.status(404).json({ error: 'Bien introuvable' });
+    if (!String(bienVisite.adresse || '').trim()) return res.status(409).json({ error: 'L’adresse du bien n’est pas renseignée dans le CRM.' });
+    const nettoie = (x) => String(x || '').replace(/[<>]/g, '').trim();
+    const adresseRdv = [nettoie(bienVisite.adresse), [nettoie(bienVisite.codePostal), nettoie(bienVisite.ville)].filter(Boolean).join(' ')].filter(Boolean).join(', ') + (bienVisite.etage ? ' (étage ' + nettoie(bienVisite.etage) + ')' : '');
+    const quand = creneauLisible(date + 'T' + heure);
+    d.statut = 'traitee';
+    d.traiteeAt = nowISO();
+    d.rdv = { date: date, heure: heure, confirmeLe: nowISO(), mandatId: mandat.id };
+    const notifVisite = notifierClient(db, {
+      leadId: lead ? lead.id : null, email: d.email, tel: tel, prenom: prenom,
+      titre: 'Votre visite est confirmée',
+      message: 'Votre visite est confirmée le ' + quand + '. Adresse du rendez-vous : ' + adresseRdv + '. Cette adresse est confidentielle (mandat de recherche n° ' + mandat.numero + ') : merci de ne pas la communiquer.',
+      lien: lien
+    });
+    logActivite(db, { leadId: lead ? lead.id : null, bienId: d.bienId, type: 'visite_confirmee', auteur: 'Agent' });
+    writeDb(db);
+    return res.json({ ok: true, decision: 'valider', rdv: d.rdv, tel: tel, prenom: prenom, notif: notifVisite });
   }
 
   d.statut = 'traitee';
@@ -4576,7 +5007,15 @@ app.get('/crm.html', (req, res, next) => {
   next();
 });
 
-app.use(express.static(__dirname));
+// Seules les pages HTML et les ressources publiques sont servies : jamais le
+// code du serveur, la documentation interne, les outils, les dépendances, ni
+// surtout data.json (si le volume DATA_DIR se trouve dans ce dossier).
+const CHEMINS_PUBLICS = /^\/(?:$|[a-z0-9-]+\.html$|assets\/)/i;
+app.use((req, res, next) => {
+  if ((req.method === 'GET' || req.method === 'HEAD') && !CHEMINS_PUBLICS.test(req.path)) return res.status(404).send('Introuvable');
+  next();
+});
+app.use(express.static(__dirname, { dotfiles: 'deny', index: 'index.html' }));
 
 app.listen(PORT, () => {
   try {
