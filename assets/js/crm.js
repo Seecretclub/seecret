@@ -464,7 +464,18 @@
 
   function robotBiens() {
     (state.robotBiens || []).forEach(normalizeRobotBien);
-    return state.robotBiens || [];
+    (state.dpeAuto || []).forEach(normalizeRobotBien);
+    // state.dpeAuto (détections automatiques, voir syncServeur) est fusionné
+    // en lecture seule ici — c'est ce qui permet au tableau de bord, aux
+    // rapprochements et à la fiche bien de traiter un bien détecté par le
+    // moteur quotidien exactement comme un bien du Radar manuel, sans
+    // dupliquer la logique d'affichage. On exclut les adresses déjà dans
+    // state.robotBiens : un bien promu (voir 'robot-promouvoir') existe
+    // alors dans les deux tableaux le temps d'un rafraîchissement serveur,
+    // et ne doit apparaître qu'une fois.
+    const connues = new Set((state.robotBiens || []).map((b) => adresseKey(b.adresse)));
+    const auto = (state.dpeAuto || []).filter((b) => !connues.has(adresseKey(b.adresse)));
+    return (state.robotBiens || []).concat(auto);
   }
 
   function mapVerifRobot(s) {
@@ -1025,6 +1036,12 @@
         if (rbtj.ok && Array.isArray(rbtj.biens) && rbtj.biens.length) {
           state.robotBiens = rbtj.biens.map(normalizeRobotBien);
         }
+        // dpeAuto : détections du moteur quotidien, gardées à part (voir
+        // server.js, db.dpeAuto) pour ne jamais être écrasées par
+        // saveRobotBiens() — state.robotBiens reste la seule chose que ce
+        // client réécrit en entier.
+        if (rbtj.ok && Array.isArray(rbtj.dpeAuto)) state.dpeAuto = rbtj.dpeAuto.map(normalizeRobotBien);
+        if (rbtj.ok && Array.isArray(rbtj.scanLog)) state.dpeScanLog = rbtj.scanLog;
       } catch (e) { /* pas de biens radar persistés */ }
       // Indépendant des biens Radar : le Portefeuille foncier (sociétés FPMU × permis) peut exister
       // même sans aucun bien détecté — ne pas conditionner son chargement à rbtj.biens.length.
@@ -2577,8 +2594,28 @@
       tabsRobot('robot-opportunites') +
       '<div class="se-row" style="gap:8px;margin-bottom:12px;justify-content:flex-end"><button class="se-btn ghost sm" data-act="synchroniser-permis">Synchroniser les permis</button></div>' +
       '<div class="se-card"><h3>' + signaux.length + ' signal(s) vendeur(s)</h3>' + signauxHtml + '</div>' +
+      '<div class="se-card" style="margin-top:16px">' + moteurDpeQuotidienHtml() + '</div>' +
       '<div class="se-card" style="margin-top:16px"><h3>Recherches à démarcher</h3><p class="se-muted">Pour toujours avoir des biens à proposer : lancez une recherche DPE publique ciblée sur les recherches qui ont le moins d’opportunités.</p>' + demarcheHtml + '</div>' +
       '<div class="se-card" style="margin-top:16px"><h3>Opportunités clients</h3>' + (groupes.length ? rows : '<p class="se-muted" style="margin-top:10px">Aucune correspondance acquéreur.</p>') + '</div>';
+  }
+
+  // Statut du moteur quotidien (voir server.js : planifierScanDpeQuotidien /
+  // scannerDpeRecherchesActives) — tourne tout seul en production une fois
+  // par jour sur toutes les recherches actives ; ce bouton permet en plus à
+  // l'agent de le relancer tout de suite sans attendre le lendemain.
+  function moteurDpeQuotidienHtml() {
+    const log = (state.dpeScanLog || [])[0];
+    const nonPromus = (state.dpeAuto || []).filter((b) => !(state.robotBiens || []).some((x) => adresseKey(x.adresse) === adresseKey(b.adresse)));
+    return '<div class="se-row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">' +
+      '<div><h3>Moteur quotidien DPE</h3>' +
+      '<p class="se-hint" style="margin-top:4px">' + (log
+        ? 'Dernier passage ' + ilYa(log.at) + ' · ' + log.recherchesScannees + ' recherche(s) scannée(s) · ' + log.biensAjoutes + ' nouveau(x) bien(s)' + (log.erreurs && log.erreurs.length ? ' · ' + log.erreurs.length + ' secteur(s) en erreur' : '')
+        : 'Aucun passage enregistré pour l’instant.') + '</p></div>' +
+      '<button class="se-btn ghost sm" data-act="dpe-scan-quotidien">Lancer le scan maintenant</button>' +
+      '</div>' +
+      (nonPromus.length ? '<div class="se-list" style="margin-top:10px">' + nonPromus.slice(0, 5).map((b) => '<a class="se-rowlink" href="#/robot-bien/' + b.id + '"><div style="flex:1;min-width:0"><div style="font-size:13.5px">' + esc(b.adresse || 'Adresse inconnue') + '</div><div class="se-hint">' + esc(b.type || '') + (b.surface_habitable_m2 != null ? ' · ' + b.surface_habitable_m2 + ' m²' : '') + (b.dpe ? ' · DPE ' + esc(b.dpe) : '') + '</div></div><span class="se-badge warn">Non ajouté au Radar</span></a>').join('') + '</div>' +
+        (nonPromus.length > 5 ? '<p class="se-hint" style="margin-top:6px">+ ' + (nonPromus.length - 5) + ' autre(s) détection(s) non traitée(s).</p>' : '')
+        : '');
   }
 
   // Identité sociale d'un propriétaire/dirigeant (personne physique) détecté par le Radar.
@@ -3007,9 +3044,16 @@
         '<button class="se-btn ghost sm" style="margin-top:10px" data-act="robot-dvf" data-id="' + b.id + '">Charger l’historique DVF</button></div>' +
         detentionHtml;
     } else if (tab === 'actions') {
+      const estDpeAuto = b.source === 'dpe-auto' && !(state.robotBiens || []).some((x) => adresseKey(x.adresse) === adresseKey(b.adresse));
+      const promotionHtml = estDpeAuto
+        ? '<div class="se-card" style="margin-bottom:16px"><h3>Détecté par le moteur quotidien</h3>' +
+          '<p class="se-hint">Ce bien vient du scan automatique DPE, pas d’une recherche manuelle — il n’est pas encore éditable (statut, notes, enrichissement). Ajoutez-le au Radar pour commencer à le travailler.</p>' +
+          '<button class="se-btn sm" style="margin-top:10px" data-act="robot-promouvoir" data-id="' + b.id + '">Ajouter au Radar</button>' +
+          '</div>'
+        : '';
       const statutBtns = '<div class="se-row" style="gap:6px;flex-wrap:wrap;margin-top:10px">' + STATUTS_PROSPECTION.map(([k, label]) =>
-        '<button class="se-btn ghost sm' + (b.statutProspection === k ? ' is-on' : '') + '" data-act="robot-statut" data-id="' + b.id + '" data-statut="' + k + '">' + label + '</button>').join('') + '</div>';
-      body = '<div class="se-card"><h3>Statut de prospection</h3>' + statutBtns + '</div>' +
+        '<button class="se-btn ghost sm' + (b.statutProspection === k ? ' is-on' : '') + '" data-act="robot-statut" data-id="' + b.id + '" data-statut="' + k + '"' + (estDpeAuto ? ' disabled' : '') + '>' + label + '</button>').join('') + '</div>';
+      body = promotionHtml + '<div class="se-card"><h3>Statut de prospection</h3>' + statutBtns + '</div>' +
         '<div class="se-card" style="margin-top:16px"><h3>Enrichissement en cascade</h3>' +
         '<p class="se-hint">Interroge successivement SIRENE, Aucadastre puis Exa, dans cet ordre, et s’arrête dès qu’un contact exploitable est trouvé — la provenance de chaque résultat reste visible.</p>' +
         '<button class="se-btn ghost sm" style="margin-top:10px" data-act="robot-cascade" data-id="' + b.id + '">Lancer la cascade</button>' +
@@ -5546,6 +5590,38 @@
     'robot-statut': (el) => {
       const b = robotBien(el.getAttribute('data-id'));
       if (b) { b.statutProspection = el.getAttribute('data-statut'); commit(); render(); toast('Statut mis à jour.', 'ok'); }
+    },
+    'dpe-scan-quotidien': async (el) => {
+      el.disabled = true;
+      const texte = el.textContent;
+      el.textContent = 'Scan en cours…';
+      try {
+        const r = await fetch('/api/robot/dpe/scan-quotidien', { method: 'POST', credentials: 'same-origin' }).then((x) => x.json());
+        if (r.ok) {
+          const rb = await fetch('/api/robot-biens', { headers: { accept: 'application/json' } }).then((x) => x.json());
+          if (rb.ok) {
+            if (Array.isArray(rb.dpeAuto)) state.dpeAuto = rb.dpeAuto.map(normalizeRobotBien);
+            if (Array.isArray(rb.scanLog)) state.dpeScanLog = rb.scanLog;
+          }
+          toast(r.resultat.biensAjoutes ? r.resultat.biensAjoutes + ' nouveau(x) bien(s) détecté(s) sur ' + r.resultat.recherchesScannees + ' recherche(s).' : 'Scan terminé — aucun nouveau bien sur ' + r.resultat.recherchesScannees + ' recherche(s) scannée(s).', r.resultat.biensAjoutes ? 'ok' : 'warn');
+        } else { toast(r.error || 'Scan impossible.', 'warn'); }
+      } catch (e) { toast('Scan impossible.', 'warn'); }
+      el.disabled = false;
+      el.textContent = texte;
+      render();
+    },
+    'robot-promouvoir': (el) => {
+      const id = el.getAttribute('data-id');
+      const b = (state.dpeAuto || []).find((x) => x.id === id);
+      if (!b) { toast('Bien introuvable.', 'warn'); return; }
+      // Copie dans state.robotBiens, qui devient désormais la copie
+      // éditable (statut, notes, enrichissement) — l'original reste dans
+      // state.dpeAuto comme trace du scan, mais robotBiens() l'exclura de
+      // l'affichage dès que cette adresse existe aussi dans state.robotBiens.
+      state.robotBiens = (state.robotBiens || []).concat([Object.assign({}, b)]);
+      saveRobotBiens();
+      render();
+      toast('Bien ajouté au Radar — vous pouvez maintenant le travailler.', 'ok');
     },
     'robot-ignorer': (el) => {
       const b = robotBien(el.getAttribute('data-id'));
