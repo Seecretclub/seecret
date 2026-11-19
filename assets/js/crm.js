@@ -1925,10 +1925,333 @@
     return { ans: ans, dateVente: plusRecente, niveau: niveau, label: label };
   }
 
-  function lienCarteRobot(b) {
-    if (!b.coords || b.coords.length < 2) return '';
-    const lat = Number(b.coords[0]), lon = Number(b.coords[1]);
-    return '<a class="se-btn ghost sm" target="_blank" rel="noopener" href="https://www.openstreetmap.org/?mlat=' + lat + '&mlon=' + lon + '#map=17/' + lat + '/' + lon + '">Carte</a>';
+  // Bouton « Voir sur Maps » : ouvre Google Maps (façade Street View, plan,
+  // satellite) dans une fenêtre intégrée au CRM — jamais un nouvel onglet.
+  function lienCarteRobot(b, libelle) {
+    if (!b || !b.adresse) return '';
+    return '<button class="se-btn ghost sm" data-act="voir-maps" data-id="' + esc(b.id) + '">' + (libelle || 'Voir sur Maps') + '</button>';
+  }
+
+  function adresseComplete(b) {
+    let a = String(b.adresse || '').trim();
+    if (b.codePostal && a.indexOf(b.codePostal) === -1) a += ' ' + b.codePostal;
+    const ville = String(b.ville || '').replace(/^\d{5}\s*/, '').trim();
+    if (ville && a.toLowerCase().indexOf(ville.toLowerCase()) === -1) a += ' ' + ville;
+    return a;
+  }
+
+  let CARTE_CONFIG = null;
+  async function configCarte() {
+    if (CARTE_CONFIG) return CARTE_CONFIG;
+    try { CARTE_CONFIG = await fetch('/api/robot/carte-config', { credentials: 'same-origin' }).then((x) => x.json()); } catch (e) { CARTE_CONFIG = {}; }
+    return CARTE_CONFIG || {};
+  }
+
+  async function geocoderAdresse(adresse) {
+    try {
+      const d = await fetch('https://api-adresse.data.gouv.fr/search/?limit=1&q=' + encodeURIComponent(adresse)).then((x) => x.json());
+      const f = d.features && d.features[0];
+      if (f && f.geometry && f.geometry.coordinates) return [f.geometry.coordinates[1], f.geometry.coordinates[0]];
+    } catch (e) { /* repli : pas de Street View, plan sur l'adresse seulement */ }
+    return null;
+  }
+
+  function fermerCarte() {
+    const ov = document.querySelector('.se-maps-overlay');
+    if (ov) ov.remove();
+    document.removeEventListener('keydown', toucheCarte);
+    document.body.classList.remove('se-maps-open');
+  }
+  function toucheCarte(e) { if (e.key === 'Escape') fermerCarte(); }
+
+  // Fenêtre indépendante du système de modales : render() ne la reconstruit pas,
+  // donc l'iframe (et la navigation de l'agent dans Street View) n'est jamais
+  // rechargée par la synchronisation automatique ou l'enrichissement en cours.
+  async function ouvrirCarte(b) {
+    fermerCarte();
+    const adresse = adresseComplete(b);
+    const ov = document.createElement('div');
+    ov.className = 'se-maps-overlay';
+    ov.innerHTML = '<div class="se-maps-box" role="dialog" aria-modal="true" aria-label="Carte du bien">' +
+      '<div class="se-maps-head">' +
+        '<div class="se-maps-titre"><span class="se-kicker">Google Maps</span><b>' + esc(adresse) + '</b></div>' +
+        '<div class="se-maps-tabs">' +
+          '<button type="button" class="se-studio-tab active" data-vue="sv">Façade</button>' +
+          '<button type="button" class="se-studio-tab" data-vue="plan">Plan</button>' +
+          '<button type="button" class="se-studio-tab" data-vue="sat">Satellite</button>' +
+        '</div>' +
+        '<button type="button" class="se-maps-close" aria-label="Fermer la carte">×</button>' +
+      '</div>' +
+      '<div class="se-maps-frame"><div class="se-maps-msg">Localisation de l’adresse…</div></div>' +
+      '<div class="se-maps-foot se-hint">Dans la vue Façade, glissez pour tourner et cliquez sur les flèches au sol pour avancer dans la rue.</div>' +
+    '</div>';
+    document.body.appendChild(ov);
+    document.body.classList.add('se-maps-open');
+    document.addEventListener('keydown', toucheCarte);
+    ov.addEventListener('click', (e) => { if (e.target === ov || e.target.closest('.se-maps-close')) fermerCarte(); });
+
+    const [cfg, coords] = await Promise.all([configCarte(), (b.coords && b.coords.length > 1) ? Promise.resolve([Number(b.coords[0]), Number(b.coords[1])]) : geocoderAdresse(adresse)]);
+    if (!document.body.contains(ov)) return;
+    const cle = cfg.googleEmbedKey || '';
+    const q = encodeURIComponent(adresse);
+    const urls = {
+      sv: coords
+        ? (cle ? 'https://www.google.com/maps/embed/v1/streetview?key=' + encodeURIComponent(cle) + '&location=' + coords[0] + ',' + coords[1] + '&fov=80'
+               : 'https://maps.google.com/maps?q=&layer=c&cbll=' + coords[0] + ',' + coords[1] + '&cbp=11,0,0,0,0&output=svembed&hl=fr')
+        : null,
+      plan: cle ? 'https://www.google.com/maps/embed/v1/place?key=' + encodeURIComponent(cle) + '&q=' + q + '&zoom=18'
+                : 'https://maps.google.com/maps?q=' + q + '&z=18&output=embed&hl=fr',
+      sat: cle ? 'https://www.google.com/maps/embed/v1/place?key=' + encodeURIComponent(cle) + '&q=' + q + '&zoom=19&maptype=satellite'
+               : 'https://maps.google.com/maps?q=' + q + '&z=19&t=k&output=embed&hl=fr'
+    };
+    const zone = ov.querySelector('.se-maps-frame');
+    const afficher = (vue) => {
+      ov.querySelectorAll('[data-vue]').forEach((x) => x.classList.toggle('active', x.getAttribute('data-vue') === vue));
+      const url = urls[vue];
+      zone.innerHTML = url
+        ? '<iframe src="' + esc(url) + '" title="Google Maps — ' + esc(adresse) + '" loading="lazy" referrerpolicy="no-referrer-when-downgrade" allowfullscreen></iframe>'
+        : '<div class="se-maps-msg">Adresse introuvable dans la Base Adresse Nationale : la vue façade n’est pas disponible, utilisez Plan ou Satellite.</div>';
+    };
+    ov.querySelectorAll('[data-vue]').forEach((btn) => btn.addEventListener('click', () => afficher(btn.getAttribute('data-vue'))));
+    afficher(urls.sv ? 'sv' : 'plan');
+  }
+
+  /* ---------- Enrichissement automatique de la fiche bien (sources gratuites) ----------
+     À l'ouverture d'une fiche, on interroge en parallèle :
+       · le fichier DGFiP des locaux des personnes morales (indexé sur le serveur) :
+         toutes les sociétés propriétaires dans l'immeuble, étage, bâtiment, porte ;
+       · SIRENE (recherche-entreprises.api.gouv.fr) : sociétés domiciliées à l'adresse,
+         avec le complément d'adresse (étage / gauche-droite) et leurs dirigeants ;
+       · puis, si le propriétaire du bien est connu : dirigeants SIRENE et BODACC.
+     Les résultats restent en mémoire (pas dans localStorage : un immeuble peut
+     compter des dizaines de lots) et sont affichés directement dans la fiche. */
+  const AUTO = {};
+  const PATRIMOINE = {};
+  let PM_STATUT = null;
+  let PM_SUIVI = null;
+
+  const getJson = (url) => fetch(url, { credentials: 'same-origin' }).then((x) => x.json());
+
+  function suivreImportPm() {
+    if (PM_SUIVI) return;
+    PM_SUIVI = setInterval(async () => {
+      try {
+        const s = await getJson('/api/robot/pm/statut');
+        PM_STATUT = s;
+        if (!s.import || !s.import.enCours) {
+          clearInterval(PM_SUIVI); PM_SUIVI = null;
+          if (s.disponible) {
+            // l'index vient d'arriver : on relance l'enrichissement des fiches ouvertes
+            Object.keys(AUTO).forEach((k) => { if (AUTO[k].immeuble && AUTO[k].immeuble.disponible === false) delete AUTO[k]; });
+            Object.keys(PATRIMOINE).forEach((k) => { if (PATRIMOINE[k].disponible === false) delete PATRIMOINE[k]; });
+          }
+        }
+        render();
+      } catch (e) { /* on réessaie au prochain tour */ }
+    }, 4000);
+  }
+
+  async function lancerEnrichissementAuto(bienId) {
+    if (AUTO[bienId]) return;
+    const b0 = robotBien(bienId);
+    if (!b0 || !b0.adresse) return;
+    const a = AUTO[bienId] = { chargement: true, erreurs: [] };
+    render();
+    const adresse = encodeURIComponent(adresseComplete(b0));
+    const [imm, soc] = await Promise.all([
+      getJson('/api/robot/pm/immeuble?adresse=' + adresse).catch(() => ({ error: 'Serveur injoignable.' })),
+      getJson('/api/robot/societes-adresse?adresse=' + adresse).catch(() => ({ error: 'Serveur injoignable.' }))
+    ]);
+    if (imm && imm.ok) { a.immeuble = imm; if (imm.disponible === false) { PM_STATUT = { disponible: false, import: imm.import }; if (imm.import && imm.import.enCours) suivreImportPm(); } }
+    else a.erreurs.push('Fichier DGFiP : ' + ((imm && imm.error) || 'erreur'));
+    if (soc && soc.ok) a.societes = soc.societes || [];
+    else a.erreurs.push('SIRENE : ' + ((soc && soc.error) || 'erreur'));
+    a.chargement = false;
+    render();
+
+    // Propriétaire déjà identifié (par une association ou la cascade) : dirigeants + BODACC.
+    const b = robotBien(bienId);
+    const prop = (b && b.proprietaire) || {};
+    if (prop.siren && /^\d{9}$/.test(prop.siren)) {
+      if (!(prop.dirigeants && prop.dirigeants.length)) {
+        const dir = (a.societes || []).find((s) => s.siren === prop.siren);
+        if (dir && dir.dirigeants.length) a.dirigeants = dir.dirigeants;
+        else {
+          try { const r = await getJson('/api/robot/dirigeants?siren=' + prop.siren); if (r.ok) a.dirigeants = r.dirigeants || []; } catch (e) { a.erreurs.push('Dirigeants SIRENE injoignables.'); }
+        }
+      }
+      try { const r = await getJson('/api/robot/bodacc?siren=' + prop.siren); if (r.ok) { a.bodacc = r.annonces || []; state.bodaccAlertes = state.bodaccAlertes || {}; state.bodaccAlertes[prop.siren] = a.bodacc; } } catch (e) { /* signal optionnel */ }
+      render();
+    }
+  }
+
+  async function chargerPatrimoine(siren) {
+    if (!/^\d{9}$/.test(String(siren || '')) || PATRIMOINE[siren]) return;
+    PATRIMOINE[siren] = { chargement: true };
+    render();
+    try {
+      const [p, d] = await Promise.all([getJson('/api/robot/pm/siren/' + siren), getJson('/api/robot/dirigeants?siren=' + siren).catch(() => ({}))]);
+      PATRIMOINE[siren] = Object.assign({}, p, { chargement: false, dirigeants: (d && d.ok) ? (d.dirigeants || []) : [] });
+      if (p && p.disponible === false && p.import && p.import.enCours) suivreImportPm();
+    } catch (e) {
+      PATRIMOINE[siren] = { chargement: false, erreur: true };
+    }
+    render();
+  }
+
+  // Étage du bien : déduit du fichier DGFiP quand le propriétaire (SIREN) est connu
+  // et n'a qu'un seul niveau dans l'immeuble ; sinon l'étage associé à la main ;
+  // sinon l'estimation tirée de l'adresse du DPE.
+  function etageDuBien(b) {
+    if (b.etageDgfip) return { valeur: b.etageDgfip, source: 'fichier DGFiP des locaux (lot associé)' };
+    const a = AUTO[b.id];
+    const siren = b.proprietaire && b.proprietaire.siren;
+    if (a && a.immeuble && a.immeuble.lots && siren) {
+      const niveaux = [];
+      a.immeuble.lots.filter((l) => l.siren === siren && l.droit !== 'S').forEach((l) => { if (l.niveauLibelle && niveaux.indexOf(l.niveauLibelle) === -1) niveaux.push(l.niveauLibelle); });
+      if (niveaux.length === 1) return { valeur: niveaux[0], source: 'fichier DGFiP — seul lot de ' + (b.proprietaire.nom || 'la société') + ' dans l’immeuble' };
+      if (niveaux.length > 1) return { valeur: niveaux.join(' ou '), source: 'fichier DGFiP — ' + (b.proprietaire.nom || 'la société') + ' possède plusieurs lots ici' };
+    }
+    if (a && a.societes && siren) {
+      const s = a.societes.find((x) => x.siren === siren && x.lot && x.lot.etage);
+      if (s) return { valeur: s.lot.etage + (s.lot.position ? ' ' + s.lot.position : ''), source: 'complément d’adresse SIRENE du siège de la société' };
+    }
+    if (b.etageEstime) return { valeur: b.etageEstime, source: 'estimé depuis l’adresse du DPE, non garanti' };
+    return null;
+  }
+
+  const lotCle = (l) => [l.siren, l.niveau, l.porte, l.batiment, l.entree].join('|');
+
+  function lotDetailHtml(l) {
+    return [l.batiment ? 'Bât. ' + esc(l.batiment) : '', l.entree ? 'Esc. ' + esc(l.entree) : '', l.porte ? 'Porte ' + esc(l.porte) : ''].filter(Boolean).join(' · ');
+  }
+
+  function lienSociete(siren, nom) {
+    return /^\d{9}$/.test(String(siren || ''))
+      ? '<a href="#/robot-proprietaire/' + encodeURIComponent(siren) + '" style="font-weight:600">' + esc(nom || siren) + '</a>'
+      : '<b>' + esc(nom || '—') + '</b>';
+  }
+
+  function pmIndisponibleHtml(imm) {
+    const st = (PM_STATUT && PM_STATUT.import) || (imm && imm.import) || {};
+    if (st.enCours) return '<p class="se-hint" style="margin-top:10px"><span class="se-badge warn">Chargement</span> ' + esc(st.etape || 'Import du fichier DGFiP en cours…') + (st.lignes ? ' — ' + Number(st.lignes).toLocaleString('fr-FR') + ' locaux indexés' : '') + '</p>';
+    return '<p class="se-muted" style="margin-top:10px">Le fichier DGFiP des locaux des sociétés n’est pas encore chargé sur le serveur (téléchargement unique, puis mise à jour automatique chaque mois).' + (st.erreur ? ' Dernière tentative : ' + esc(st.erreur) + '.' : '') + '</p>' +
+      '<button class="se-btn sm" style="margin-top:10px" data-act="pm-importer">Charger le fichier DGFiP maintenant</button>';
+  }
+
+  function immeubleHtml(b) {
+    const a = AUTO[b.id];
+    let corps;
+    if (!a || a.chargement) corps = '<p class="se-hint" style="margin-top:10px">Recherche des sociétés propriétaires dans l’immeuble…</p>';
+    else if (!a.immeuble) corps = '<p class="se-muted" style="margin-top:10px">Source indisponible pour l’instant.</p>';
+    else if (a.immeuble.disponible === false) corps = pmIndisponibleHtml(a.immeuble);
+    else if (!a.immeuble.adresseComprise) corps = '<p class="se-muted" style="margin-top:10px">Adresse non reconnue (numéro ou code postal manquant).</p>';
+    else if (!a.immeuble.lots.length) corps = '<p class="se-muted" style="margin-top:10px">Aucun lot détenu par une société à cette adresse : l’immeuble appartient vraisemblablement à des particuliers (non publiés par la DGFiP).</p>';
+    else {
+      const lots = a.immeuble.lots;
+      const sirenBien = b.proprietaire && b.proprietaire.siren;
+      const domicilies = {};
+      (a.societes || []).forEach((x) => { domicilies[x.siren] = x.estSiege ? 'siege' : 'etab'; });
+      const proprios = a.immeuble.proprietaires || [];
+      const nbSci = proprios.filter((p) => p.type === 'sci').length;
+      const parNiveau = [];
+      lots.forEach((l, i) => {
+        const k = l.niveauLibelle || 'Niveau non précisé';
+        let g = parNiveau.find((x) => x.k === k);
+        if (!g) { g = { k, lots: [] }; parNiveau.push(g); }
+        g.lots.push({ l, i });
+      });
+      corps = '<p class="se-hint" style="margin-top:6px">' + lots.length + ' lot(s) détenu(s) par ' + proprios.length + ' société(s)' + (nbSci ? ', dont ' + nbSci + ' SCI' : '') + ' · ' + esc(a.immeuble.commune || '') + ' · cadastre ' + esc((lots[0].section || '') + ' ' + (lots[0].plan || '')) + '</p>' +
+        '<div class="se-pm-immeuble">' + parNiveau.map((g) =>
+          '<div class="se-pm-niveau"><div class="se-pm-niveau-titre">' + esc(g.k) + '</div>' +
+          g.lots.map(({ l, i }) => {
+            const estLeBien = sirenBien && l.siren === sirenBien && (!b.lotDgfip || b.lotDgfip === lotCle(l));
+            const detail = lotDetailHtml(l);
+            return '<div class="se-pm-lot' + (estLeBien ? ' is-on' : '') + '">' +
+              '<div style="flex:1;min-width:0">' +
+                '<div>' + lienSociete(l.siren, l.nom) + ' <span class="se-hint">' + esc(l.forme || '') + '</span>' +
+                  (domicilies[l.siren] ? ' <span class="se-badge open" title="D’après SIRENE, cette société est domiciliée à cette adresse">' + (domicilies[l.siren] === 'siege' ? 'Siège ici' : 'Établissement ici') + '</span>' : '') +
+                  (estLeBien ? ' <span class="se-badge">Propriétaire du bien</span>' : '') + '</div>' +
+                '<div class="se-hint">' + esc(l.droitLibelle) + (detail ? ' · ' + detail : '') + (l.siren ? ' · SIREN ' + esc(l.siren) : '') + '</div>' +
+              '</div>' +
+              (l.droit !== 'S' && !estLeBien ? '<button class="se-btn ghost sm" data-act="robot-associer-lot" data-id="' + esc(b.id) + '" data-idx="' + i + '">C’est ce bien</button>' : '') +
+            '</div>';
+          }).join('') + '</div>').join('') + '</div>' +
+        '<p class="se-hint" style="margin-top:10px">« C’est ce bien » rattache le lot au bien du DPE : propriétaire, SIREN et étage sont alors remplis. Le DPE ne nomme pas son propriétaire — la correspondance reste à confirmer par l’agent.</p>';
+    }
+    return '<div class="se-card" style="margin-top:16px"><h3>L’immeuble : sociétés propriétaires, étage par étage</h3>' +
+      '<p class="se-hint">Fichier DGFiP des locaux des personnes morales' + (a && a.immeuble && a.immeuble.millesime ? ' (millésime ' + a.immeuble.millesime + ')' : '') + ', open data gratuit — les particuliers n’y figurent pas (secret fiscal).</p>' +
+      corps + '</div>';
+  }
+
+  function societesAdresseHtml(b) {
+    const a = AUTO[b.id];
+    let corps;
+    if (!a || a.chargement) corps = '<p class="se-hint" style="margin-top:10px">Interrogation de SIRENE…</p>';
+    else if (!a.societes) corps = '<p class="se-muted" style="margin-top:10px">SIRENE injoignable pour l’instant.</p>';
+    else if (!a.societes.length) corps = '<p class="se-muted" style="margin-top:10px">Aucune société active domiciliée à ce numéro.</p>';
+    else {
+      const sirenBien = b.proprietaire && b.proprietaire.siren;
+      corps = '<div class="se-list" style="margin-top:10px">' + a.societes.map((s, i) => {
+        const lot = s.lot || {};
+        const chips = [lot.etage, lot.position, lot.batiment ? 'Bât. ' + lot.batiment : '', lot.escalier ? 'Esc. ' + lot.escalier : '', lot.appartement ? 'Appt ' + lot.appartement : '', lot.porte ? 'Porte ' + lot.porte : ''].filter(Boolean);
+        return '<div class="se-list-item" style="align-items:flex-start">' +
+          '<div style="flex:1;min-width:0">' +
+            '<div>' + lienSociete(s.siren, s.nom) + ' <span class="se-badge ' + (s.type === 'sci' ? 'open' : 'muted') + '">' + (s.type === 'sci' ? 'SCI' : 'Société') + '</span>' + (s.estSiege ? '' : ' <span class="se-badge muted">Établissement</span>') + '</div>' +
+            '<div class="se-hint">SIREN ' + esc(s.siren) + (s.dateCreation ? ' · créée le ' + dFR(s.dateCreation) : '') + (s.complementAdresse ? ' · « ' + esc(s.complementAdresse) + ' »' : '') + '</div>' +
+            (chips.length ? '<div class="se-chips" style="margin-top:6px">' + chips.map((c) => '<span class="se-chip">' + esc(c) + '</span>').join('') + '</div>' : '') +
+            (s.dirigeants && s.dirigeants.length ? '<div class="se-hint" style="margin-top:4px">Dirigeant(s) : ' + s.dirigeants.map((d) => esc(d.nom) + (d.role ? ' (' + esc(d.role) + ')' : '')).join(', ') + '</div>' : '') +
+          '</div>' +
+          (sirenBien === s.siren ? '<span class="se-badge">Propriétaire du bien</span>' : '<button class="se-btn ghost sm" data-act="robot-associer-societe" data-id="' + esc(b.id) + '" data-idx="' + i + '">Propriétaire du bien</button>') +
+        '</div>';
+      }).join('') + '</div>';
+    }
+    return '<div class="se-card" style="margin-top:16px"><h3>Sociétés domiciliées à cette adresse</h3>' +
+      '<p class="se-hint">SIRENE (recherche-entreprises.api.gouv.fr) — une SCI a souvent son siège dans l’immeuble qu’elle possède ; son complément d’adresse précise parfois l’étage ou la porte.</p>' +
+      corps + '</div>';
+  }
+
+  function patrimoineHtml(siren, bienCourantId) {
+    const p = PATRIMOINE[siren];
+    if (!/^\d{9}$/.test(String(siren || ''))) return '';
+    if (!p) setTimeout(() => chargerPatrimoine(siren), 0);
+    let corps;
+    if (!p || p.chargement) corps = '<p class="se-hint" style="margin-top:10px">Recherche des autres biens de la société…</p>';
+    else if (p.erreur) corps = '<p class="se-muted" style="margin-top:10px">Source indisponible pour l’instant.</p>';
+    else if (p.disponible === false) corps = pmIndisponibleHtml(p);
+    else if (!p.biens || !p.biens.length) corps = '<p class="se-muted" style="margin-top:10px">Aucun local au nom de cette société dans les départements couverts (' + esc((p.departements || []).join(', ')) + ').</p>';
+    else {
+      const radar = robotBiens();
+      corps = '<p class="se-hint" style="margin-top:6px">' + p.nbLots + ' lot(s) répartis sur ' + p.biens.length + ' adresse(s) — départements ' + esc((p.departements || []).join(', ')) + ', millésime ' + esc(p.millesime) + '.</p>' +
+        '<div class="se-list" style="margin-top:8px">' + p.biens.map((x) => {
+          const cleX = adresseKey(x.adresse);
+          const dansRadar = radar.find((rb) => rb.id !== bienCourantId && adresseKey(rb.adresse).indexOf(cleX) === 0);
+          const estCourant = bienCourantId && radar.some((rb) => rb.id === bienCourantId && adresseKey(rb.adresse).indexOf(cleX) === 0);
+          const niveaux = [];
+          x.lots.forEach((l) => { const t = l.niveauLibelle + (l.porte ? ' (porte ' + l.porte + ')' : ''); if (l.niveauLibelle && niveaux.indexOf(t) === -1) niveaux.push(t); });
+          return '<div class="se-list-item" style="align-items:flex-start">' +
+            '<div style="flex:1;min-width:0">' +
+              '<div style="font-size:13.5px;font-weight:500">' + esc(x.adresse) + ' <span class="se-hint">· ' + esc(x.commune) + '</span></div>' +
+              '<div class="se-hint">' + x.lots.length + ' lot(s)' + (niveaux.length ? ' · ' + esc(niveaux.join(', ')) : '') + ' · ' + esc(x.lots[0].droitLibelle) + ' · cadastre ' + esc(x.section + ' ' + x.plan) + '</div>' +
+            '</div>' +
+            (estCourant ? '<span class="se-badge">Ce bien</span>' : dansRadar ? '<a class="se-btn ghost sm" href="#/robot-bien/' + esc(dansRadar.id) + '">Fiche Radar</a>' : '') +
+          '</div>';
+        }).join('') + '</div>';
+    }
+    return '<div class="se-card" style="margin-top:16px"><h3>Patrimoine de la société</h3>' +
+      '<p class="se-hint">Tous les locaux que cette société détient, d’après le fichier DGFiP des personnes morales.</p>' + corps + '</div>';
+  }
+
+  // Rattache un lot DGFiP (ou une société SIRENE) au bien. Un bien du moteur
+  // quotidien est d'abord ajouté au Radar, sinon l'association serait perdue.
+  function bienEditable(bienId) {
+    let b = (state.robotBiens || []).find((x) => x.id === bienId);
+    if (b) return b;
+    const auto = (state.dpeAuto || []).find((x) => x.id === bienId);
+    if (!auto) return null;
+    b = Object.assign({}, auto);
+    state.robotBiens = (state.robotBiens || []).concat([b]);
+    return b;
   }
 
   function robotBiensList() {
@@ -2911,9 +3234,14 @@
   function viewProprietaire(r) {
     const key = decodeURIComponent(r.param || '');
     const biens = robotBiens().filter((b) => b.proprietaire && (b.proprietaire.siren === key || b.proprietaire.nom === key));
-    if (!biens.length) return head('Prospection', 'Propriétaire', '', '') + tabsRobot('robot-proprietaires') + '<div class="se-card"><p class="se-muted">Propriétaire introuvable.</p></div>';
-    const g = biens[0].proprietaire;
-    const dirigeants = g.dirigeants || [];
+    const estSiren = /^\d{9}$/.test(key);
+    // Une société repérée dans un immeuble (fichier DGFiP / SIRENE) a sa fiche même
+    // si aucun de ses biens n'est encore dans le Radar.
+    if (!biens.length && !estSiren) return head('Prospection', 'Propriétaire', '', '') + tabsRobot('robot-proprietaires') + '<div class="se-card"><p class="se-muted">Propriétaire introuvable.</p></div>';
+    const pat = estSiren ? (PATRIMOINE[key] || null) : null;
+    if (estSiren && !pat) setTimeout(() => chargerPatrimoine(key), 0);
+    const g = biens.length ? biens[0].proprietaire : { nom: (pat && pat.nom) || ('SIREN ' + key), siren: key, type: (pat && pat.type) || 'societe', dirigeants: [] };
+    const dirigeants = (g.dirigeants && g.dirigeants.length) ? g.dirigeants : ((pat && pat.dirigeants) || []).map((d) => d.nom);
     const biensHtml = '<div class="se-list" style="margin-top:10px">' + biens.map((b) => {
       const sc = scorePriorite(b);
       const surf = b.surface_habitable_m2 != null ? b.surface_habitable_m2 + ' m²' : '—';
@@ -2942,7 +3270,8 @@
           nomsDirigeants.map((n) => '<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--color-stroke-faint)"><b style="font-size:14px">' + esc(n) + '</b>' + reseauxSociauxHtml(n, 'ce dirigeant', contexteDirigeant, g.nom, g.siren) + '</div>').join('') +
           '</div>'
         : '') +
-      '<div class="se-card" style="margin-top:16px"><h3>Patrimoine identifié (' + biens.length + ')</h3>' + biensHtml + '</div>';
+      (biens.length ? '<div class="se-card" style="margin-top:16px"><h3>Biens dans le Radar (' + biens.length + ')</h3>' + biensHtml + '</div>' : '') +
+      (estSiren ? patrimoineHtml(key, null) : '');
   }
 
   function viewRobotBien(r) {
@@ -2951,6 +3280,8 @@
     const tab = state.robotBienTab || 'immo';
     const prop = b.proprietaire || {};
     const ms = matchings().filter((m) => m.bienId === b.id);
+    if (!AUTO[b.id]) setTimeout(() => lancerEnrichissementAuto(b.id), 0);
+    const etage = etageDuBien(b);
     const onglets = [['immo', 'Immobilier'], ['cadastre', 'Cadastre & géo'], ['proprietaire', 'Propriétaire'], ['societe', 'Société & dirigeants'], ['contacts', 'Coordonnées'], ['clients', 'Clients correspondants'], ['historique', 'Historique'], ['actions', 'Actions']];
     const tabBar = '<div class="se-tabs" style="margin-bottom:14px">' + onglets.map(([k, label]) => '<button class="se-btn ghost sm' + (tab === k ? ' is-on' : '') + '" data-act="robot-bien-tab" data-tab="' + k + '">' + label + '</button>').join('') + '</div>';
 
@@ -2965,18 +3296,13 @@
         kv('Pièces', b.pieces || '—') + kv('Chambres', b.chambres || '—') + kv('DPE', b.dpe || '—') +
         kv('DPE réalisé le', (b.dpeDate ? dFR(b.dpeDate) : '—') + ((() => { const j = joursDepuis(b.dpeDate); return (j != null && j <= 180) ? ' <span class="se-badge ' + (j <= 60 ? 'open' : 'warn') + '" style="margin-left:6px">Récent — signe possible d’un projet</span>' : ''; })())) +
         kv('Construction', b.anneeConstruction || b.periodeConstruction || '—') +
-        kv('Étage', b.etageEstime ? b.etageEstime + ' (estimé depuis l’adresse, non garanti)' : 'Non disponible — l’ADEME ne le fournit pas en donnée structurée') +
+        kv('Étage', etage ? esc(etage.valeur) + ' <span class="se-hint">(' + esc(etage.source) + ')</span>' : ((AUTO[b.id] && AUTO[b.id].chargement) ? '<span class="se-hint">recherche en cours…</span>' : 'Non déterminé — rattachez le bien à son lot ci-dessous')) +
+        (prop.nom ? kv('Propriétaire', lienSociete(prop.siren, prop.nom) + (prop.type === 'sci' ? ' · SCI' : prop.type === 'societe' ? ' · Société' : '')) : '') +
         '</div>' +
         (autresAdeme.length ? '<details style="margin-top:10px"><summary style="cursor:pointer;font-size:13px;color:var(--color-taupe)">Toutes les données ADEME disponibles sur ce logement (' + autresAdeme.length + ')</summary><div class="se-kv" style="margin-top:8px">' + autresAdeme.map((x) => kv(esc(x.label), esc(String(x.valeur)))).join('') + '</div></details>' : '') +
         '</div>' +
-        '<div class="se-card" style="margin-top:16px"><h3>Compléments gratuits externes</h3>' +
-        '<p class="se-hint">L’ADEME et le cadastre public ne donnent ni étage fiable ni porte gauche/droite (ces données viennent du fichier fiscal DGFiP, réservé aux organismes publics ou à l’accès payant). En complément gratuit, façon cadastre.com/bercail.com :</p>' +
-        '<div class="se-row" style="gap:8px;flex-wrap:wrap;margin-top:10px">' +
-          '<a class="se-btn ghost sm" target="_blank" rel="noopener" href="https://immobilier.pappers.fr/">Pappers Immobilier (gratuit)</a>' +
-          '<button class="se-btn ghost sm" data-act="copier-contact" data-value="' + esc(b.adresse || '') + '">Copier l’adresse</button>' +
-        '</div>' +
-        '<p class="se-hint" style="margin-top:6px">Collez l’adresse copiée dans la barre de recherche de Pappers Immobilier pour voir ses données DVF, urbanisme et DPE sur ce bien et son immeuble.</p>' +
-        '</div>' +
+        immeubleHtml(b) +
+        societesAdresseHtml(b) +
         '<div class="se-card" style="margin-top:16px"><h3>Valorisation interne</h3>' +
         '<p class="se-hint">Prix au m² estimé à partir des ventes DVF comparables du secteur (même type de bien, surface à ±30 %) — gratuit, sans outil externe.</p>' +
         '<button class="se-btn ghost sm" style="margin-top:10px" data-act="robot-valorisation" data-id="' + b.id + '">Estimer via comparables DVF</button>' +
@@ -2986,7 +3312,7 @@
       body = '<div class="se-card"><h3>Cadastre & géolocalisation</h3><div class="se-kv" style="margin-top:12px">' +
         kv('Parcelle cadastrale', esc(b.parcelle || '—')) + kv('Coordonnées', b.coords ? b.coords[0].toFixed(5) + ', ' + b.coords[1].toFixed(5) : '—') +
         kv('Date de détection', dFR(b.dateDetection)) + kv('Statut prospection', esc(b.statutProspection || 'nouveau')) + kv('Confiance géocodage', (b.confidence_geocoding != null ? b.confidence_geocoding + ' %' : '—')) + kv('Confiance propriétaire', (b.confidence_owner != null ? b.confidence_owner + ' %' : '—')) +
-        '</div>' + (b.coords ? '<div style="margin-top:12px">' + lienCarteRobot(b) + '</div>' : '') + '</div>';
+        '</div><div style="margin-top:12px">' + lienCarteRobot(b) + '</div></div>';
     } else if (tab === 'proprietaire') {
       body = '<div class="se-card"><h3>Propriétaire</h3><div class="se-kv" style="margin-top:12px">' +
         kv('Nom', esc(prop.nom || 'Non identifié')) + kv('Type', typeProp) +
@@ -2994,13 +3320,20 @@
         (prop.nom && typeProp === 'Personne physique' ? reseauxSociauxHtml(prop.nom, 'ce propriétaire', b.ville || '', '', '') : '') +
         (prop.nom ? '' : '<p class="se-muted" style="margin-top:10px">Le propriétaire n’est pas encore identifié. Lancez l’enrichissement pour le rechercher.</p>') + '</div>';
     } else if (tab === 'societe') {
-      const nomsDirigeants = (prop.dirigeants || []).map((d) => (typeof d === 'string' ? d : (d.nom || d.name || ''))).filter(Boolean);
+      const auto = AUTO[b.id] || {};
+      const dirigeantsAuto = (auto.dirigeants || []).map((d) => d.nom + (d.role ? ' (' + d.role + ')' : ''));
+      const nomsDirigeants = (prop.dirigeants || []).map((d) => (typeof d === 'string' ? d : (d.nom || d.name || ''))).filter(Boolean).concat((prop.dirigeants && prop.dirigeants.length) ? [] : (auto.dirigeants || []).map((d) => d.nom));
+      const bodacc = prop.siren ? (auto.bodacc || (state.bodaccAlertes || {})[prop.siren]) : null;
       body = '<div class="se-card"><h3>Société & dirigeants</h3><div class="se-kv" style="margin-top:12px">' +
-        kv('SIREN', esc(prop.siren || '—')) + kv('Dirigeants', nomsDirigeants.join(', ') || '—') +
+        kv('Société', prop.nom ? lienSociete(prop.siren, prop.nom) : '—') + kv('SIREN', esc(prop.siren || '—')) +
+        kv('Dirigeants', esc((prop.dirigeants && prop.dirigeants.length ? nomsDirigeants : dirigeantsAuto).join(', ')) || (prop.siren && auto.chargement !== false ? '<span class="se-hint">recherche en cours…</span>' : '—')) +
+        (prop.siren ? kv('BODACC', !bodacc ? '<span class="se-hint">vérification en cours…</span>' : bodacc.length ? '<span class="se-badge warn">' + bodacc.length + ' annonce(s)</span> ' + esc((bodacc[0].natureJugement || bodacc[0].familleavis || '') + (bodacc[0].dateparution ? ' · ' + dFR(bodacc[0].dateparution) : '')) : 'Aucune procédure collective publiée') : '') +
         '</div>' +
-        (prop.siren ? '<div style="margin-top:12px"><a class="se-btn ghost sm" target="_blank" rel="noopener" href="https://www.pappers.fr/entreprise/' + encodeURIComponent(prop.siren) + '">Vérifier sur Pappers (gratuit)</a><p class="se-hint" style="margin-top:6px">Fiche légale publique et gratuite de la société : dirigeants, immatriculation, comptes publiés s’il y en a.</p></div>' : '') +
-        (typeProp === 'SCI' || typeProp === 'Société' ? '' : '<p class="se-muted" style="margin-top:10px">Ce bien est détenu par une personne physique (pas de société).</p>') +
+        (prop.siren ? '<a class="se-btn ghost sm" style="margin-top:12px" href="#/robot-proprietaire/' + encodeURIComponent(prop.siren) + '">Ouvrir la fiche de la société</a>' : '') +
+        (prop.nom ? '' : '<p class="se-muted" style="margin-top:10px">Propriétaire pas encore identifié : rattachez le bien à un lot de l’immeuble ou à une société domiciliée (onglet Immobilier).</p>') +
+        (prop.nom && !(typeProp === 'SCI' || typeProp === 'Société') ? '<p class="se-muted" style="margin-top:10px">Ce bien est détenu par une personne physique (pas de société).</p>' : '') +
         '</div>' +
+        (prop.siren ? patrimoineHtml(prop.siren, b.id) : '') +
         (nomsDirigeants.length
           ? '<div class="se-card" style="margin-top:16px"><h3>Cibler les dirigeants sur les réseaux</h3><p class="se-hint">Le ou les gérants de la ' + esc(typeProp) + ', pour les approcher directement.</p>' +
             nomsDirigeants.map((n) => '<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--color-stroke-faint)"><b style="font-size:14px">' + esc(n) + '</b>' + reseauxSociauxHtml(n, 'ce dirigeant', [prop.nom, b.ville].filter(Boolean).join(' '), prop.nom, prop.siren) + '</div>').join('') +
@@ -3075,7 +3408,7 @@
     return '<div class="se-fiche-head"><div style="flex:1"><div class="kicker" style="color:var(--color-taupe)">Bien détecté · ' + esc(b.statutProspection || 'nouveau') + '</div>' +
       '<h1 class="display" style="font-size:28px;margin:4px 0 2px">' + esc(b.adresse) + '</h1>' +
       '<div class="se-row" style="gap:8px">' + (b.type ? '<span class="se-pill">' + esc(b.type) + '</span>' : '') + (b.ville ? '<span class="se-pill">' + esc(b.ville) + '</span>' : '') + (b.proprietaire && b.proprietaire.nom ? '<span class="se-pill">' + typeProp + '</span>' : '') + '</div></div>' +
-      '<a class="se-btn ghost" href="#/robot-radar">← Radar</a></div>' +
+      '<div class="se-row" style="gap:8px;flex-wrap:wrap">' + lienCarteRobot(b).replace('se-btn ghost sm', 'se-btn') + '<a class="se-btn ghost" href="#/robot-radar">← Radar</a></div></div>' +
       tabBar + body;
   }
 
@@ -5546,6 +5879,46 @@
     },
     'bodacc-verifier': () => { verifierBodacc(); },
     'robot-cascade': async (el) => { await enrichirCascade(el.getAttribute('data-id')); },
+    'voir-maps': (el) => { const b = robotBien(el.getAttribute('data-id')); if (b) ouvrirCarte(b); },
+    'pm-importer': async (el) => {
+      el.disabled = true;
+      try {
+        const r = await fetch('/api/robot/pm/importer', { method: 'POST', credentials: 'same-origin' }).then((x) => x.json());
+        PM_STATUT = { disponible: false, import: r.import || { enCours: true } };
+        toast('Chargement du fichier DGFiP lancé — quelques minutes, la fiche se mettra à jour toute seule.', 'ok');
+        suivreImportPm();
+      } catch (e) { toast('Impossible de lancer le chargement.', 'warn'); }
+      render();
+    },
+    'robot-associer-lot': (el) => {
+      const id = el.getAttribute('data-id');
+      const a = AUTO[id];
+      const l = a && a.immeuble && a.immeuble.lots[Number(el.getAttribute('data-idx'))];
+      const b = l && bienEditable(id);
+      if (!b) { toast('Lot introuvable.', 'warn'); return; }
+      const ancien = b.proprietaire || {};
+      b.proprietaire = { nom: l.nom, type: l.type, siren: l.siren, dirigeants: ancien.siren === l.siren ? (ancien.dirigeants || []) : [] };
+      b.etageDgfip = l.niveauLibelle || '';
+      b.lotDgfip = lotCle(l);
+      b.lotDetail = { batiment: l.batiment, entree: l.entree, porte: l.porte, droit: l.droitLibelle, section: l.section, plan: l.plan };
+      if (!b.parcelle && l.section) b.parcelle = (a.immeuble.insee || '') + ' ' + l.section + ' ' + l.plan;
+      saveRobotBiens();
+      delete AUTO[id];
+      commit();
+      toast('Bien rattaché à ' + l.nom + (l.niveauLibelle ? ' — ' + l.niveauLibelle : '') + '.', 'ok');
+    },
+    'robot-associer-societe': (el) => {
+      const id = el.getAttribute('data-id');
+      const a = AUTO[id];
+      const s2 = a && a.societes && a.societes[Number(el.getAttribute('data-idx'))];
+      const b = s2 && bienEditable(id);
+      if (!b) { toast('Société introuvable.', 'warn'); return; }
+      b.proprietaire = { nom: s2.nom, type: s2.type, siren: s2.siren, dirigeants: (s2.dirigeants || []).map((d) => d.nom) };
+      saveRobotBiens();
+      delete AUTO[id];
+      commit();
+      toast(s2.nom + ' enregistrée comme propriétaire du bien.', 'ok');
+    },
     'celia-toggle': () => {
       const ouverture = !celiaOuvert; // true si on passe de fermé à ouvert
       celiaOuvert = !celiaOuvert;
@@ -6419,7 +6792,7 @@
     }
   });
 
-  window.addEventListener('hashchange', () => { modal = null; render(); });
+  window.addEventListener('hashchange', () => { modal = null; fermerCarte(); render(); });
 
   /* -------------------------------- démarrage ------------------------------ */
 

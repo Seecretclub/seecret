@@ -2948,6 +2948,437 @@ app.get('/api/robot/aucadastre-owners', requireAdmin, async (req, res) => {
   } catch (e) { res.status(502).json({ error: 'Aucadastre/BAN injoignable.' }); }
 });
 
+// ============================================================================
+// Fichier DGFiP des LOCAUX DES PERSONNES MORALES (open data, Licence Ouverte 2.0)
+// ----------------------------------------------------------------------------
+// C'est la source qu'utilisent bercail.com & co : pour chaque local (appartement,
+// commerce, cave…) détenu par une société (SCI, SAS, bailleur…), la DGFiP publie
+// gratuitement l'adresse, le bâtiment, l'entrée, le NIVEAU (étage), la PORTE, le
+// SIREN et la dénomination du propriétaire. Les particuliers n'y figurent pas
+// (secret fiscal) — d'où le fait que seules les sociétés apparaissent.
+// Descriptif officiel (24 colonnes séparées par « ; ») :
+// https://data.economie.gouv.fr/explore/dataset/fichiers-des-locaux-et-des-parcelles-des-personnes-morales/
+//
+// Le fichier national est trop gros pour être interrogé à chaque clic : on le
+// télécharge une fois (puis on vérifie chaque mois s'il y a un millésime plus
+// récent), on ne garde que les départements utiles (PM_DEPTS, par défaut
+// Paris + 92 + 94) et on l'indexe sur disque (volume DATA_DIR) en petits fichiers :
+//   pm-locaux/insee/<code INSEE>.ndjson   → recherche « qui possède quoi dans cet immeuble »
+//   pm-locaux/siren/<2 premiers chiffres>.ndjson → « tous les biens de cette SCI »
+// ============================================================================
+const PM_DIR = path.join(DATA_DIR, 'pm-locaux');
+const PM_DATASET = 'fichiers-des-locaux-et-des-parcelles-des-personnes-morales';
+const PM_ATTACHMENTS = 'https://data.economie.gouv.fr/api/explore/v2.1/catalog/datasets/' + PM_DATASET + '/attachments';
+const PM_DEPTS = String(process.env.PM_DEPTS || '75,92,94').split(',').map((s) => s.trim()).filter(Boolean);
+const PM_IMPORT = { enCours: false, etape: '', erreur: '', lignes: 0, debut: null };
+
+// Colonnes compactes d'une ligne indexée (tableau JSON, pour rester léger sur disque)
+const PMC = { siren: 0, nom: 1, forme: 2, droit: 3, bat: 4, entree: 5, niveau: 6, porte: 7, num: 8, indice: 9, nature: 10, voie: 11, section: 12, plan: 13, groupe: 14, insee: 15, formeCode: 16 };
+
+const PM_DROITS = {
+  P: 'Propriétaire', U: 'Usufruitier', N: 'Nu-propriétaire', B: 'Bailleur à construction', R: 'Preneur à construction',
+  F: 'Foncier', T: 'Tenuyer', D: 'Domanier', V: 'Bailleur emphytéotique', W: 'Preneur bail à réhabilitation',
+  A: 'Locataire-attributaire', E: 'Emphytéote', K: 'Antichrésiste', L: 'Fonctionnaire logé', G: 'Administrateur',
+  S: 'Syndic de copropriété', H: 'Associé (transparence fiscale)', O: 'Autorisation d’occupation temporaire',
+  J: 'Jeune agriculteur', Q: 'Gestionnaire taxe bureaux', X: 'La Poste occupant', Y: 'La Poste propriétaire', C: 'Fiduciaire', M: 'Occupant (bail emphytéotique)'
+};
+
+function pmMeta() {
+  try { return JSON.parse(fs.readFileSync(path.join(PM_DIR, 'meta.json'), 'utf8')); } catch (e) { return null; }
+}
+
+function pmNorm(s) {
+  return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+// Types de voie (forme longue et abrégée MAJIC) retirés pour comparer deux noms de rue.
+const PM_TYPES_VOIE = new Set(('RUE R AVENUE AV AVE BOULEVARD BD BLD BOUL PLACE PL QUAI QU QUA IMPASSE IMP ALLEE ALL VILLA VLA VIL PASSAGE PAS PASS CITE CTE ' +
+  'SQUARE SQ SQU COURS CRS CHEMIN CHE CHEM ROUTE RTE RUELLE RLE HAMEAU HAM SENTIER SEN SENTE ESPLANADE ESP PARVIS PRV PROMENADE PROM PRO ' +
+  'RPT CARREFOUR CAR CARR GALERIE GAL FAUBOURG FG FBG CHAUSSEE CHS PONT PNT PORT MAIL PARC VOIE CLOS COUR TERRASSE TSSE TER BERGE BRG ' +
+  'RESIDENCE RES LOTISSEMENT LOT DOMAINE DOM ZONE ZA ZI ROND POINT').split(' '));
+const PM_MOTS_VIDES = new Set('DE DU DES LA LE LES L D ET AU AUX A EN SUR'.split(' '));
+const PM_SYNONYMES = { SAINT: 'ST', SAINTE: 'STE', GENERAL: 'GAL', GEN: 'GAL', MARECHAL: 'MAL', PRESIDENT: 'PDT', DOCTEUR: 'DR', PROFESSEUR: 'PR', NOTRE: 'N', DAME: 'D' };
+
+function pmMotsVoie(nomVoie, nature) {
+  const mots = pmNorm((nature ? nature + ' ' : '') + nomVoie).split(' ').filter(Boolean);
+  // on retire les types de voie seulement en tête (« RUE DE LA PAIX », pas « RUE DU PONT NEUF »)
+  while (mots.length > 1 && PM_TYPES_VOIE.has(mots[0])) mots.shift();
+  return mots.filter((m) => !PM_MOTS_VIDES.has(m)).map((m) => PM_SYNONYMES[m] || m);
+}
+
+// Code INSEE à partir d'un code postal, pour les secteurs couverts (Paris : 750XX → 751XX).
+function pmInseeDepuisCp(cp) {
+  const c = String(cp || '');
+  if (/^750(0[1-9]|1[0-9]|20)$/.test(c)) return '751' + c.slice(3);
+  if (c === '75116') return '75116';
+  const table = { '92100': '92012', '92200': '92051', '94300': '94080' };
+  return table[c] || '';
+}
+
+function pmParserAdresse(adresse) {
+  const s = pmNorm(adresse);
+  const mCp = /\b(\d{5})\b/.exec(s);
+  const cp = mCp ? mCp[1] : '';
+  const avantCp = mCp ? s.slice(0, mCp.index).trim() : s;
+  const m = /^(\d{1,4})\s*(BIS|TER|QUATER|B|T|Q)?\s+(.+)$/.exec(avantCp);
+  if (!m) return { cp, insee: pmInseeDepuisCp(cp), numero: '', indice: '', mots: [] };
+  const ind = m[2] ? m[2][0] : '';
+  return { cp, insee: pmInseeDepuisCp(cp), numero: String(parseInt(m[1], 10)), indice: ind, mots: pmMotsVoie(m[3], '') };
+}
+
+// Repli : la Base Adresse Nationale (gratuite, sans clé) donne le code INSEE,
+// le numéro et la voie quand l'adresse n'a pas de code postal exploitable.
+async function pmGeocoderBan(adresse) {
+  try {
+    const r = await fetch('https://api-adresse.data.gouv.fr/search/?limit=1&q=' + encodeURIComponent(adresse), { signal: AbortSignal.timeout(10000) });
+    const d = await r.json().catch(() => ({}));
+    const p = d.features && d.features[0] && d.features[0].properties;
+    if (!p || !p.housenumber) return null;
+    const mNum = /^(\d+)\s*([a-z]*)/i.exec(p.housenumber) || [];
+    return { cp: p.postcode || '', insee: p.citycode || '', numero: String(parseInt(mNum[1], 10) || ''), indice: (mNum[2] || '').toUpperCase().slice(0, 1), mots: pmMotsVoie(p.street || '', '') };
+  } catch (e) { return null; }
+}
+
+function pmNiveauLibelle(n) {
+  const v = String(n || '').trim();
+  if (!v) return '';
+  if (/^0+$/.test(v)) return 'RDC';
+  if (/^-?\d+$/.test(v)) { const k = parseInt(v, 10); return k < 0 ? 'Sous-sol ' + (-k) : (k === 1 ? '1er étage' : k + 'e étage'); }
+  return v;
+}
+
+function pmLotDepuisLigne(row) {
+  const forme = row[PMC.forme] || '';
+  const estSci = /^SCI/i.test(forme) || /^654/.test(row[PMC.formeCode] || '') || /\bSCI\b|CIVILE IMMOBILIERE/i.test(row[PMC.nom] || '');
+  return {
+    siren: row[PMC.siren], nom: row[PMC.nom], type: estSci ? 'sci' : 'societe', forme: forme,
+    droit: row[PMC.droit], droitLibelle: PM_DROITS[row[PMC.droit]] || row[PMC.droit] || '',
+    batiment: row[PMC.bat], entree: row[PMC.entree], niveau: row[PMC.niveau], niveauLibelle: pmNiveauLibelle(row[PMC.niveau]), porte: row[PMC.porte],
+    section: row[PMC.section], plan: row[PMC.plan], insee: row[PMC.insee],
+    adresse: [row[PMC.num] + (row[PMC.indice] ? ' ' + row[PMC.indice] : ''), row[PMC.nature], row[PMC.voie]].filter(Boolean).join(' ')
+  };
+}
+
+// Petit cache mémoire des derniers fichiers lus (un arrondissement ≈ quelques Mo).
+const PM_CACHE = new Map();
+function pmLireBucket(sousDossier, nom) {
+  const fichier = path.join(PM_DIR, sousDossier, nom + '.ndjson');
+  const cle = sousDossier + '/' + nom;
+  let st;
+  try { st = fs.statSync(fichier); } catch (e) { return []; }
+  const c = PM_CACHE.get(cle);
+  if (c && c.mtime === st.mtimeMs) return c.rows;
+  const rows = fs.readFileSync(fichier, 'utf8').split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch (e) { return null; } }).filter(Boolean);
+  PM_CACHE.set(cle, { mtime: st.mtimeMs, rows });
+  if (PM_CACHE.size > 8) PM_CACHE.delete(PM_CACHE.keys().next().value);
+  return rows;
+}
+
+function pmScoreVoie(motsA, motsB) {
+  if (!motsA.length || !motsB.length) return 0;
+  const a = motsA.join(''), b = motsB.join('');
+  if (a === b) return 3;
+  if (a.indexOf(b) > -1 || b.indexOf(a) > -1) return 2;
+  if (motsA[motsA.length - 1] === motsB[motsB.length - 1]) return 1;
+  return 0;
+}
+
+function pmLotsImmeuble(q) {
+  const rows = pmLireBucket('insee', q.insee).filter((r) => String(parseInt(r[PMC.num], 10)) === q.numero);
+  if (!rows.length) return [];
+  let meilleur = 0;
+  const notes = rows.map((r) => { const sc = pmScoreVoie(q.mots, pmMotsVoie(r[PMC.voie], '')); if (sc > meilleur) meilleur = sc; return sc; });
+  let retenus = rows.filter((r, i) => meilleur > 0 && notes[i] === meilleur);
+  // indice de répétition (bis/ter) : on préfère le même, sinon on garde tout
+  const memeIndice = retenus.filter((r) => String(r[PMC.indice] || '').slice(0, 1).toUpperCase() === q.indice);
+  if (memeIndice.length) retenus = memeIndice;
+  return retenus.map(pmLotDepuisLigne);
+}
+
+function pmTriNiveau(a, b) {
+  const na = /^-?\d+$/.test(String(a.niveau || '').trim()) ? parseInt(a.niveau, 10) : 999;
+  const nb = /^-?\d+$/.test(String(b.niveau || '').trim()) ? parseInt(b.niveau, 10) : 999;
+  return na - nb || String(a.porte || '').localeCompare(String(b.porte || '')) || String(a.nom || '').localeCompare(String(b.nom || ''));
+}
+
+// --- Import (téléchargement + indexation) -----------------------------------
+async function pmTrouverFichiers() {
+  if (process.env.PM_LOCAUX_URL) return { annee: null, fichiers: [{ id: 'PM_LOCAUX_URL', url: process.env.PM_LOCAUX_URL }] };
+  const r = await fetch(PM_ATTACHMENTS, { headers: { Accept: 'application/json', 'User-Agent': 'Seecret/1.0' }, signal: AbortSignal.timeout(30000) });
+  if (!r.ok) throw new Error('liste des fichiers DGFiP indisponible (HTTP ' + r.status + ')');
+  const texte = await r.text();
+  const re = /fichier_des_locaux_situation_(\d{4})_dpts?_(\d+)_a_(\d+)_zip/gi;
+  const vus = {};
+  let m;
+  while ((m = re.exec(texte))) vus[m[0].toLowerCase()] = { id: m[0].toLowerCase(), annee: +m[1], de: +m[2], a: +m[3] };
+  const tous = Object.values(vus);
+  if (!tous.length) throw new Error('aucun fichier « locaux » trouvé dans la liste DGFiP');
+  const annee = Math.max.apply(null, tous.map((f) => f.annee));
+  const fichiers = [];
+  PM_DEPTS.forEach((dep) => {
+    const n = parseInt(dep, 10);
+    const f = tous.filter((x) => x.annee === annee && n >= x.de && n <= x.a)[0];
+    if (f && !fichiers.some((x) => x.id === f.id)) fichiers.push({ id: f.id, url: PM_ATTACHMENTS + '/' + f.id });
+  });
+  if (!fichiers.length) throw new Error('aucun fichier ' + annee + ' ne couvre les départements ' + PM_DEPTS.join(', '));
+  return { annee, fichiers };
+}
+
+async function pmTelecharger(url, dest) {
+  const { Readable } = require('stream');
+  const { pipeline } = require('stream/promises');
+  const r = await fetch(url, { headers: { 'User-Agent': 'Seecret/1.0' }, signal: AbortSignal.timeout(30 * 60 * 1000) });
+  if (!r.ok || !r.body) throw new Error('téléchargement impossible (HTTP ' + r.status + ')');
+  await pipeline(Readable.fromWeb(r.body), fs.createWriteStream(dest));
+}
+
+// Parcourt un zip (et les zips imbriqués) et appelle onLigne(texte) pour chaque
+// ligne de chaque fichier texte, sans jamais tout charger en mémoire.
+function pmLireZip(fichierZip, onLigne, dossierTmp) {
+  const yauzl = require('yauzl');
+  const readline = require('readline');
+  return new Promise((resolve, reject) => {
+    yauzl.open(fichierZip, { lazyEntries: true, autoClose: true }, (err, zip) => {
+      if (err) return reject(err);
+      zip.on('error', reject);
+      zip.on('end', resolve);
+      zip.on('entry', (entry) => {
+        const nom = entry.fileName;
+        if (/\/$/.test(nom)) return zip.readEntry();
+        // Fichiers nommés PM_AA_B_DDD… : on saute d'emblée les départements non suivis.
+        const mDep = /PM_\d{2}_B_(\d{2}|2A|2B)/i.exec(path.basename(nom));
+        if (mDep && PM_DEPTS.indexOf(mDep[1].toUpperCase()) === -1 && PM_DEPTS.indexOf(String(parseInt(mDep[1], 10))) === -1) return zip.readEntry();
+        const estZip = /\.zip$/i.test(nom);
+        const estTexte = /\.(txt|csv)$/i.test(nom);
+        if (!estZip && !estTexte) return zip.readEntry();
+        zip.openReadStream(entry, (e2, flux) => {
+          if (e2) return reject(e2);
+          if (estZip) {
+            const tmp = path.join(dossierTmp, 'imbrique-' + Date.now() + '.zip');
+            const out = fs.createWriteStream(tmp);
+            flux.pipe(out);
+            out.on('finish', () => {
+              pmLireZip(tmp, onLigne, dossierTmp).then(() => { try { fs.unlinkSync(tmp); } catch (e) {} zip.readEntry(); }, reject);
+            });
+            out.on('error', reject);
+            return;
+          }
+          // Les fichiers DGFiP sont en Latin-1 : on décode octet par octet.
+          const iconv = require('iconv-lite');
+          const rl = readline.createInterface({ input: flux.pipe(iconv.decodeStream('latin1')), crlfDelay: Infinity });
+          rl.on('line', onLigne);
+          rl.on('close', () => zip.readEntry());
+          rl.on('error', reject);
+        });
+      });
+      zip.readEntry();
+    });
+  });
+}
+
+async function pmImporter(raison) {
+  if (PM_IMPORT.enCours) return;
+  Object.assign(PM_IMPORT, { enCours: true, etape: 'Recherche du dernier millésime DGFiP…', erreur: '', lignes: 0, debut: nowISO() });
+  const tmpDir = PM_DIR + '.tmp';
+  const flux = {};
+  const fermerTout = () => Promise.all(Object.values(flux).map((w) => new Promise((ok) => w.end(ok))));
+  try {
+    const { annee, fichiers } = await pmTrouverFichiers();
+    const meta = pmMeta();
+    if (raison === 'mensuel' && meta && annee && meta.annee >= annee) {
+      Object.assign(PM_IMPORT, { enCours: false, etape: 'Déjà à jour (millésime ' + meta.annee + ').' });
+      return;
+    }
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.mkdirSync(path.join(tmpDir, 'insee'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, 'siren'), { recursive: true });
+    const communes = {};
+    const ecrire = (dossier, nom, ligne) => {
+      const cle = dossier + '/' + nom;
+      if (!flux[cle]) flux[cle] = fs.createWriteStream(path.join(tmpDir, dossier, nom + '.ndjson'));
+      flux[cle].write(ligne);
+    };
+    for (const f of fichiers) {
+      const zipLocal = path.join(tmpDir, 'source.zip');
+      PM_IMPORT.etape = 'Téléchargement du fichier DGFiP (' + f.id + ')…';
+      await pmTelecharger(f.url, zipLocal);
+      PM_IMPORT.etape = 'Indexation des locaux (' + PM_DEPTS.join(', ') + ')…';
+      await pmLireZip(zipLocal, (ligne) => {
+        const c = ligne.split(';');
+        if (c.length < 24) return;
+        const dep = c[0].trim();
+        if (!/^(\d{2}|2A|2B|97)$/.test(dep) || PM_DEPTS.indexOf(dep) === -1) return;
+        const insee = dep + String(c[2].trim()).padStart(3, '0');
+        const siren = c[19].trim();
+        const row = [siren, c[23].trim(), c[22].trim(), c[17].trim(), c[7].trim(), c[8].trim(), c[9].trim(), c[10].trim(),
+          String(parseInt(c[11], 10) || c[11].trim()), c[12].trim(), c[15].trim(), c[16].trim(), c[5].trim(), c[6].trim(), c[20].trim(), insee, c[21].trim()];
+        const json = JSON.stringify(row) + '\n';
+        ecrire('insee', insee, json);
+        if (siren) ecrire('siren', (/^\d{2}/.test(siren) ? siren.slice(0, 2) : 'XX'), json);
+        communes[insee] = c[3].trim();
+        PM_IMPORT.lignes++;
+      }, tmpDir);
+      try { fs.unlinkSync(zipLocal); } catch (e) {}
+    }
+    await fermerTout();
+    if (!PM_IMPORT.lignes) throw new Error('aucune ligne retenue pour les départements ' + PM_DEPTS.join(', '));
+    fs.writeFileSync(path.join(tmpDir, 'meta.json'), JSON.stringify({ annee, importeLe: nowISO(), lignes: PM_IMPORT.lignes, departements: PM_DEPTS, communes, source: fichiers.map((f) => f.url) }, null, 1));
+    fs.rmSync(PM_DIR, { recursive: true, force: true });
+    fs.renameSync(tmpDir, PM_DIR);
+    PM_CACHE.clear();
+    Object.assign(PM_IMPORT, { enCours: false, etape: 'Import terminé : ' + PM_IMPORT.lignes.toLocaleString('fr-FR') + ' locaux de sociétés indexés (millésime ' + annee + ').' });
+    console.log('[pm-locaux] ' + PM_IMPORT.etape);
+  } catch (e) {
+    await fermerTout().catch(() => {});
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    Object.assign(PM_IMPORT, { enCours: false, erreur: String(e.message || e), etape: 'Échec de l’import' });
+    console.error('[pm-locaux] échec :', e.message || e);
+  }
+}
+
+function planifierImportPm() {
+  if (process.env.PM_AUTO_IMPORT === '0') return;
+  // Premier import automatique peu après le démarrage si l'index n'existe pas,
+  // puis vérification mensuelle d'un millésime plus récent.
+  setTimeout(() => { if (!pmMeta()) pmImporter('initial'); }, 2 * 60 * 1000);
+  setInterval(() => pmImporter('mensuel'), 30 * 24 * 60 * 60 * 1000);
+}
+
+app.get('/api/robot/pm/statut', requireAdmin, (req, res) => {
+  res.json({ ok: true, disponible: !!pmMeta(), meta: pmMeta() ? Object.assign({}, pmMeta(), { communes: undefined }) : null, import: PM_IMPORT });
+});
+
+app.post('/api/robot/pm/importer', requireAdmin, (req, res) => {
+  if (PM_IMPORT.enCours) return res.json({ ok: true, dejaEnCours: true, import: PM_IMPORT });
+  pmImporter('manuel');
+  res.json({ ok: true, lance: true, import: PM_IMPORT });
+});
+
+// Clé (facultative) de l'API Google Maps Embed — gratuite et sans quota, mais
+// liée à un compte Google Cloud. Sans clé, le CRM utilise l'intégration publique
+// de Google Maps, qui fonctionne aussi sans compte.
+app.get('/api/robot/carte-config', requireAdmin, (req, res) => {
+  res.json({ ok: true, googleEmbedKey: String(process.env.GOOGLE_MAPS_EMBED_KEY || '').trim() });
+});
+
+// Qui (quelles sociétés) possède quoi, étage par étage, dans l'immeuble de cette adresse.
+app.get('/api/robot/pm/immeuble', requireAdmin, async (req, res) => {
+  const adresse = String(req.query.adresse || '').trim();
+  if (!adresse) return res.status(400).json({ error: 'Adresse requise.' });
+  const meta = pmMeta();
+  if (!meta) return res.json({ ok: true, disponible: false, import: PM_IMPORT, lots: [], proprietaires: [] });
+  let q = pmParserAdresse(adresse);
+  if (!q.insee || !q.numero || !q.mots.length) {
+    const ban = await pmGeocoderBan(adresse);
+    if (ban) q = ban;
+  }
+  if (!q.insee || !q.numero) return res.json({ ok: true, disponible: true, millesime: meta.annee, adresseComprise: false, lots: [], proprietaires: [] });
+  const lots = pmLotsImmeuble(q).sort(pmTriNiveau);
+  const parSiren = {};
+  lots.forEach((l) => {
+    const k = l.siren || l.nom;
+    parSiren[k] = parSiren[k] || { siren: l.siren, nom: l.nom, type: l.type, forme: l.forme, nbLots: 0, niveaux: [] };
+    parSiren[k].nbLots++;
+    if (l.niveauLibelle && parSiren[k].niveaux.indexOf(l.niveauLibelle) === -1) parSiren[k].niveaux.push(l.niveauLibelle);
+  });
+  res.json({ ok: true, disponible: true, millesime: meta.annee, adresseComprise: true, insee: q.insee, commune: (meta.communes || {})[q.insee] || '', lots, proprietaires: Object.values(parSiren).sort((a, b) => b.nbLots - a.nbLots) });
+});
+
+// Tout le patrimoine (dans les départements indexés) d'une société, regroupé par adresse.
+app.get('/api/robot/pm/siren/:siren', requireAdmin, (req, res) => {
+  const siren = String(req.params.siren || '').replace(/\s/g, '');
+  if (!/^\d{9}$/.test(siren)) return res.status(400).json({ error: 'SIREN à 9 chiffres requis.' });
+  const meta = pmMeta();
+  if (!meta) return res.json({ ok: true, disponible: false, import: PM_IMPORT, biens: [] });
+  const lots = pmLireBucket('siren', siren.slice(0, 2)).filter((r) => r[PMC.siren] === siren).map(pmLotDepuisLigne);
+  const parAdresse = {};
+  lots.forEach((l) => {
+    const k = l.insee + '|' + l.adresse;
+    parAdresse[k] = parAdresse[k] || { adresse: l.adresse, insee: l.insee, commune: (meta.communes || {})[l.insee] || '', section: l.section, plan: l.plan, lots: [] };
+    parAdresse[k].lots.push(l);
+  });
+  const biens = Object.values(parAdresse).map((b) => Object.assign(b, { lots: b.lots.sort(pmTriNiveau) })).sort((a, b) => a.insee.localeCompare(b.insee) || a.adresse.localeCompare(b.adresse));
+  res.json({ ok: true, disponible: true, millesime: meta.annee, siren, nom: lots[0] ? lots[0].nom : '', type: lots[0] ? lots[0].type : '', nbLots: lots.length, biens, departements: meta.departements });
+});
+
+// ---- Sociétés domiciliées à une adresse (SIRENE, API publique gratuite) ----
+// Complément du fichier DGFiP : une SCI a très souvent son siège dans l'immeuble
+// qu'elle possède, et le « complément d'adresse » SIRENE précise parfois l'étage,
+// le bâtiment ou la porte (« 3EME ETAGE GAUCHE », « BAT B ESC 2 »…).
+function analyserComplementAdresse(texte) {
+  const s = pmNorm(texte);
+  const out = {};
+  if (!s) return out;
+  if (/\b(RDC|REZ DE CHAUSSEE)\b/.test(s)) out.etage = 'RDC';
+  let m = /\b(\d{1,2})\s*(?:E|EME|IEME|ER|ERE)\s*(?:ETAGE|ETG|ET)\b/.exec(s) || /\b(\d{1,2})\s*(?:ETAGE|ETG)\b/.exec(s) || /\b(?:ETAGE|ETG)\s*N?\s*(\d{1,2})\b/.exec(s);
+  if (m && !out.etage) out.etage = m[1] === '1' ? '1er étage' : parseInt(m[1], 10) + 'e étage';
+  m = /\b(GAUCHE|DROITE|FACE|FOND|MILIEU)\b/.exec(s) || /\b(?:PORTE|PTE|ETAGE|ETG)\s+(G|D)\b/.exec(s);
+  if (m) out.position = { G: 'gauche', D: 'droite' }[m[1]] || m[1].toLowerCase();
+  m = /\b(?:BAT|BATIMENT|BT)\s*([A-Z0-9]{1,3})\b/.exec(s); if (m) out.batiment = m[1];
+  m = /\b(?:ESC|ESCALIER)\s*([A-Z0-9]{1,3})\b/.exec(s); if (m) out.escalier = m[1];
+  m = /\b(?:APT|APPT|APPARTEMENT|APP|LOGT|LOGEMENT)\s*N?\s*([A-Z0-9]{1,5})\b/.exec(s); if (m) out.appartement = m[1];
+  m = /\bPORTE\s*N?\s*(\d{1,5})\b/.exec(s); if (m) out.porte = m[1];
+  return out;
+}
+
+const SIRENE_ADRESSE_CACHE = {};
+app.get('/api/robot/societes-adresse', requireAdmin, async (req, res) => {
+  const adresse = String(req.query.adresse || '').trim();
+  if (!adresse) return res.status(400).json({ error: 'Adresse requise.' });
+  const cle = pmNorm(adresse);
+  if (SIRENE_ADRESSE_CACHE[cle] && Date.now() - SIRENE_ADRESSE_CACHE[cle].at < 24 * 3600 * 1000) return res.json(SIRENE_ADRESSE_CACHE[cle].data);
+  const q = pmParserAdresse(adresse);
+  const appel = async (extra) => {
+    const p = new URLSearchParams(Object.assign({ q: adresse, per_page: '25', page: '1', etat_administratif: 'A' }, q.cp ? { code_postal: q.cp } : {}, extra));
+    const r = await fetch('https://recherche-entreprises.api.gouv.fr/search?' + p.toString(), { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(15000) });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json().catch(() => ({}));
+    return Array.isArray(d.results) ? d.results : [];
+  };
+  try {
+    // Deux requêtes : une limitée aux SCI (nature juridique 6540) pour ne pas les
+    // noyer sous les commerces de la rue, une générale pour les autres sociétés.
+    const [scis, autres] = await Promise.all([appel({ nature_juridique: '6540' }).catch(() => []), appel({}).catch(() => null)]);
+    if (autres === null && !scis.length) throw new Error('injoignable');
+    const vus = {};
+    const societes = [];
+    scis.concat(autres || []).forEach((e) => {
+      if (!e || !e.siren || vus[e.siren]) return;
+      const siege = e.siege || {};
+      const adresses = [siege].concat(Array.isArray(e.matching_etablissements) ? e.matching_etablissements : []);
+      // On ne garde que les sociétés réellement domiciliées à CE numéro de CETTE rue.
+      const correspondant = adresses.find((a) => {
+        const texte = pmNorm(a.adresse || [a.numero_voie, a.indice_repetition, a.type_voie, a.libelle_voie, a.code_postal].filter(Boolean).join(' '));
+        const num = String(a.numero_voie || (/(?:^|\s)(\d{1,4})\s/.exec(' ' + texte + ' ') || [])[1] || '');
+        if (q.numero && String(parseInt(num, 10)) !== q.numero) return false;
+        if (q.cp && texte.indexOf(q.cp) === -1 && String(a.code_postal || '') !== q.cp) return false;
+        const motsA = pmMotsVoie(a.libelle_voie || texte.replace(/^\D*\d+\s*/, '').replace(/\b\d{5}\b.*$/, ''), a.type_voie || '');
+        return !q.mots.length || pmScoreVoie(q.mots, motsA) > 0 || q.mots.every((m) => texte.indexOf(m) > -1);
+      });
+      if (!correspondant) return;
+      vus[e.siren] = true;
+      const nom = e.nom_complet || e.nom_raison_sociale || ('SIREN ' + e.siren);
+      const nj = String(e.nature_juridique || '');
+      const complement = correspondant.complement_adresse || siege.complement_adresse || '';
+      societes.push({
+        siren: e.siren, nom, natureJuridique: nj,
+        type: (nj.indexOf('654') === 0 || /\bSCI\b|CIVILE IMMOBILIERE/i.test(nom)) ? 'sci' : 'societe',
+        dateCreation: e.date_creation || '',
+        estSiege: correspondant === siege || !!correspondant.est_siege,
+        adresse: correspondant.adresse || siege.adresse || '',
+        complementAdresse: complement,
+        lot: analyserComplementAdresse(complement + ' ' + (correspondant.adresse || '')),
+        dirigeants: (e.dirigeants || []).filter((d) => String(d.type_dirigeant || '').toLowerCase() === 'personne physique')
+          .map((d) => ({ nom: ((d.prenoms ? d.prenoms + ' ' : '') + (d.nom || '')).trim(), role: d.qualite || '' }))
+      });
+    });
+    societes.sort((a, b) => (a.type === 'sci' ? 0 : 1) - (b.type === 'sci' ? 0 : 1));
+    const data = { ok: true, societes };
+    SIRENE_ADRESSE_CACHE[cle] = { at: Date.now(), data };
+    res.json(data);
+  } catch (e) { res.status(502).json({ error: 'API SIRENE (recherche-entreprises.api.gouv.fr) injoignable.' }); }
+});
+
 // Enrichissement contacts d'un signal DPE (propriétaire + téléphone/email avec statuts)
 app.post('/api/robot/prospecting/:id/enrich', requireAdmin, async (req, res) => {
   const id = Number(req.params.id);
@@ -4168,4 +4599,5 @@ app.listen(PORT, () => {
     console.warn('  Email : NON configuré (ni RESEND_API_KEY ni EMAIL_USER/EMAIL_PASS) — aucun email ne sera envoyé');
   }
   planifierScanDpeQuotidien();
+  planifierImportPm();
 });
