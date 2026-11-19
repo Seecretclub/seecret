@@ -1997,16 +1997,26 @@ app.post('/api/mes-notifications/:id/lu', requireAuth, (req, res) => {
 const MANDAT_VERSION = 'MR-2026-11-v1';
 const MANDAT_CODE_TTL = 10 * 60 * 1000;
 
+// Société exploitant la marque Seecret (données publiques SIRENE). Chaque
+// valeur peut être remplacée par la variable d'environnement correspondante.
+const AGENCE_DEFAUT = {
+  raisonSociale: 'EASYMMOBILIER',
+  forme: 'SAS au capital de 1 000 €',
+  siren: '921 577 938',
+  adresse: '18 rue Henri Say, 92600 Asnières-sur-Seine',
+  representant: 'Gabriel Taieb, président'
+};
 function agence() {
   return {
-    raisonSociale: String(process.env.AGENCE_RAISON_SOCIALE || '').trim(),
-    forme: String(process.env.AGENCE_FORME || '').trim(),
-    siren: String(process.env.AGENCE_SIREN || '').trim(),
-    adresse: String(process.env.AGENCE_ADRESSE || '').trim(),
+    raisonSociale: String(process.env.AGENCE_RAISON_SOCIALE || AGENCE_DEFAUT.raisonSociale).trim(),
+    forme: String(process.env.AGENCE_FORME || AGENCE_DEFAUT.forme).trim(),
+    siren: String(process.env.AGENCE_SIREN || AGENCE_DEFAUT.siren).trim(),
+    adresse: String(process.env.AGENCE_ADRESSE || AGENCE_DEFAUT.adresse).trim(),
     carteT: String(process.env.AGENCE_CARTE_T || '').trim(),
     garantie: String(process.env.AGENCE_GARANTIE || '').trim(),
     rcp: String(process.env.AGENCE_RCP || '').trim(),
-    representant: String(process.env.AGENCE_REPRESENTANT || '').trim(),
+    representant: String(process.env.AGENCE_REPRESENTANT || AGENCE_DEFAUT.representant).trim(),
+    mediateur: String(process.env.AGENCE_MEDIATEUR || '').trim(),
     tauxAcquereur: Number(process.env.AGENCE_TAUX_ACQUEREUR || 5),
     tauxMixte: Number(process.env.AGENCE_TAUX_MIXTE || 3),
     assiette: String(process.env.AGENCE_ASSIETTE || 'du prix de vente du bien hors honoraires (prix net vendeur)').trim(),
@@ -2257,6 +2267,12 @@ app.get('/api/mandat/:id/document', requireAuth, (req, res) => {
 app.get('/api/mandats', requireAdmin, (req, res) => {
   const db = readDb();
   res.json({ ok: true, agenceManquants: agenceManquants(), mandats: (db.mandats || []).map((m) => Object.assign(resumeMandat(m), { leadId: m.leadId, mandant: m.mandant })) });
+});
+
+// Informations réglementées affichées dans les mentions légales (publiques).
+app.get('/api/agence', (req, res) => {
+  const a = agence();
+  res.json({ raisonSociale: a.raisonSociale, siren: a.siren, adresse: a.adresse, carteT: a.carteT, garantie: a.garantie, rcp: a.rcp, mediateur: a.mediateur });
 });
 
 // Créneaux proposés par le membre : jusqu'à 3, au format « AAAA-MM-JJTHH:MM ».
