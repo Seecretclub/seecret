@@ -1750,7 +1750,7 @@
       const email = String((input && input.value) || '').trim().toLowerCase();
       if (!email) { toast('Saisissez votre email.', 'warn'); return; }
       try {
-        await API.send('POST', '/api/auth/enroll', { email: email });
+        await API.send('POST', '/api/auth/enroll', { email: email, turnstileToken: window.SeecretTurnstile ? await window.SeecretTurnstile.jeton() : '' });
         state.__pendingEmail = email;
         toast('Code envoyé à ' + email + '.', 'ok');
       } catch (err) { toast(err.message || 'Envoi impossible.', 'warn'); }
@@ -2094,7 +2094,7 @@
       const email = String(data.get('email') || '').trim().toLowerCase();
       if (!email) return;
       try {
-        await API.send('POST', '/api/auth/enroll', { email: email });
+        await API.send('POST', '/api/auth/enroll', { email: email, turnstileToken: window.SeecretTurnstile ? await window.SeecretTurnstile.jeton() : '' });
         state.__pendingEmail = email;
         state.__lienEnvoye = true;
         render();
