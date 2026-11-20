@@ -882,7 +882,7 @@
 
       if (id === 'budget') {
         return '<div class="se-form-grid">' +
-          field('Budget maximum (€)', 'recherche.prixMax', rep.recherche.prixMax, { type: 'number', placeholder: '1 800 000' }) +
+          field('Budget maximum, honoraires inclus (€)', 'recherche.prixMax', rep.recherche.prixMax, { type: 'number', placeholder: '1 800 000' }) +
           field('Apport (€)', 'budget.apport', rep.budget.apport, { type: 'number', placeholder: '200 000' }) +
           '</div>' +
           bloc('Votre financement', chips('financement', ['Comptant', 'Prêt accordé', 'Prêt en cours', 'À définir'], rep.budget.financement, false)) +
@@ -940,7 +940,7 @@
 
       if (id === 'vente') {
         return estimationBlock() + '<div class="se-form-grid" style="margin-bottom:18px">' +
-            field('Prix souhaité (€)', 'vente.prix', rep.vente.prix, { type: 'number', placeholder: '1 200 000' }) +
+            field('Prix net vendeur souhaité (€)', 'vente.prix', rep.vente.prix, { type: 'number', placeholder: '1 200 000' }) +
             field('Dans quel délai ?', 'vente.delai', rep.vente.delai, { type: 'select', options: [{ id: '', label: '— choisir —' }, { id: 'Dès que possible', label: 'Dès que possible' }, { id: '3 mois', label: '3 mois' }, { id: '6 mois', label: '6 mois' }, { id: '12 mois', label: '12 mois' }, { id: 'Quand j’aurai trouvé', label: 'Quand j’aurai trouvé' }] }) +
           '</div>' +
           bloc('Le bien est-il déjà en vente ailleurs ?', chips('dejaEnVente', ['Non', 'Oui'], rep.vente.dejaEnVente, false)) +

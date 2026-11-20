@@ -308,6 +308,17 @@
   };
   const nomQuartier = (id) => (QUARTIERS.find((q) => q.id === id) || { label: id }).label;
   const prixM2 = (b) => (b.surface ? Math.round(b.prix / b.surface) : 0);
+  // Prix : le propriétaire voit son net vendeur (b.prix) et le prix affiché aux
+  // acquéreurs (b.prixHai, calculé par le serveur) ; les biens du catalogue
+  // arrivent déjà en prix honoraires inclus, avec la mention des honoraires.
+  const tauxTxt = (t) => String(t).replace('.', ',');
+  const mentionHai = (b) => (b && b.honoraires
+    ? '<p class="se-hint se-mention-hai">' + esc(b.honoraires.mention) +
+      (b.honoraires.prixHorsHonoraires ? ' Prix hors honoraires : ' + euro(b.honoraires.prixHorsHonoraires) + '.' : '') + '</p>'
+    : '');
+  const ligneHaiProprio = (b) => (b && b.prix && b.prixHai
+    ? '<p class="se-hint se-mention-hai">Prix affiché aux acquéreurs : <b>' + euro(b.prixHai) + '</b> honoraires inclus (' + tauxTxt(b.tauxHonoraires) + ' % à la charge de l’acquéreur). Vous percevez ' + euro(b.prix) + ' net, sans aucun frais.</p>'
+    : '');
   const suivisCount = () => state.suivis.length;
   const visitesEnAttente = () => state.visites.filter((v) => v.statut === 'demandee').length;
   const offresRecues = () => state.offres.filter((o) => o.sens === 'recue' && o.statut === 'recue').length;
@@ -679,7 +690,7 @@
             '<img src="' + photoOf(mien) + '" alt="" style="width:84px;height:64px;object-fit:cover;border-radius:12px;flex:0 0 84px"/>' +
             '<div style="flex:1;min-width:0"><span class="ed-kicker">Mon bien</span>' +
             '<div class="ed-card-title" style="font-size:19px">' + esc(mien.titre) + '</div>' +
-            '<div style="font-size:13px;color:var(--color-graphite)">' + badge(mien.statut) + ' · ' + euro(mien.prix) + ' · ' + num(mien.suiveurs || 0) + ' membres le suivent</div></div>' +
+            '<div style="font-size:13px;color:var(--color-graphite)">' + badge(mien.statut) + ' · ' + euro(mien.prix) + ' net · ' + num(mien.suiveurs || 0) + ' membres le suivent</div></div>' +
             '<span style="font-family:var(--font-serif)">Gérer →</span>' +
           '</a>'
         : '<div class="ed-panel" style="margin-bottom:32px;background:var(--color-button-ink);color:#fff;border:0">' +
@@ -752,7 +763,8 @@
         '<div style="display:flex;flex-direction:column;gap:18px">' +
           '<div class="ed-panel">' +
             '<div class="ed-price-big">' + euro(b.prix) + '</div>' +
-            '<div class="ed-kicker" style="margin-top:4px">' + euro(prixM2(b)) + ' / m²</div>' +
+            '<div class="ed-kicker" style="margin-top:4px">' + (b.honoraires ? 'Honoraires inclus · ' : '') + euro(prixM2(b)) + ' / m²</div>' +
+            mentionHai(b) +
             '<div class="se-divider"></div>' +
             '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">' +
               edStat('Surface', num(b.surface) + ' m²') + edStat('Pièces', b.pieces) +
@@ -816,7 +828,7 @@
           '<div class="ed-panel" style="margin-top:18px">' +
             '<span class="ed-kicker">Estimation</span>' +
             '<div class="ed-price-big" style="font-size:26px;margin-top:6px">' + (b.prix ? euro(b.prix) : '—') + '</div>' +
-            '<div class="se-hint">Prix de présentation actuel</div>' +
+            '<div class="se-hint">Votre prix net vendeur</div>' + ligneHaiProprio(b) +
           '</div>' +
         '</div>' +
         '<div style="display:flex;flex-direction:column;gap:18px">' +
@@ -836,7 +848,7 @@
             '<h3>Mon annonce</h3>' +
             '<div class="se-form-grid" style="margin-top:12px">' +
               '<div class="se-field full"><label>Titre de l’annonce</label><input class="se-input" name="titre" value="' + esc(b.titre || '') + '"/></div>' +
-              '<div class="se-field full"><label>Prix (€)</label><input class="se-input" name="prix" type="number" value="' + esc(b.prix || '') + '"/></div>' +
+              '<div class="se-field full"><label>Prix net vendeur (€)</label><input class="se-input" name="prix" type="number" value="' + esc(b.prix || '') + '"/></div>' +
               '<div class="se-field full"><label>Description</label><textarea class="se-textarea" name="description" style="min-height:110px">' + esc(b.description || '') + '</textarea></div>' +
             '</div>' +
             '<button class="se-btn block" type="submit" style="margin-top:14px">Demander une modification</button>' +
@@ -857,7 +869,7 @@
       '<form class="ed-panel" data-form="mon-recherche">' +
         '<h3>Budget & surface</h3>' +
         '<div class="se-form-grid" style="margin-top:12px">' +
-          '<div class="se-field"><label>Budget max (€)</label><input class="se-input" name="prixMax" type="number" value="' + esc(rec.prixMax || '') + '"/></div>' +
+          '<div class="se-field"><label>Budget max, honoraires inclus (€)</label><input class="se-input" name="prixMax" type="number" value="' + esc(rec.prixMax || '') + '"/></div>' +
           '<div class="se-field"><label>Pièces minimum</label><input class="se-input" name="piecesMin" type="number" value="' + esc(rec.piecesMin || '') + '"/></div>' +
           '<div class="se-field"><label>Surface min (m²)</label><input class="se-input" name="surfaceMin" type="number" value="' + esc(rec.surfaceMin || '') + '"/></div>' +
           '<div class="se-field"><label>Surface max (m²)</label><input class="se-input" name="surfaceMax" type="number" value="' + esc(rec.surfaceMax || '') + '"/></div>' +
@@ -903,7 +915,7 @@
       '<form data-form="modification">' +
         '<div class="se-field"><label>Ce que vous voulez modifier</label>' +
         '<select class="se-select" name="type"><option>Prix</option><option>Description</option><option>Photos</option><option>Statut (visite possible)</option><option>Autre</option></select></div>' +
-        '<div class="se-field" style="margin-top:12px"><label>Nouveau prix (€) — si changement de prix</label><input class="se-input" name="prix" type="number" min="0" placeholder="Optionnel"/></div>' +
+        '<div class="se-field" style="margin-top:12px"><label>Nouveau prix net vendeur (€) — si changement de prix</label><input class="se-input" name="prix" type="number" min="0" placeholder="Optionnel"/></div>' +
         '<div class="se-field" style="margin-top:12px"><label>Détail</label><textarea class="se-textarea" name="message" style="min-height:90px" placeholder="Décrivez la modification souhaitée…"></textarea></div>' +
         '<div class="se-modal-foot"><button class="se-btn ghost" type="button" data-act="modal-close">Annuler</button><button class="se-btn" type="submit">Envoyer à mon agent</button></div>' +
       '</form>';
@@ -1129,7 +1141,7 @@
           '<div style="flex:1;min-width:0">' +
             '<div class="se-row" style="gap:8px">' + badge(mien.statut) + '<span class="se-hint">' + esc(mien.label) + '</span></div>' +
             '<div style="font-family:var(--font-serif);font-size:18px;margin-top:4px">' + esc(mien.titre) + '</div>' +
-            '<div class="se-hint">' + euro(mien.prix) + ' · ' + num(mien.surface) + ' m² · ' + mien.suiveurs + ' membres le suivent</div>' +
+            '<div class="se-hint">' + euro(mien.prix) + ' net · ' + num(mien.surface) + ' m² · ' + mien.suiveurs + ' membres le suivent</div>' +
           '</div>' +
           '<a class="se-btn ghost sm" href="#/mon-bien">Gérer</a>' +
         '</div>'
@@ -1236,7 +1248,7 @@
               '<div class="se-chips" style="margin-top:14px">' + mien.atouts.map((a) => '<span class="se-chip" style="cursor:default">' + esc(a) + '</span>').join('') + '</div>' +
               '<div class="se-divider"></div>' +
               '<div class="se-grid cols-4" style="gap:12px">' +
-                stat('Prix', euro(mien.prix)) + stat('€/m²', euro(prixM2(mien))) +
+                stat('Prix net vendeur', euro(mien.prix)) + stat('Affiché HAI', mien.prixHai ? euro(mien.prixHai) : '—') +
                 stat('Surface', num(mien.surface) + ' m²') + stat('DPE', mien.dpe) +
               '</div>' +
             '</div>' +
@@ -1322,9 +1334,9 @@
         '<div class="se-grid" style="gap:18px">' +
           '<div class="se-card">' +
             '<h3>Prix</h3>' +
-            '<div class="se-field" style="margin-top:10px"><label>Prix de présentation</label><input class="se-input" name="prix" type="number" min="0" value="' + esc(v.prix) + '" data-live="prix"/></div>' +
-            '<p class="se-hint" id="prix-conseil">Le conseil s’affiche ici.</p>' +
-            '<div class="se-hint">Sans mandat, sans commission : vous restez libre.</div>' +
+            '<div class="se-field" style="margin-top:10px"><label>Prix net vendeur</label><input class="se-input" name="prix" type="number" min="0" value="' + esc(v.prix) + '" data-live="prix"/></div>' +
+            '<p class="se-hint" id="prix-conseil">Le conseil s’affiche ici.</p>' + ligneHaiProprio(v) +
+            '<div class="se-hint">Sans mandat de vente, sans commission pour vous : les honoraires sont à la charge de l’acquéreur.</div>' +
           '</div>' +
           '<div class="se-card">' +
             '<h3>Photos</h3>' +
@@ -1430,7 +1442,7 @@
         '<div class="se-grid" style="gap:18px">' +
           '<div class="se-card">' +
             '<div class="se-stat"><span class="se-kicker">Prix</span><span class="se-num" style="font-size:34px">' + euro(b.prix) + '</span>' +
-            '<span class="se-sub">' + euro(prixM2(b)) + ' / m²</span></div>' +
+            '<span class="se-sub">' + (b.honoraires ? 'Honoraires inclus · ' : '') + euro(prixM2(b)) + ' / m²</span></div>' + mentionHai(b) +
             '<div class="se-divider"></div>' +
             '<div class="se-grid cols-2" style="gap:14px">' +
               stat('Surface', num(b.surface) + ' m²') + stat('Pièces', b.pieces) +
