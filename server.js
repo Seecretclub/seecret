@@ -2064,7 +2064,11 @@ const AGENCE_DEFAUT = {
   forme: 'SAS au capital de 1 000 €',
   siren: '921 577 938',
   adresse: '18 rue Henri Say, 92600 Asnières-sur-Seine',
-  representant: 'Gabriel Taieb, président'
+  representant: 'Gabriel Taieb, président',
+  // Carte professionnelle (CCI France), « Transaction sur immeubles et fonds de commerce »
+  carteT: 'CPI 9201 2023 000 000 081, délivrée par la CCI Paris Île-de-France',
+  garantie: 'aucune, l’agence ne détenant aucun fonds, effet ou valeur pour le compte de ses clients (non-détention de fonds)',
+  rcp: 'MMA IARD, 160 rue Henri Champion, 72030 Le Mans Cedex 9, contrat MMA PRO-PME n° 148 348 540'
 };
 function agence() {
   return {
@@ -2072,9 +2076,9 @@ function agence() {
     forme: String(process.env.AGENCE_FORME || AGENCE_DEFAUT.forme).trim(),
     siren: String(process.env.AGENCE_SIREN || AGENCE_DEFAUT.siren).trim(),
     adresse: String(process.env.AGENCE_ADRESSE || AGENCE_DEFAUT.adresse).trim(),
-    carteT: String(process.env.AGENCE_CARTE_T || '').trim(),
-    garantie: String(process.env.AGENCE_GARANTIE || '').trim(),
-    rcp: String(process.env.AGENCE_RCP || '').trim(),
+    carteT: String(process.env.AGENCE_CARTE_T || AGENCE_DEFAUT.carteT).trim(),
+    garantie: String(process.env.AGENCE_GARANTIE || AGENCE_DEFAUT.garantie).trim(),
+    rcp: String(process.env.AGENCE_RCP || AGENCE_DEFAUT.rcp).trim(),
     representant: String(process.env.AGENCE_REPRESENTANT || AGENCE_DEFAUT.representant).trim(),
     mediateur: String(process.env.AGENCE_MEDIATEUR || '').trim(),
     tauxAcquereur: Number(process.env.AGENCE_TAUX_ACQUEREUR || 5),
