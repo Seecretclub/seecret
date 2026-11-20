@@ -858,7 +858,8 @@ function ficheProduitHtml(bien) {
   const photo = (p) => (/^(data:|https?:|\/)/.test(p) ? p : '/assets/img/' + p);
   const photos = (bien.photos || []).slice(0, 8);
   const rows = [
-    ['Prix', bien.prix ? bien.prix.toLocaleString('fr-FR') + ' €' : '—'],
+    ['Prix honoraires inclus', bien.prix ? prixHai(bien.prix, tauxHonorairesPour(bien, null)).toLocaleString('fr-FR') + ' €' : '—'],
+    ['Honoraires', bien.prix ? String(tauxHonorairesPour(bien, null)).replace('.', ',') + ' % TTC à la charge de l’acquéreur' : '—'],
     ['Surface', bien.surface ? bien.surface + ' m²' : '—'],
     ['Pièces', bien.pieces || '—'],
     ['Chambres', bien.chambres || '—'],
@@ -902,7 +903,8 @@ function emailBienPreview(bien, nom, message) {
     '<div style="font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:#3b2b4a;font-weight:600;">Seecret</div>',
     '<h1 style="font-family:Georgia,\'Times New Roman\',serif;font-weight:400;font-size:28px;line-height:1.12;color:#141210;margin:16px 0 0;">' + (bien.titre || 'Un bien') + '</h1>',
     '<p style="font-size:16px;line-height:1.6;color:#5f5a54;margin:12px 0 0;">' + hello + '</p>',
-    '<p style="font-size:16px;line-height:1.6;color:#5f5a54;margin:6px 0 0;">' + (bien.prix ? bien.prix.toLocaleString('fr-FR') + ' €' : '') + (bien.surface ? ' · ' + bien.surface + ' m²' : '') + (bien.quartier ? ' · ' + bien.quartier : '') + '</p>',
+    '<p style="font-size:16px;line-height:1.6;color:#5f5a54;margin:6px 0 0;">' + (bien.prix ? prixHai(bien.prix, tauxHonorairesPour(bien, null)).toLocaleString('fr-FR') + ' € honoraires inclus' : '') + (bien.surface ? ' · ' + bien.surface + ' m²' : '') + (bien.quartier ? ' · ' + bien.quartier : '') + '</p>' +
+    (bien.prix ? '<p style="font-size:12px;line-height:1.5;color:#5f5a54;margin:4px 0 0;">' + mentionHonoraires(tauxHonorairesPour(bien, null)) + '</p>' : ''),
     (bien.description ? '<p style="font-size:15px;line-height:1.6;color:#5f5a54;margin:14px 0 0;">' + bien.description + '</p>' : ''),
     '</td></tr>',
     '</table>',
@@ -1431,8 +1433,63 @@ QUARTIERS_LABELS.neuilly = 'Neuilly-sur-Seine';
 QUARTIERS_LABELS.vincennes = 'Vincennes';
 function labelQuartier(q) { return QUARTIERS_LABELS[q] || ''; }
 
+// ---- Prix net vendeur / prix honoraires inclus (HAI) ----
+// bien.prix est TOUJOURS le prix net vendeur (ce que le propriétaire touche).
+// Le prix HAI est calculé ici, côté serveur, au moment de répondre : le
+// propriétaire et le CRM voient le net, les autres membres ne reçoivent que le
+// HAI (le net ne sort jamais dans /api/catalogue). Honoraires à la charge de
+// l'acquéreur, calculés sur le net vendeur (cf. assiette du mandat de recherche).
+function pasArrondiHai() {
+  const n = Number(process.env.AGENCE_ARRONDI_HAI || 1);
+  return n > 0 ? n : 1;
+}
+function tauxValide(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(String(v).replace(',', '.'));
+  return isNaN(n) || n < 0 || n > 20 ? null : Math.round(n * 100) / 100;
+}
+// Taux applicable à un acquéreur donné : taux propre au bien s'il a été fixé
+// dans le CRM, sinon le barème de l'agence ; un profil « Acquéreur et Vendeur »
+// (mixte) bénéficie du taux réduit (jamais plus que le taux du bien).
+function tauxHonorairesPour(bien, lead) {
+  const a = agence();
+  const propre = tauxValide(bien && bien.tauxHonoraires);
+  const base = propre != null ? propre : a.tauxAcquereur;
+  return lead && lead.projet === 'mixte' ? Math.min(base, a.tauxMixte) : base;
+}
+function prixHai(net, taux) {
+  const n = Number(net) || 0;
+  if (!n) return 0;
+  const pas = pasArrondiHai();
+  return Math.round((n * (1 + (Number(taux) || 0) / 100)) / pas) * pas;
+}
+function mentionHonoraires(taux) {
+  return 'Honoraires inclus : dont ' + String(taux).replace('.', ',') + ' % TTC à la charge de l’acquéreur, calculés sur le prix net vendeur.';
+}
+// Toute modification du prix net laisse une trace (date, ancien, nouveau, auteur).
+function changerPrixNet(bien, nouveau, auteur, source) {
+  const n = Math.max(0, Math.round(Number(nouveau) || 0));
+  const avant = Number(bien.prix) || 0;
+  if (n === avant) return false;
+  bien.prix = n;
+  bien.historiquePrix = (Array.isArray(bien.historiquePrix) ? bien.historiquePrix : []).concat([
+    { at: nowISO(), ancien: avant, nouveau: n, auteur: auteur || '', source: source || '' }
+  ]).slice(-50);
+  return true;
+}
+// Champs prix ajoutés aux biens renvoyés au CRM (vue agent : net + HAI standard).
+function prixPourCrm(b) {
+  const taux = tauxHonorairesPour(b, null);
+  return Object.assign({}, b, {
+    prixNet: b.prix || 0, tauxHonoraires: tauxValide(b.tauxHonoraires), tauxApplique: taux,
+    tauxMixte: Math.min(taux, agence().tauxMixte), prixHai: prixHai(b.prix, taux),
+    prixHaiMixte: prixHai(b.prix, Math.min(taux, agence().tauxMixte))
+  });
+}
+
 function bienPublic(b) {
   const c = completionBien(b);
+  const tauxStd = tauxHonorairesPour(b, null);
   return {
     id: b.id, titre: b.titre || '', adresse: b.adresse || '', codePostal: b.codePostal || '', ville: b.ville || '',
     type: b.type || 'Appartement', quartier: b.quartier || '', label: labelQuartier(b.quartier), transaction: b.transaction || 'Vente',
@@ -1441,6 +1498,8 @@ function bienPublic(b) {
     dpe: b.dpe || '', ges: b.ges || '', etat: b.etat || '',
     exterieur: b.exterieur || '', surfaceExterieur: b.surfaceExterieur || 0,
     annexes: Array.isArray(b.annexes) ? b.annexes : [], prix: b.prix || 0, charges: b.charges || 0,
+    prixNet: b.prix || 0, prixHai: prixHai(b.prix, tauxStd), tauxHonoraires: tauxStd,
+    historiquePrix: Array.isArray(b.historiquePrix) ? b.historiquePrix : [],
     description: b.description || '', photos: b.photos || [], statut: b.statut || 'brouillon',
     statutDemande: b.statutDemande || null, cree: b.cree || null,
     completion: c.pct, complet: c.complet,
@@ -1453,12 +1512,22 @@ function bienPublic(b) {
 // Version catalogue d'un bien, vue par les AUTRES membres : ni adresse exacte
 // ni coordonnées GPS. L'adresse n'est communiquée qu'à la confirmation d'une
 // visite (mandat signé + validation de l'agent), par email et WhatsApp.
-function bienCatalogue(b) {
+// Le prix renvoyé est le prix HAI calculé pour CE membre (taux réduit s'il est
+// aussi vendeur) ; le net vendeur et son historique sont retirés.
+function bienCatalogue(b, lead) {
   const p = bienPublic(b);
   delete p.adresse;
   delete p.lat;
   delete p.lon;
   p.adresseMasquee = true;
+  const taux = tauxHonorairesPour(b, lead);
+  p.prix = prixHai(b.prix, taux);
+  p.honoraires = { taux: taux, charge: 'acquereur', mention: mentionHonoraires(taux) };
+  if (process.env.AGENCE_AFFICHER_PRIX_NET === '1') p.honoraires.prixHorsHonoraires = b.prix || 0;
+  delete p.prixNet;
+  delete p.prixHai;
+  delete p.tauxHonoraires;
+  delete p.historiquePrix;
   return p;
 }
 
@@ -1492,7 +1561,7 @@ app.get('/api/catalogue', requireAuth, (req, res) => {
     (b.statut === 'avant-premiere' || b.statut === 'ouvert') &&
     (!monBien || b.id !== monBien.id)
   );
-  res.json({ ok: true, biens: biens.map(bienCatalogue) });
+  res.json({ ok: true, biens: biens.map((b) => bienCatalogue(b, req.lead)) });
 });
 
 app.patch('/api/mon-bien', requireAuth, (req, res) => {
@@ -1506,8 +1575,9 @@ app.patch('/api/mon-bien', requireAuth, (req, res) => {
   }
   ['titre', 'description', 'adresse', 'codePostal', 'ville', 'type', 'quartier', 'transaction', 'etage', 'dpe', 'ges', 'etat', 'exterieur']
     .forEach((k) => { if (typeof body[k] === 'string') b[k] = body[k].slice(0, 400); });
-  ['surface', 'pieces', 'chambres', 'sdb', 'prix', 'surfaceExterieur', 'anneeConstruction', 'charges']
+  ['surface', 'pieces', 'chambres', 'sdb', 'surfaceExterieur', 'anneeConstruction', 'charges']
     .forEach((k) => { if (body[k] !== undefined) b[k] = Math.max(0, Number(body[k]) || 0); });
+  if (body.prix !== undefined) changerPrixNet(b, body.prix, nomComplet(req.lead), 'propriétaire');
   if (typeof body.ascenseur === 'boolean') b.ascenseur = body.ascenseur;
   if (Array.isArray(body.annexes)) b.annexes = body.annexes.map(String).slice(0, 20);
   // Avant ce correctif, un membre pouvait aussi passer directement à "ouvert"
@@ -1750,7 +1820,7 @@ app.get('/api/market-search', requireAdmin, async (req, res) => {
 // ---- CRM ----
 app.get('/api/biens', requireAdmin, (req, res) => {
   const db = readDb();
-  res.json({ ok: true, biens: db.biens });
+  res.json({ ok: true, biens: db.biens.map(prixPourCrm) });
 });
 
 app.patch('/api/biens/:id/valider', requireAdmin, (req, res) => {
@@ -1841,6 +1911,8 @@ app.post('/api/biens', requireAdmin, (req, res) => {
     exterieur: String(body.exterieur || ''), surfaceExterieur: Math.max(0, Number(body.surfaceExterieur) || 0),
     annexes: Array.isArray(body.annexes) ? body.annexes.map(String) : [],
     prix: Math.max(0, Number(body.prix) || 0), charges: Math.max(0, Number(body.charges) || 0),
+    tauxHonoraires: tauxValide(body.tauxHonoraires),
+    historiquePrix: Number(body.prix) > 0 ? [{ at: nowISO(), ancien: 0, nouveau: Math.max(0, Number(body.prix) || 0), auteur: nomComplet(req.lead) || 'Agent', source: 'création' }] : [],
     description: String(body.description || ''),
     photos: Array.isArray(body.photos) ? body.photos.map(String).slice(0, 12) : [],
     atouts: Array.isArray(body.atouts) ? body.atouts.map(String) : [],
@@ -1851,7 +1923,7 @@ app.post('/api/biens', requireAdmin, (req, res) => {
   db.biens.push(bien);
   if (lead) logActivite(db, { leadId: lead.id, bienId: bien.id, type: 'bien_cree', auteur: nomComplet(req.lead) || 'Agent' });
   writeDb(db);
-  res.json({ ok: true, bien: bien });
+  res.json({ ok: true, bien: prixPourCrm(bien) });
 });
 
 app.patch('/api/biens/:id', requireAdmin, (req, res) => {
@@ -1866,7 +1938,9 @@ app.patch('/api/biens/:id', requireAdmin, (req, res) => {
     const n = Number(body.etage);
     bien.etage = (body.etage === null || body.etage === '' || isNaN(n)) ? null : n;
   }
-  ['surface', 'pieces', 'chambres', 'sdb', 'prix', 'charges', 'surfaceExterieur'].forEach((k) => { if (body[k] !== undefined) bien[k] = Math.max(0, Number(body[k]) || 0); });
+  ['surface', 'pieces', 'chambres', 'sdb', 'charges', 'surfaceExterieur'].forEach((k) => { if (body[k] !== undefined) bien[k] = Math.max(0, Number(body[k]) || 0); });
+  if (body.prix !== undefined) changerPrixNet(bien, body.prix, nomComplet(req.lead) || 'Agent', 'CRM');
+  if (body.tauxHonoraires !== undefined) bien.tauxHonoraires = tauxValide(body.tauxHonoraires);
   if (Array.isArray(body.annexes)) bien.annexes = body.annexes.map(String);
   if (Array.isArray(body.atouts)) bien.atouts = body.atouts.map(String);
   if (Array.isArray(body.photos)) bien.photos = body.photos.map(String).slice(0, 12);
@@ -1876,7 +1950,7 @@ app.patch('/api/biens/:id', requireAdmin, (req, res) => {
     bien.etapeProposition = body.etapeProposition || null;
   }
   writeDb(db);
-  res.json({ ok: true, bien: bien });
+  res.json({ ok: true, bien: prixPourCrm(bien) });
 });
 
 // Avant ce correctif, une recherche nouvellement créée dans le CRM ne
@@ -1977,7 +2051,7 @@ app.post('/api/biens/:id/envoi', requireAdmin, async (req, res) => {
       await mailer.sendMail({
         from: '"Bonjour Seecret" <' + FROM_EMAIL + '>',
         to: email,
-        subject: (bien.titre || 'Un bien') + ' — ' + (bien.prix ? bien.prix.toLocaleString('fr-FR') + ' €' : ''),
+        subject: (bien.titre || 'Un bien') + ' — ' + (bien.prix ? prixHai(bien.prix, tauxHonorairesPour(bien, null)).toLocaleString('fr-FR') + ' € HAI' : ''),
         html: emailBienPreview(bien, nom, message) + '<p style="font-size:13px;color:#5f5a54;margin:18px 0 0;">Téléchargez la fiche confidentielle complète : <a href="' + originOf(req) + '/api/biens/' + bien.id + '/pdf?t=' + jetonFiche(bien.id) + '" style="color:#3b2b4a;">voir la fiche (PDF)</a></p>'
       });
       emailEnvoye = true;
@@ -2336,7 +2410,7 @@ app.get('/api/mandats', requireAdmin, (req, res) => {
 // Informations réglementées affichées dans les mentions légales (publiques).
 app.get('/api/agence', (req, res) => {
   const a = agence();
-  res.json({ raisonSociale: a.raisonSociale, siren: a.siren, adresse: a.adresse, carteT: a.carteT, garantie: a.garantie, rcp: a.rcp, mediateur: a.mediateur });
+  res.json({ raisonSociale: a.raisonSociale, siren: a.siren, adresse: a.adresse, carteT: a.carteT, garantie: a.garantie, rcp: a.rcp, mediateur: a.mediateur, tauxAcquereur: a.tauxAcquereur, tauxMixte: a.tauxMixte, arrondiHai: pasArrondiHai() });
 });
 
 // Créneaux proposés par le membre : jusqu'à 3, au format « AAAA-MM-JJTHH:MM ».
@@ -2399,11 +2473,19 @@ app.post('/api/offres', requireAuth, (req, res) => {
     return res.status(409).json({ error: 'Ce bien est en avant-première : le propriétaire n’a pas encore ouvert les visites, donc pas encore les offres. Suivez-le pour être informé dès que ce sera possible.' });
   }
   const bienAdresse = bien ? (bien.adresse || bien.titre || '') : '';
-  const offre = { id: uid('o'), bienId: bienId, leadId: req.lead.id, email: req.lead.email, nom: nomComplet(req.lead), montant: montant, message: message, statut: 'en_attente', cree: nowISO() };
+  // L'acquéreur fait son offre sur le prix affiché (honoraires inclus) : on
+  // garde le taux appliqué et l'équivalent net vendeur pour le propriétaire.
+  const tauxOffre = tauxHonorairesPour(bien, req.lead);
+  const offre = {
+    id: uid('o'), bienId: bienId, leadId: req.lead.id, email: req.lead.email, nom: nomComplet(req.lead),
+    montant: montant, tauxHonoraires: tauxOffre, prixAffiche: prixHai(bien.prix, tauxOffre),
+    montantNet: Math.round(montant / (1 + tauxOffre / 100)),
+    message: message, statut: 'en_attente', cree: nowISO()
+  };
   req.db.offres.unshift(offre);
   const demande = {
     id: uid('d'), type: 'offre', leadId: req.lead.id, bienId: bienId, email: req.lead.email,
-    nom: nomComplet(req.lead), message: 'Montant : ' + montant.toLocaleString('fr-FR') + ' €' + (bienAdresse ? ' · ' + bienAdresse : '') + (message ? ' — ' + message : ''),
+    nom: nomComplet(req.lead), message: 'Montant : ' + montant.toLocaleString('fr-FR') + ' € HAI (soit ' + offre.montantNet.toLocaleString('fr-FR') + ' € net vendeur)' + (bienAdresse ? ' · ' + bienAdresse : '') + (message ? ' — ' + message : ''),
     montant: montant, offreId: offre.id, bienAdresse: bienAdresse, role: 'offre', statut: 'nouvelle', source: 'Espace membre', cree: nowISO()
   };
   req.db.demandes.unshift(demande);
@@ -4384,7 +4466,7 @@ app.post('/api/demandes/:id/decision', requireAdmin, async (req, res) => {
     if (d.bienId) {
       const b = db.biens.find((x) => x.id === d.bienId);
       if (b) {
-        if (d.prix) b.prix = d.prix;
+        if (d.prix) changerPrixNet(b, d.prix, d.nom || 'Propriétaire', 'demande de modification validée');
         if (d.titre) b.titre = d.titre;
         if (d.description) b.description = d.description;
       }

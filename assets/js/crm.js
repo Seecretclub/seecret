@@ -314,6 +314,29 @@
   const recherche = (id) => state.recherches.find((r) => r.id === id) || (state.recherchesServeur || []).find((r) => r.id === id) || null;
   const nomClient = (c) => (c ? (c.prenom + ' ' + c.nom).trim() : '—');
   const prixM2 = (b) => (b.surface ? Math.round(b.prix / b.surface) : 0);
+  // ---- Prix net vendeur / HAI ----
+  // b.prix = prix NET vendeur. Le prix honoraires inclus (HAI) dépend de
+  // l'acquéreur : taux du bien (ou barème agence), taux réduit pour un profil
+  // « Acquéreur et Vendeur ». Barème chargé depuis /api/agence (même calcul
+  // que le serveur, qui reste la source de vérité pour le catalogue membre).
+  const BAREME = { acq: 5, mixte: 3, pas: 1 };
+  const tauxTxt = (t) => String(t).replace('.', ',');
+  function estMixte(c) {
+    if (!c) return false;
+    if (c.type === 'mixte' || c.projet === 'mixte') return true;
+    const cl = c.clientId ? client(c.clientId) : null;
+    return !!(cl && cl.type === 'mixte');
+  }
+  function tauxPour(b, c) {
+    const propre = (b && b.tauxHonoraires !== null && b.tauxHonoraires !== undefined && b.tauxHonoraires !== '') ? Number(b.tauxHonoraires) : null;
+    const base = propre != null && !isNaN(propre) ? propre : BAREME.acq;
+    return estMixte(c) ? Math.min(base, BAREME.mixte) : base;
+  }
+  function haiPour(b, c) {
+    const n = Number(b && b.prix) || 0;
+    if (!n) return 0;
+    return Math.round((n * (1 + tauxPour(b, c) / 100)) / BAREME.pas) * BAREME.pas;
+  }
   const mandatsActifs = () => state.biens.filter((b) => b.statut !== 'brouillon' && b.statut !== 'vendu');
   const valeurPortefeuille = () => mandatsActifs().reduce((n, b) => n + b.prix, 0);
   const demandesNouvelles = () => state.demandes.filter((d) => d.statut === 'nouvelle').length;
@@ -373,8 +396,10 @@
     // Secteur 25%
     if (c.quartiers && c.quartiers.length) { if (c.quartiers.indexOf(b.quartier) > -1) s += 25; }
     // Budget 25%
+    // Le budget de l'acquéreur s'entend honoraires inclus : on le compare au HAI.
     const max = c.prixMax || c.budgetMax;
-    if (max) { if (b.prix <= max * 1.05) s += 25; else if (b.prix <= max * 1.2) s += 12; }
+    const hai = haiPour(b, c);
+    if (max) { if (hai <= max * 1.05) s += 25; else if (hai <= max * 1.2) s += 12; }
     // Surface 15%
     if (c.surfaceMin) { if (b.surface >= c.surfaceMin) s += 15; else if (b.surface >= c.surfaceMin * 0.9) s += 7; }
     // Pièces 15%
@@ -400,7 +425,7 @@
 
   function correspond(b, c) {
     const max = c.prixMax || c.budgetMax;
-    if (max && b.prix > max * 1.2) return false;
+    if (max && haiPour(b, c) > max * 1.2) return false;
     if (c.surfaceMax && b.surface > c.surfaceMax * 1.1) return false;
     if (c.surfaceMin && b.surface < c.surfaceMin * 0.9) return false;
     if (b.quartier && c.quartiers && c.quartiers.length && c.quartiers.indexOf(b.quartier) === -1) return false;
@@ -1012,6 +1037,15 @@
         }
       });
 
+      try {
+        const rag = await fetch('/api/agence', { headers: { accept: 'application/json' } });
+        if (rag.ok) {
+          const ag = await rag.json();
+          if (ag.tauxAcquereur >= 0) BAREME.acq = Number(ag.tauxAcquereur);
+          if (ag.tauxMixte >= 0) BAREME.mixte = Number(ag.tauxMixte);
+          if (ag.arrondiHai > 0) BAREME.pas = Number(ag.arrondiHai);
+        }
+      } catch (e) { /* barème par défaut */ }
       state.biensServeur = rb.ok ? ((await rb.json()).biens || []).map(mapBienServeur) : [];
       state.recherchesServeur = rr.ok ? ((await rr.json()).recherches || []).map(mapRechercheServeur) : [];
 
@@ -1025,7 +1059,8 @@
         const b = state.biensServeur.find((x) => x.serverId === o.bienId);
         const fresh = {
           id: id, serverId: o.id, serveur: true, clientId: c ? c.id : null, bienId: b ? b.id : o.bienId,
-          montant: o.montant || 0, contre: o.contre || 0, message: o.message || '', statut: o.statut || 'en_attente', cree: o.cree || nowISO()
+          montant: o.montant || 0, contre: o.contre || 0, message: o.message || '', statut: o.statut || 'en_attente', cree: o.cree || nowISO(),
+          prixAffiche: o.prixAffiche || 0, montantNet: o.montantNet || 0, tauxHonoraires: o.tauxHonoraires != null ? o.tauxHonoraires : null
         };
         const existing = state.offres.find((x) => x.id === id);
         if (existing) Object.assign(existing, fresh); else state.offres.unshift(fresh);
@@ -1352,6 +1387,8 @@
       type: b.type || 'Appartement', quartier: b.quartier || '',
       surface: b.surface || 0, pieces: b.pieces || 0, chambres: b.chambres || 0, sdb: b.sdb || 0,
       etage: etageSaisie(b.etage), dpe: b.dpe || '', ges: b.ges || '', etat: b.etat || '', anneeConstruction: b.anneeConstruction || null, prix: b.prix || 0, charges: b.charges || 0,
+      tauxHonoraires: (b.tauxHonoraires === null || b.tauxHonoraires === undefined) ? null : b.tauxHonoraires,
+      historiquePrix: Array.isArray(b.historiquePrix) ? b.historiquePrix : [],
       ascenseur: !!b.ascenseur, exterieur: b.exterieur || '', surfaceExterieur: b.surfaceExterieur || 0,
       delai: b.delai || '', dejaEnVente: b.dejaEnVente || '', motif: b.motif || '',
       statut: b.statut || 'brouillon', etapeProposition: b.etapeProposition || '', proprietaireId: lead ? lead.id : null,
@@ -3811,7 +3848,7 @@
       (matches.length ? '<div class="se-grid" style="gap:14px">' + matches.slice(0, 40).map((m) => {
         const c = m.client, b = m.bien;
         const tel = (c.tel || '').replace(/[^0-9]/g, '');
-        const texte = 'Bonjour ' + (c.prenom || '') + ', nous avons trouvé un bien qui correspond à votre recherche : ' + (b.titre || '') + ' — ' + euro(b.prix) + (b.adresse ? ' (' + b.adresse + ')' : '') + '. Souhaitez-vous le visiter ?';
+        const texte = 'Bonjour ' + (c.prenom || '') + ', nous avons trouvé un bien qui correspond à votre recherche : ' + (b.titre || '') + ' — ' + euro(haiPour(b, c)) + ' honoraires inclus. Souhaitez-vous le visiter ? L’adresse vous sera communiquée à la confirmation de la visite.';
         const wa = tel ? 'https://wa.me/' + tel + '?text=' + encodeURIComponent(texte) : null;
         const mailto = c.email ? 'mailto:' + c.email + '?subject=' + encodeURIComponent('Un bien pour vous : ' + (b.titre || '')) + '&body=' + encodeURIComponent(texte) : null;
         return '<div class="se-card">' +
@@ -3820,7 +3857,7 @@
             scoreTag(m.score) +
           '</div>' +
           '<div style="margin-top:10px"><div style="font-weight:500">' + esc(b.titre || 'Bien') + '</div>' +
-          '<div class="se-hint">' + esc(b.adresse || b.ref || '') + ' · ' + euro(b.prix) + ' · ' + (b.surface || 0) + ' m² · ' + (b.pieces || 0) + ' p.</div></div>' +
+          '<div class="se-hint">' + esc(b.adresse || b.ref || '') + ' · ' + euro(b.prix) + ' net · ' + euro(haiPour(b, c)) + ' HAI · ' + (b.surface || 0) + ' m² · ' + (b.pieces || 0) + ' p.</div></div>' +
           '<div class="se-row" style="gap:8px;margin-top:12px">' +
             '<a class="se-btn ghost sm" href="#/bien/' + b.id + '">Voir le bien</a>' +
             (wa ? '<a class="se-btn soft sm" href="' + wa + '" target="_blank" rel="noopener">Proposer (WhatsApp)</a>' : '') +
@@ -4427,7 +4464,7 @@
     return '<div class="se-fiche-head">' +
       '<div style="flex:1"><div class="kicker" style="color:var(--color-taupe)">' + esc(b.ref) + ' · ' + esc(b.type) + ' · ' + esc(qLabel(b.quartier)) + (prop ? ' · <a href="#/client/' + prop.id + '" style="color:var(--color-club-violet);text-decoration:none">Propriétaire : ' + esc(nomClient(prop)) + '</a>' : '') + '</div>' +
       '<h1 class="display" style="font-size:30px;margin:4px 0 2px">' + esc(b.titre) + '</h1>' +
-      '<div class="se-row" style="gap:8px">' + badgeBien(b.statut) + badgeExclusivite(b) + badgeValidation(b) + badgeDemo(b) + '<span class="se-pill"><b>' + euro(b.prix) + '</b></span><span class="se-pill">' + euro(prixM2(b)) + ' /m²</span></div></div>' +
+      '<div class="se-row" style="gap:8px">' + badgeBien(b.statut) + badgeExclusivite(b) + badgeValidation(b) + badgeDemo(b) + '<span class="se-pill" title="Prix net vendeur">Net <b>' + euro(b.prix) + '</b></span><span class="se-pill" title="Prix affiché aux acquéreurs">HAI <b>' + euro(haiPour(b, null)) + '</b> · ' + tauxTxt(tauxPour(b, null)) + ' %</span><span class="se-pill" title="Prix affiché à un profil acquéreur + vendeur">Mixte ' + euro(haiPour(b, { type: 'mixte' })) + '</span><span class="se-pill">' + euro(prixM2(b)) + ' /m² net</span></div></div>' +
       '<div class="se-actions">' +
         '<button class="se-btn ghost" data-act="bien-editer" data-id="' + b.id + '">Modifier</button>' +
         '<button class="se-btn ghost" data-act="bien-statut" data-id="' + b.id + '">Changer le statut</button>' +
@@ -4438,6 +4475,16 @@
         '<div class="se-grid" style="gap:18px">' +
           '<div class="se-card" style="padding:0;overflow:hidden"><div class="se-bien-photo" style="aspect-ratio:16/9">' + (photo(b) ? '<img src="' + photo(b) + '" alt=""/>' : '') + '</div>' +
             '<div class="se-photos" style="padding:12px">' + (b.photos || []).map((p) => '<div class="se-photo"><img src="' + (/^(data:|https?:|\/)/.test(p) ? p : 'assets/img/' + p) + '" alt=""/></div>').join('') + '</div></div>' +
+          '<div class="se-card"><h3>Prix et honoraires</h3><div class="se-kv" style="margin-top:10px">' +
+            kv('Prix net vendeur', euro(b.prix)) +
+            kv('Honoraires acquéreur', tauxTxt(tauxPour(b, null)) + ' % TTC' + ((b.tauxHonoraires === null || b.tauxHonoraires === undefined || b.tauxHonoraires === '') ? ' (barème)' : ' (propre au bien)')) +
+            kv('Prix affiché (HAI)', euro(haiPour(b, null))) +
+            kv('Prix affiché profil mixte', euro(haiPour(b, { type: 'mixte' })) + ' · ' + tauxTxt(tauxPour(b, { type: 'mixte' })) + ' %') +
+          '</div>' +
+          ((b.historiquePrix || []).length
+            ? '<div class="se-list" style="margin-top:12px">' + b.historiquePrix.slice().reverse().map((h) => '<div class="se-list-item"><div style="flex:1;min-width:0"><div style="font-size:13.5px">' + (h.ancien ? euro(h.ancien) + ' → ' : '') + '<b>' + euro(h.nouveau) + '</b> net</div><div class="se-hint">' + dFR(h.at) + (h.auteur ? ' · ' + esc(h.auteur) : '') + (h.source ? ' · ' + esc(h.source) : '') + '</div></div></div>').join('') + '</div>'
+            : '<p class="se-hint" style="margin-top:10px">Aucun changement de prix enregistré.</p>') +
+          '</div>' +
           '<div class="se-card"><h3>Descriptif</h3><p style="color:var(--color-graphite);font-size:14.5px;line-height:1.65;margin:10px 0 0">' + esc(b.description) + '</p>' +
             '<div class="se-chips" style="margin-top:14px">' + (b.atouts || []).map((a) => '<span class="se-chip" style="cursor:default">' + esc(a) + '</span>').join('') + '</div></div>' +
           '<div class="se-card"><h3>Acquéreurs compatibles</h3>' +
@@ -4638,9 +4685,13 @@
       list.map((o) => {
         const b = bien(o.bienId);
         const c = client(o.clientId);
-        const delta = b ? Math.round(((o.montant - b.prix) / b.prix) * 1000) / 10 : 0;
+        // L'offre est faite sur le prix affiché (HAI) : écart calculé sur ce prix,
+        // avec l'équivalent net vendeur à transmettre au propriétaire.
+        const ref = o.prixAffiche || (b ? haiPour(b, c) : 0);
+        const delta = ref ? Math.round(((o.montant - ref) / ref) * 1000) / 10 : 0;
+        const net = o.montantNet || (b ? Math.round(o.montant / (1 + tauxPour(b, c) / 100)) : 0);
         return '<tr><td><a href="#/bien/' + o.bienId + '" style="color:inherit">' + esc(b ? b.titre : '—') + '</a></td>' +
-          '<td>' + esc(nomClient(c)) + '</td><td><b>' + euro(o.montant) + '</b></td>' +
+          '<td>' + esc(nomClient(c)) + '</td><td><b>' + euro(o.montant) + '</b> <span class="se-hint">HAI</span>' + (net ? '<div class="se-hint">soit ' + euro(net) + ' net vendeur</div>' : '') + '</td>' +
           '<td class="' + (delta < 0 ? '' : '') + '">' + (delta > 0 ? '+' : '') + delta + ' %</td>' +
           '<td class="se-hint">' + dFR(o.cree) + '</td><td>' + statutOffre(o.statut) + '</td>' +
           '<td>' + (o.statut === 'recue' || o.statut === 'en_attente' || o.statut === 'contre'
@@ -5129,7 +5180,7 @@
         ? '<select class="se-select" name="' + name + '">' + o.options.map((x) => '<option value="' + esc(x.value) + '"' + (String(x.value) === String(value) ? ' selected' : '') + '>' + esc(x.label) + '</option>').join('') + '</select>'
         : o.type === 'textarea'
           ? '<textarea class="se-textarea" name="' + name + '" placeholder="' + esc(o.placeholder || '') + '">' + esc(value) + '</textarea>'
-          : '<input class="se-input" name="' + name + '" type="' + (o.type || 'text') + '" value="' + esc(value) + '" placeholder="' + esc(o.placeholder || '') + '"/>') +
+          : '<input class="se-input" name="' + name + '" type="' + (o.type || 'text') + '"' + (o.step ? ' step="' + o.step + '"' : '') + ' value="' + esc(value) + '" placeholder="' + esc(o.placeholder || '') + '"/>') +
       '</div>';
   }
 
@@ -5171,7 +5222,8 @@
         field('Salles de bain', 'sdb', v.sdb, { type: 'number' }) +
         field('Étage', 'etage', v.etage, { type: 'number', placeholder: '0 = RDC' }) + field('DPE', 'dpe', v.dpe, { type: 'select', options: ['A', 'B', 'C', 'D', 'E', 'F', 'G'].map((d) => ({ value: d, label: d })) }) +
         field('Année de construction', 'anneeConstruction', v.anneeConstruction || '', { type: 'number', placeholder: '1975' }) +
-        field('Prix (€)', 'prix', v.prix, { type: 'number' }) +
+        field('Prix net vendeur (€)', 'prix', v.prix, { type: 'number' }) +
+        field('Honoraires acquéreur (%)', 'tauxHonoraires', (v.tauxHonoraires === null || v.tauxHonoraires === undefined) ? '' : v.tauxHonoraires, { type: 'number', step: 'any', placeholder: 'Barème : ' + tauxTxt(BAREME.acq) + ' %' }) +
         field('Description', 'description', v.description, { type: 'textarea', full: true }) +
       '</div><div class="se-modal-foot"><button class="se-btn ghost" type="button" data-act="modal-close">Annuler</button><button class="se-btn" type="submit">' + (b ? 'Enregistrer' : 'Créer le bien') + '</button></div></form>';
   }
@@ -5240,7 +5292,7 @@
     const c = client(clientId);
     const t = tab || 'email';
     const pdf = b ? ('/api/biens/' + (b.serverId || b.id) + '/pdf') : '';
-    const msgDefaut = 'Bonjour ' + (c ? c.prenom : '') + ', voici un bien qui correspond à votre recherche : ' + (b ? b.titre : '') + ' — ' + (b ? euro(b.prix) : '') + (b && b.quartier ? ' (' + (QUARTIERS.find((q) => q.id === b.quartier) || {}).label + ')' : '') + '. Souhaitez-vous le visiter ? L’adresse vous sera communiquée à la confirmation de la visite.';
+    const msgDefaut = 'Bonjour ' + (c ? c.prenom : '') + ', voici un bien qui correspond à votre recherche : ' + (b ? b.titre : '') + ' — ' + (b ? euro(haiPour(b, c)) + ' honoraires inclus' : '') + (b && b.quartier ? ' (' + (QUARTIERS.find((q) => q.id === b.quartier) || {}).label + ')' : '') + '. Souhaitez-vous le visiter ? L’adresse vous sera communiquée à la confirmation de la visite.';
     const msg = state.__previewMsg !== undefined ? state.__previewMsg : msgDefaut;
     const ph = photo(b);
     const photos = (b && b.photos) || [];
@@ -5257,7 +5309,7 @@
           '<div style="font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:#3b2b4a;font-weight:600;">Seecret</div>' +
           '<h2 style="font-family:Georgia,serif;font-weight:400;font-size:26px;color:#141210;margin:14px 0 0;">' + esc(b ? b.titre : '') + '</h2>' +
           '<p style="color:#5f5a54;margin:12px 0 0;line-height:1.6;">' + esc(msg) + '</p>' +
-          (b ? '<div style="margin-top:20px;display:flex;align-items:center;gap:14px;border:1px solid #eeebe6;border-radius:14px;padding:12px;background:#fff">' + (ph ? '<img src="' + ph + '" style="width:72px;height:54px;object-fit:cover;border-radius:8px"/>' : '') + '<div><div style="font-weight:500">' + esc(b.titre) + '</div><div style="color:#5f5a54;font-size:13px">' + euro(b.prix) + (b.surface ? ' · ' + b.surface + ' m²' : '') + '</div></div></div>' : '') +
+          (b ? '<div style="margin-top:20px;display:flex;align-items:center;gap:14px;border:1px solid #eeebe6;border-radius:14px;padding:12px;background:#fff">' + (ph ? '<img src="' + ph + '" style="width:72px;height:54px;object-fit:cover;border-radius:8px"/>' : '') + '<div><div style="font-weight:500">' + esc(b.titre) + '</div><div style="color:#5f5a54;font-size:13px">' + euro(haiPour(b, c)) + ' HAI' + (b.surface ? ' · ' + b.surface + ' m²' : '') + '</div></div></div>' : '') +
           '<div style="margin-top:22px"><span style="display:inline-block;background:#241c2e;color:#fff;padding:13px 28px;border-radius:999px;font-size:14px;">Voir le bien sur Seecret</span></div>' +
         '</div>' +
       '</div>' +
@@ -5268,11 +5320,11 @@
       '<div class="se-wa-head">' + esc(c ? nomClient(c) : 'Client') + '</div>' +
       '<div class="se-wa-chat">' +
         '<div class="se-wa-bubble">' + esc(msg) + '</div>' +
-        (b ? '<div class="se-wa-card">' + (ph ? '<img src="' + ph + '" alt=""/>' : '') + '<div class="se-wa-card-body"><div style="font-weight:600">' + esc(b.titre) + '</div><div>' + euro(b.prix) + (b.surface ? ' · ' + b.surface + ' m²' : '') + '</div><div style="color:#027eb5;margin-top:4px;word-break:break-all">' + esc(pdf) + '</div></div></div>' : '') +
+        (b ? '<div class="se-wa-card">' + (ph ? '<img src="' + ph + '" alt=""/>' : '') + '<div class="se-wa-card-body"><div style="font-weight:600">' + esc(b.titre) + '</div><div>' + euro(haiPour(b, c)) + ' HAI' + (b.surface ? ' · ' + b.surface + ' m²' : '') + '</div><div style="color:#027eb5;margin-top:4px;word-break:break-all">' + esc(pdf) + '</div></div></div>' : '') +
       '</div>' +
     '</div>';
 
-    const pdfRows = [['Prix', b ? euro(b.prix) : '—'], ['Surface', b && b.surface ? b.surface + ' m²' : '—'], ['Pièces', b && b.pieces ? b.pieces : '—'], ['Chambres', b && b.chambres != null ? b.chambres : '—'], ['Salles de bain', b && b.sdb != null ? b.sdb : '—'], ['Étage', b && b.etage != null ? (b.etage === 0 ? 'RDC' : b.etage) : '—'], ['DPE', b && b.dpe ? b.dpe : '—'], ['GES', b && b.ges ? b.ges : '—']];
+    const pdfRows = [['Prix honoraires inclus', b ? euro(haiPour(b, null)) : '—'], ['Honoraires', b ? tauxTxt(tauxPour(b, null)) + ' % TTC à la charge de l’acquéreur' : '—'], ['Surface', b && b.surface ? b.surface + ' m²' : '—'], ['Pièces', b && b.pieces ? b.pieces : '—'], ['Chambres', b && b.chambres != null ? b.chambres : '—'], ['Salles de bain', b && b.sdb != null ? b.sdb : '—'], ['Étage', b && b.etage != null ? (b.etage === 0 ? 'RDC' : b.etage) : '—'], ['DPE', b && b.dpe ? b.dpe : '—'], ['GES', b && b.ges ? b.ges : '—']];
     const pdfView = '<div class="se-pdf-preview">' +
       '<div class="se-pdf-head"><div class="se-pdf-logo">SEECRET</div><div class="se-pdf-tag">Fiche confidentielle</div></div>' +
       '<div class="se-pdf-body">' +
@@ -6584,6 +6636,7 @@
         pieces: chiffres(data.get('pieces')), chambres: chiffres(data.get('chambres')), sdb: chiffres(data.get('sdb')),
         etage: etageSaisie(data.get('etage')), dpe: data.get('dpe'),
         anneeConstruction: chiffres(data.get('anneeConstruction')) || null, prix: chiffres(data.get('prix')),
+        tauxHonoraires: String(data.get('tauxHonoraires') || '').trim() === '' ? null : Number(String(data.get('tauxHonoraires')).replace(',', '.')),
         statut: data.get('statut'), proprietaireId: data.get('proprio') || null,
         exclusivite: { statut: 'scan_en_cours', liens: [] },
         description: String(data.get('description') || ''),
@@ -6600,6 +6653,7 @@
           const res = await r.json().catch(() => ({}));
           if (!r.ok) throw new Error(res.error || 'Erreur serveur');
           Object.assign(existing, obj);
+          if (res.bien && Array.isArray(res.bien.historiquePrix)) existing.historiquePrix = res.bien.historiquePrix;
           modal = null; commit();
           toast('Modifications enregistrées.', 'ok');
         } catch (e) { toast('Erreur : ' + (e.message || 'serveur'), 'warn'); }
