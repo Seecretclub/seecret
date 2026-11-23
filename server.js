@@ -3919,12 +3919,9 @@ app.get('/api/robot/dirigeants', requireAdmin, async (req, res) => {
 function normaliserNom(s) {
   return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
 }
-app.get('/api/robot/autres-mandats', requireAdmin, async (req, res) => {
-  const nom = String(req.query.nom || '').trim();
-  if (!nom) return res.status(400).json({ error: 'Nom requis.' });
-  const exclureSiren = String(req.query.exclureSiren || '').trim();
+async function autresMandats(nom, exclureSiren) {
   const cible = normaliserNom(nom);
-  try {
+  {
     const r = await fetch('https://recherche-entreprises.api.gouv.fr/search?q=' + encodeURIComponent(nom) + '&page=1&per_page=15', { signal: AbortSignal.timeout(15000) });
     const data = await r.json().catch(() => ({}));
     const results = data.results || [];
@@ -3943,8 +3940,14 @@ app.get('/api/robot/autres-mandats', requireAdmin, async (req, res) => {
         });
       });
     });
-    res.json({ ok: true, mandats: mandats });
-  } catch (e) { res.status(502).json({ error: 'RNE injoignable.' }); }
+    return mandats;
+  }
+}
+app.get('/api/robot/autres-mandats', requireAdmin, async (req, res) => {
+  const nom = String(req.query.nom || '').trim();
+  if (!nom) return res.status(400).json({ error: 'Nom requis.' });
+  try { res.json({ ok: true, mandats: await autresMandats(nom, String(req.query.exclureSiren || '').trim()) }); }
+  catch (e) { res.status(502).json({ error: 'RNE injoignable.' }); }
 });
 
 // Coordonnées professionnelles (email/téléphone) — cascade sur plusieurs annuaires B2B
@@ -4081,11 +4084,7 @@ async function appelFullEnrich(prenom, nomFamille, societe) {
   } catch (e) { return { statut: 'erreur' }; }
 }
 
-app.get('/api/robot/coordonnees-pro', requireAdmin, async (req, res) => {
-  const nomComplet = String(req.query.nom || '').trim();
-  const societe = String(req.query.societe || '').trim();
-  const siren = String(req.query.siren || '').trim();
-  if (!nomComplet) return res.status(400).json({ error: 'Nom requis.' });
+async function coordonneesPro(nomComplet, societe, siren) {
   const parts = nomComplet.split(/\s+/);
   const prenom = parts[0] || '';
   const nomFamille = parts.slice(1).join(' ') || parts[0] || '';
@@ -4100,10 +4099,15 @@ app.get('/api/robot/coordonnees-pro', requireAdmin, async (req, res) => {
   for (const f of fournisseurs) {
     const r = await f.fn();
     etapes.push({ fournisseur: f.nom, statut: r.statut });
-    if (r.statut === 'trouve') return res.json({ ok: true, trouve: true, email: r.email, telephone: r.telephone, source: r.source, etapes: etapes });
+    if (r.statut === 'trouve') return { ok: true, trouve: true, email: r.email, telephone: r.telephone, source: r.source, etapes: etapes };
   }
   const tousEpuises = etapes.every((e) => e.statut === 'epuise' || e.statut === 'non_configure');
-  res.json({ ok: true, trouve: false, tousEpuises: tousEpuises, etapes: etapes });
+  return { ok: true, trouve: false, tousEpuises: tousEpuises, aucunConfigure: etapes.every((e) => e.statut === 'non_configure'), etapes: etapes };
+}
+app.get('/api/robot/coordonnees-pro', requireAdmin, async (req, res) => {
+  const nomComplet = String(req.query.nom || '').trim();
+  if (!nomComplet) return res.status(400).json({ error: 'Nom requis.' });
+  res.json(await coordonneesPro(nomComplet, String(req.query.societe || '').trim(), String(req.query.siren || '').trim()));
 });
 
 // Enrichissement d'un profil LinkedIn précis, déjà identifié et confirmé par l'agent (pas une
@@ -5394,6 +5398,8 @@ function radarChances(f, acq, nbDpeAdresse) {
   } else if (p.statut === 'non_identifie' || p.statut === 'plusieurs' || p.statut === 'societes_immeuble') {
     add(0, 'Propriétaire particulier probable : à contacter par courrier ou au porte-à-porte.', 'info');
   }
+  const permisRecent = (f.permis || []).find((x) => { const dt = Object.keys(x).filter((k) => /date/i.test(k)).map((k) => radarAnnee(x[k])).sort((a, b) => b - a)[0]; return dt && Date.now() - dt < 3 * 365 * 864e5; });
+  if (permisRecent) add(6, 'Permis ou déclaration de travaux récent à cette adresse : rénovation ou division, souvent avant une vente.');
   const v = f.ventes && f.ventes.memeLogement && f.ventes.memeLogement[0];
   if (v && v.date) {
     const ans = an - Number(String(v.date).slice(0, 4));
@@ -5476,6 +5482,7 @@ app.get('/api/radar/liste', requireAdmin, (req, res) => {
   if (Q.niveau === 'moyenne') liste = liste.filter((g) => g.chances.niveau !== 'faible');
   const signaux = { 'sci-un-bien': /ne possède que ce bien/, 'gerant-age': /Gérant de \d+ ans/, passoire: /Classé [FG]/, mouvement: /DPE dans l’immeuble/, gerance: /Changement de gérant/, dissolution: /Dissolution|Procédure collective/, longtemps: /il y a \d+ ans\) : forte plus-value/ };
   if (signaux[Q.signal]) liste = liste.filter((g) => g.chances.signaux.some((x) => signaux[Q.signal].test(x.txt)));
+  if (/^\d{9}$/.test(String(Q.siren || ''))) liste = liste.filter((g) => pr(g).siren === Q.siren);
   if (Q.statut === 'prospect') liste = liste.filter((g) => g.leadId);
   else if (['a_revoir', 'en_cours', 'contacte', 'ecarte'].indexOf(Q.statut) > -1) liste = liste.filter((g) => (g.statut || 'a_revoir') === Q.statut);
   else liste = liste.filter((g) => g.statut !== 'ecarte');
@@ -5485,11 +5492,86 @@ app.get('/api/radar/liste', requireAdmin, (req, res) => {
   liste.sort(tri === 'ancien' ? (a, b) => d(a) - d(b) : tri === 'recent' ? (a, b) => d(b) - d(a) : tri === 'surface' ? (a, b) => b.surface - a.surface : tri === 'clients' ? (a, b) => nbCli(b) - nbCli(a) || b.chances.score - a.chances.score : (a, b) => b.chances.score - a.chances.score || d(b) - d(a));
   const page = Math.max(1, Number(req.query.page) || 1);
   const job = RADAR_CHARGEMENTS[cleCharg] || null;
-  res.json({ ok: true, periode: per, total: liste.length, page: page, lignes: liste.slice((page - 1) * 50, page * 50).map(radarLigne), une: une,
+  // Vues d'ensemble (sur la sélection) : secteurs, portefeuilles des sociétés, carte.
+  const vues = page > 1 ? null : (() => {
+    const secteursV = RADAR_ARRONDISSEMENTS.map((a) => {
+      const l = liste.filter((g) => g.quartier === a.quartier);
+      return { quartier: a.quartier, label: a.label, dpe: l.length, identifies: l.filter((g) => pr(g).statut === 'identifie').length, fortes: l.filter((g) => g.chances.niveau === 'forte').length, clients: ctx.clients.filter((x) => x.c.quartiers.indexOf(a.quartier) > -1).length };
+    }).filter((x) => x.dpe || x.clients).sort((a, b) => (b.fortes * 3 + b.dpe + b.clients * 5) - (a.fortes * 3 + a.dpe + a.clients * 5));
+    const parSoc = {};
+    liste.forEach((g) => { const p = pr(g); if (p.statut !== 'identifie' || !p.siren) return; const x = parSoc[p.siren] = parSoc[p.siren] || { siren: p.siren, nom: p.nom, estSci: p.estSci, institutionnel: p.institutionnel, nbBiens: p.nbBiens || 0, dirigeant: p.dirigeant ? ((p.dirigeant.prenom || '') + ' ' + (p.dirigeant.nom || '')).trim() + (p.dirigeant.age ? ', ' + p.dirigeant.age + ' ans' : '') : '', dpe: 0, fiches: [], meilleur: 0 }; x.dpe++; if (x.fiches.length < 6) x.fiches.push({ id: g.id, adresse: g.adresse, etage: g.etage, surface: g.surface }); x.meilleur = Math.max(x.meilleur, g.chances.score); });
+    const portefeuilles = Object.values(parSoc).sort((a, b) => b.dpe - a.dpe || b.meilleur - a.meilleur).slice(0, 60);
+    const carte = liste.filter((g) => g.lat && g.lon).slice(0, 1500).map((g) => ({ id: g.id, lat: g.lat, lon: g.lon, n: g.chances.niveau, s: g.chances.score, t: g.type + ' · ' + g.surface + ' m² · ' + (g.etage == null ? '' : g.etage === 0 ? 'RDC' : g.etage + 'e') + ' · DPE ' + (g.dpe || '?'), a: g.adresse, p: pr(g).statut === 'identifie' ? pr(g).nom : '' }));
+    return { secteurs: secteursV, portefeuilles: portefeuilles, carte: carte };
+  })();
+  res.json({ ok: true, periode: per, total: liste.length, page: page, lignes: liste.slice((page - 1) * 50, page * 50).map(radarLigne), une: une, vues: vues,
     chargement: job && job.enCours ? { faits: job.faits, total: job.total, lus: job.lus } : null, erreurs: job ? job.erreurs.slice(0, 3) : [],
     proprietaires: { disponible: !!pmMeta(), millesime: (pmMeta() || {}).annee || null, import: PM_IMPORT }, exa: !!process.env.EXA_API_KEY,
     plafond: rows.length >= 20000 });
 });
+
+// ---- Briques d'Immo Data Robot branchées sur la fiche ----
+// Permis de construire de l'arrondissement (AuCadastre), gardés 7 jours ; on ne garde que l'utile.
+async function radarPermisCommune(insee) {
+  const r0 = RS.cacheGet.get('permis', insee);
+  if (r0 && Date.now() - radarAnnee(r0.maj) < 7 * 864e5) { try { return JSON.parse(r0.data); } catch (e) { /* recharge */ } }
+  const all = [];
+  let url = AUCADASTRE_URL + '/commune/' + insee + '/permits?limit=1000&offset=0';
+  for (let i = 0; i < 30 && url; i++) {
+    const r = await fetch(url, { headers: { Accept: 'application/json', 'User-Agent': 'Seecret/1.0' }, signal: AbortSignal.timeout(30000) });
+    if (!r.ok) break;
+    const d = await r.json().catch(() => ({}));
+    (d.permits || []).forEach((p) => {
+      const o = {};
+      Object.keys(p).forEach((k) => { if (/address|adresse|applicant|demandeur|date|type|nature|kind|status|statut|description|surface|logement|housing|nb_|number|reference|id$/i.test(k) && p[k] != null && typeof p[k] !== 'object') o[k] = p[k]; });
+      all.push(o);
+    });
+    const pg = d.page || {};
+    url = pg.more && pg.next ? pg.next : null;
+  }
+  RS.cacheSet.run('permis', insee, nowISO(), JSON.stringify(all));
+  return all;
+}
+function radarPermisAdresse(liste, f) {
+  const q = pmParserAdresse(f.adresse + ' ' + f.cp);
+  const siren = f.proprietaire && f.proprietaire.siren;
+  return (liste || []).filter((p) => {
+    if (siren && String(p.applicant_siren || '') === siren) return true;
+    const a = pmParserAdresse(String(p.works_address || p.address || p.adresse || ''));
+    return a.numero && a.numero === q.numero && pmScoreVoie(q.mots, a.mots) >= 2;
+  }).slice(0, 15);
+}
+// Parcelle cadastrale du point GPS (IGN), puis toutes les ventes DVF de la parcelle.
+async function radarParcelle(f) {
+  if (!f.lat || !f.lon) return null;
+  const geom = JSON.stringify({ type: 'Point', coordinates: [f.lon, f.lat] });
+  const r = await fetch('https://apicarto.ign.fr/api/cadastre/parcelle?geom=' + encodeURIComponent(geom), { headers: { Accept: 'application/json', 'User-Agent': 'Seecret/1.0' }, signal: AbortSignal.timeout(12000) });
+  if (!r.ok) return null;
+  const j = await r.json().catch(() => ({}));
+  const ft = j.features && j.features[0];
+  if (!ft) return null;
+  const pr = ft.properties || {};
+  const xs = []; const ys = [];
+  JSON.stringify(ft.geometry.coordinates).replace(/\[(-?[\d.]+),(-?[\d.]+)\]/g, (m, x, y) => { xs.push(+x); ys.push(+y); return m; });
+  const bbox = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)].map((v) => v.toFixed(6)).join(',');
+  const idu = pr.idu || ((pr.code_dep || '') + (pr.code_com || '') + (pr.com_abs || '000') + (pr.section || '') + (pr.numero || ''));
+  const out = { idu: idu, section: pr.section || '', numero: pr.numero || '', contenance: pr.contenance || null, ventes: [] };
+  try {
+    const brut = await dvfCerema({ code_insee: f.insee, in_bbox: bbox }, 3, { geo: true, budgetMs: 15000 });
+    out.ventes = brut.filter((x) => (x.l_idpar || []).some((p) => String(p).slice(-6) === String(idu).slice(-6) || String(p) === idu) && Number(x.valeurfonc) > 0)
+      .map(mutationDvf).sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(0, 30);
+  } catch (e) { /* ventes indisponibles */ }
+  return out;
+}
+// Propriétaire non trouvé dans le fichier DGFiP : sociétés domiciliées à l'adresse (SIRENE),
+// avec l'étage indiqué dans leur complément d'adresse.
+async function radarDomiciliees(f) {
+  const d = await societesAdresse(f.adresse + ' ' + f.cp);
+  const soc = (d.societes || []).map((x) => ({ siren: x.siren, nom: x.nom, type: x.type, etage: x.lot && x.lot.etage || '', porte: x.lot && (x.lot.position || x.lot.porte) || '', complement: x.complementAdresse || '', dirigeants: x.dirigeants || [], estSiege: x.estSiege }));
+  const etageTxtF = f.etage == null ? null : f.etage === 0 ? 'RDC' : f.etage === 1 ? '1er étage' : f.etage + 'e étage';
+  const memeEtage = soc.filter((x) => x.type === 'sci' && etageTxtF && x.etage === etageTxtF);
+  return { societes: soc.slice(0, 12), probable: memeEtage.length === 1 ? memeEtage[0] : null };
+}
 
 // Fiche complète. ?enrichir=1 : lance (et attend, 25 s max) toutes les recherches.
 async function radarEnrichirFiche(f) {
@@ -5502,10 +5584,28 @@ async function radarEnrichirFiche(f) {
     t.push(avant(avecCache('bodacc', 'radarBodacc', p.siren, 30, (tmp) => radarBodacc(tmp, p.siren)).catch(() => null)));
   }
   if (!f.ventes && f.lat) t.push(avant(radarVentesAdresse(f).then((v) => { if (v) f.ventes = v; }).catch(() => null)));
+  if (!f.parcelle && f.lat) t.push(avant(radarParcelle(f).then((v) => { if (v) f.parcelle = v; }).catch(() => null)));
+  t.push(avant(radarPermisCommune(f.insee).then((l) => { f.permis = radarPermisAdresse(l, f); }).catch(() => null)));
+  if (p.statut !== 'identifie') {
+    t.push(avant(radarDomiciliees(f).then((dm) => {
+      p.domiciliees = dm.societes;
+      if (dm.probable) Object.assign(p, { statut: 'identifie', confiance: 'siège SIRENE au même étage', siren: dm.probable.siren, nom: dm.probable.nom, estSci: true, source: 'sirene', dirigeantsSirene: dm.probable.dirigeants });
+    }).catch(() => null)));
+  }
   const arr = RADAR_ARRONDISSEMENTS.find((a) => a.insee === f.insee);
   if (arr) t.push(avant(avecCache('prix', 'radarPrix', arr.insee + '|' + f.type, 30, (tmp) => radarPrixM2(tmp, arr, f.type)).catch(() => null)));
   await Promise.all(t);
+  // Deuxième ricochet (dépend des gérants trouvés) : autres mandats et coordonnées pro.
   radarAppliquerCache(f);
+  const p2 = f.proprietaire || {};
+  const dg = p2.dirigeant;
+  if (p2.statut === 'identifie' && dg && dg.nom && Date.now() < fin) {
+    const nomD = ((dg.prenoms || dg.prenom || '') + ' ' + dg.nom).trim();
+    await Promise.all([
+      avant(avecCache('mandats', 'x', nomD, 30, () => autresMandats(nomD, p2.siren).then((m) => ({ mandats: m }))).then((v) => { if (v) p2.autresMandats = v.mandats; }).catch(() => null)),
+      avant(avecCache('coordpro', 'x', p2.siren + '|' + nomD, 60, () => coordonneesPro(nomD, p2.nom, p2.siren).then((v) => (v && v.aucunConfigure ? null : v))).then((v) => { if (v) p2.coordPro = v; }).catch(() => null))
+    ]);
+  }
   f.enrichiLe = nowISO();
   rsEcrire(f);
   return f;
@@ -5517,6 +5617,13 @@ function radarAppliquerCache(f) {
     if (soc) { const d = (soc.dirigeants || []).find((x) => x.nom); p.dirigeant = d || null; p.dirigeants = soc.dirigeants; p.societe = { creation: soc.creation, siege: soc.siege, etat: soc.etat, nomComplet: soc.nomComplet }; }
     const bo = cacheLu('bodacc', p.siren); if (bo) p.bodacc = bo.annonces;
     const ct = cacheLu('contacts', p.siren); if (ct) p.contacts = { linkedin: ct.linkedin, site: ct.site, telephones: ct.telephones, emails: ct.emails };
+    if (p.coordPro && p.coordPro.trouve) {
+      p.contacts = p.contacts || { linkedin: [], site: null, telephones: [], emails: [] };
+      if (p.coordPro.telephone && p.contacts.telephones.indexOf(p.coordPro.telephone) === -1) p.contacts.telephones = [p.coordPro.telephone].concat(p.contacts.telephones);
+      if (p.coordPro.email && p.contacts.emails.indexOf(p.coordPro.email) === -1) p.contacts.emails = [p.coordPro.email].concat(p.contacts.emails);
+      p.contacts.sourcePro = p.coordPro.source || 'annuaire pro';
+    }
+    if (p.source === 'sirene' && !p.dirigeants && p.dirigeantsSirene) { p.dirigeants = p.dirigeantsSirene.map((d) => { const x = d.nom.split(' '); return { prenom: x[0], nom: x.slice(1).join(' '), qualite: d.role }; }); p.dirigeant = p.dirigeants[0] || null; }
   }
   const px = cacheLu('prix', f.insee + '|' + f.type);
   if (px && px.m2 && f.surface) { f.prixM2 = px.m2; f.prixBas = Math.round(f.surface * px.m2 * 0.93 / 10000) * 10000; f.prixHaut = Math.round(f.surface * px.m2 * 1.07 / 10000) * 10000; }
@@ -5536,6 +5643,8 @@ app.get('/api/radar/fiche/:id', requireAdmin, async (req, res) => {
   res.json({ ok: true, fiche: Object.assign({}, g, { _acq: undefined }), acquereurs: g._acq,
     biensSociete: p.statut === 'identifie' ? radarBiensSociete(p.siren).slice(0, 30) : [],
     memeImmeuble: memes.slice(0, 12).map((x) => ({ id: x.id, etage: x.etage, surface: x.surface, dpeDate: x.dpeDate, dpe: x.dpe })),
+    lotsImmeuble: pmMeta() ? (() => { const q = pmParserAdresse(f.adresse + ' ' + f.cp); return q.insee && q.numero ? pmLotsImmeuble(q).sort(pmTriNiveau).slice(0, 120).map((l) => ({ niveau: l.niveauLibelle, porte: l.porte, batiment: l.batiment, nom: l.nom, siren: l.siren, type: l.type, droit: l.droitLibelle })) : []; })() : [],
+    kaspr: fournisseurConfigure('KASPR_API_KEY'), fournisseursPro: ['SOCIETEINFO_API_KEY', 'DROPCONTACT_API_KEY', 'DATAGMA_API_KEY', 'FULLENRICH_API_KEY'].filter(fournisseurConfigure).length,
     agent: { nom: agent, email: req.lead.email || '', tel: req.lead.tel || '' }, lead: g.leadId ? (db.leads.find((l) => l.id === g.leadId) ? { id: g.leadId } : null) : null });
 });
 app.patch('/api/radar/fiche/:id', requireAdmin, (req, res) => {
@@ -5601,11 +5710,9 @@ function analyserComplementAdresse(texte) {
 }
 
 const SIRENE_ADRESSE_CACHE = {};
-app.get('/api/robot/societes-adresse', requireAdmin, async (req, res) => {
-  const adresse = String(req.query.adresse || '').trim();
-  if (!adresse) return res.status(400).json({ error: 'Adresse requise.' });
+async function societesAdresse(adresse) {
   const cle = pmNorm(adresse);
-  if (SIRENE_ADRESSE_CACHE[cle] && Date.now() - SIRENE_ADRESSE_CACHE[cle].at < 24 * 3600 * 1000) return res.json(SIRENE_ADRESSE_CACHE[cle].data);
+  if (SIRENE_ADRESSE_CACHE[cle] && Date.now() - SIRENE_ADRESSE_CACHE[cle].at < 24 * 3600 * 1000) return SIRENE_ADRESSE_CACHE[cle].data;
   const q = pmParserAdresse(adresse);
   const appel = async (extra) => {
     const p = new URLSearchParams(Object.assign({ q: adresse, per_page: '25', page: '1', etat_administratif: 'A' }, q.cp ? { code_postal: q.cp } : {}, extra));
@@ -5621,7 +5728,7 @@ app.get('/api/robot/societes-adresse', requireAdmin, async (req, res) => {
     const d = await r.json().catch(() => ({}));
     return Array.isArray(d.results) ? d.results : [];
   };
-  try {
+  {
     // Deux requêtes : une limitée aux SCI (nature juridique 6540) pour ne pas les
     // noyer sous les commerces de la rue, une générale pour les autres sociétés.
     // Appels l'un après l'autre (deux appels simultanés déclenchaient la limite
@@ -5665,8 +5772,14 @@ app.get('/api/robot/societes-adresse', requireAdmin, async (req, res) => {
     societes.sort((a, b) => (a.type === 'sci' ? 0 : 1) - (b.type === 'sci' ? 0 : 1));
     const data = { ok: true, societes };
     SIRENE_ADRESSE_CACHE[cle] = { at: Date.now(), data };
-    res.json(data);
-  } catch (e) { res.status(502).json({ error: 'API SIRENE (recherche-entreprises.api.gouv.fr) injoignable.' }); }
+    return data;
+  }
+}
+app.get('/api/robot/societes-adresse', requireAdmin, async (req, res) => {
+  const adresse = String(req.query.adresse || '').trim();
+  if (!adresse) return res.status(400).json({ error: 'Adresse requise.' });
+  try { res.json(await societesAdresse(adresse)); }
+  catch (e) { res.status(502).json({ error: 'API SIRENE (recherche-entreprises.api.gouv.fr) injoignable.' }); }
 });
 
 // Enrichissement contacts d'un signal DPE (propriétaire + téléphone/email avec statuts)
