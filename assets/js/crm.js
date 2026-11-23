@@ -1312,11 +1312,11 @@
             id: 'srv-' + l.id, serverId: l.id, serveurStatut: l.statut,
             type: l.projet === 'vendeur' ? 'vendeur' : l.projet === 'mixte' ? 'mixte' : 'acquereur',
             prenom: l.prenom || '', nom: l.nom || '', email: l.email || '', tel: l.tel || '',
-            statut: l.statut === 'accepte' ? 'actif' : l.statut === 'suspendu' ? 'suspendu' : 'prospect', source: 'Candidature',
+            statut: l.statut === 'accepte' ? 'actif' : l.statut === 'suspendu' ? 'suspendu' : 'prospect', source: l.source === 'Fichier clients' ? 'Fichier clients' : 'Candidature',
             budgetMin: 0, budgetMax: l.budgetMax || 0, quartiers: l.quartiers || [],
             piecesMin: l.piecesMin || 0, surfaceMin: l.surfaceMin || 0, surfaceMax: l.surfaceMax || 0, delai: l.delai || '', typeBien: l.typeBien || '',
             apport: l.apport || 0, financement: l.financement || '', courtier: !!l.courtier, bienAVendre: !!l.bienAVendre,
-            notes: '', tags: [], agent: 'Gabriel Taieb', cree: l.cree || nowISO(),
+            notes: l.notes || '', tags: Array.isArray(l.tags) ? l.tags.slice() : [], agent: 'Gabriel Taieb', cree: l.cree || nowISO(),
             documents: l.documents || 0, documentsValides: l.documentsValides || 0,
             pipeline: l.pipeline || '', adresseBien: l.adresseBien || '', siren: l.siren || '', parcelle: l.parcelle || '', dirigeants: l.dirigeants || [],
             agentId: l.agentId || null, demo: !!l.demo
@@ -1436,6 +1436,7 @@
       demandes: viewDemandes,
       demande: viewDemandeDetail,
       clients: viewClients,
+      import: viewImport,
       reseau: viewReseau,
       pipeline: viewPipeline,
       notifications: viewNotifications,
@@ -1593,7 +1594,7 @@
   }
 
   function titre(r) {
-    const map = { tableau: 'Tableau de bord', demandes: 'Candidatures', demande: 'Fiche demande', clients: 'Leads', reseau: 'Réseau', pipeline: 'Pipeline de relance', notifications: 'À prévenir', client: 'Fiche lead', biens: 'Produits', bien: 'Fiche produit', recherches: 'Recherches', recherche: 'Recherche', robot: 'Immo Data Robot', 'robot-radar': 'Radar — Biens détectés', 'robot-opportunites': 'Opportunités Clients', 'robot-bien': 'Fiche bien Radar', 'robot-dpe': 'Recherche DPE', 'robot-proprietaires': 'Propriétaires', 'robot-proprietaire': 'Fiche propriétaire', 'portefeuille-foncier': 'Portefeuille foncier', 'societe-fonciere': 'Fiche société', bodacc: 'Signaux BODACC', membres: 'Membres', 'biens-club': 'Biens du club', rapprochements: 'Rapprochements', tracking: 'Tracking', visites: 'Visites', offres: 'Propositions → Offres', verifications: 'Vérifications', taches: 'Tâches', messages: 'Messages', reglages: 'Réglages', agents: 'Agents' };
+    const map = { tableau: 'Tableau de bord', demandes: 'Candidatures', demande: 'Fiche demande', clients: 'Leads', import: 'Import clients', reseau: 'Réseau', pipeline: 'Pipeline de relance', notifications: 'À prévenir', client: 'Fiche lead', biens: 'Produits', bien: 'Fiche produit', recherches: 'Recherches', recherche: 'Recherche', robot: 'Immo Data Robot', 'robot-radar': 'Radar — Biens détectés', 'robot-opportunites': 'Opportunités Clients', 'robot-bien': 'Fiche bien Radar', 'robot-dpe': 'Recherche DPE', 'robot-proprietaires': 'Propriétaires', 'robot-proprietaire': 'Fiche propriétaire', 'portefeuille-foncier': 'Portefeuille foncier', 'societe-fonciere': 'Fiche société', bodacc: 'Signaux BODACC', membres: 'Membres', 'biens-club': 'Biens du club', rapprochements: 'Rapprochements', tracking: 'Tracking', visites: 'Visites', offres: 'Propositions → Offres', verifications: 'Vérifications', taches: 'Tâches', messages: 'Messages', reglages: 'Réglages', agents: 'Agents' };
     return map[r.name] || 'CRM';
   }
 
@@ -4564,6 +4565,103 @@
       }).join('') + '</div>';
   }
 
+  // ---- Import du fichier clients (assets/js/import-clients.js) ----
+  // Gardé en mémoire seulement (un fichier de plusieurs milliers de lignes ne
+  // doit pas aller dans la sauvegarde locale du CRM).
+  let imp = null; // { nom, entetes, lignes, corresp, clients, filtre, envoi, resultat, simulation }
+  const IC = () => window.ImportClients;
+  function chargerXlsx() {
+    if (window.XLSX) return Promise.resolve();
+    return new Promise((ok, ko) => { const sc = document.createElement('script'); sc.src = 'assets/vendor/xlsx/xlsx.full.min.js'; sc.onload = ok; sc.onerror = () => ko(new Error('Lecteur Excel indisponible.')); document.head.appendChild(sc); });
+  }
+  const nomAgent = () => state.moi ? [state.moi.prenom, state.moi.nom].filter(Boolean).join(' ') : '';
+  function importAppliquer() {
+    imp.clients = IC().transformer(imp.lignes, imp.corresp);
+    imp.simulation = null; imp.resultat = null;
+    importSimuler();
+  }
+  async function importEnvoyer(simulation) {
+    const ok = imp.clients.filter((c) => c.etat === 'ok');
+    const total = { crees: 0, completes: 0, ignores: 0, details: [] };
+    for (let i = 0; i < ok.length; i += 500) {
+      const lot = ok.slice(i, i + 500);
+      const r = await fetch('/api/leads/import', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ simulation: simulation, lot: imp.lot, lignes: lot.map((c) => IC().versServeur(c, imp.lot)) }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || 'Import impossible');
+      total.crees += d.crees; total.completes += d.completes; total.ignores += d.ignores;
+      d.details.forEach((x) => { const c = lot[x.i]; if (c) c.serveur = x.etat; });
+      if (!simulation) { imp.progression = Math.min(ok.length, i + 500) + ' / ' + ok.length; render(); }
+    }
+    return total;
+  }
+  async function importSimuler() {
+    render();
+    try { imp.simulation = await importEnvoyer(true); } catch (e) { imp.simulation = { erreur: e.message }; }
+    render();
+  }
+  function viewImport() {
+    const I = IC();
+    const intro = head('Prospection', 'Importer mon fichier clients', 'Déposez votre fichier (Excel ou CSV, même brut). Les colonnes sont reconnues, les clients nettoyés, dédoublonnés et classés. Rien n’est enregistré avant votre clic « Importer », et aucun email n’est envoyé.', '<a class="se-btn ghost sm" href="#/clients">← Leads</a>');
+    if (!I) return intro + '<div class="se-card"><p class="se-hint">Module d’import non chargé : rechargez la page.</p></div>';
+    const depot = '<div class="se-card"><label class="se-import-depot">' + ICONS.plus + '<b>' + (imp ? 'Choisir un autre fichier' : 'Choisir mon fichier clients') + '</b><span class="se-hint">.xlsx, .xls, .csv, .ods — toutes les feuilles du classeur sont lues</span>' +
+      '<input type="file" accept=".xlsx,.xls,.xlsm,.ods,.csv,.txt" hidden data-import-fichier/></label></div>';
+    if (!imp) return intro + depot;
+    if (imp.chargement) return intro + '<div class="se-card"><p>Lecture de « ' + esc(imp.nom) + ' »…</p></div>';
+    if (imp.erreur) return intro + '<div class="se-note" style="margin-bottom:14px">' + esc(imp.erreur) + '</div>' + depot;
+    const champs = I.CHAMPS;
+    const exemple = (k) => { const l = imp.lignes.find((x) => String(x[k] == null ? '' : x[k]).trim()); const v = l ? l[k] : ''; return v instanceof Date ? v.toLocaleDateString('fr-FR') : String(v).slice(0, 40); };
+    const corresp = '<div class="se-card" style="margin-top:18px"><h3>1 · Colonnes reconnues</h3><p class="se-hint" style="margin:4px 0 12px">« ' + esc(imp.nom) + ' » : ' + num(imp.lignes.length) + ' lignes. Corrigez si une colonne est mal reconnue, puis « Appliquer ».</p>' +
+      '<div class="se-import-colonnes">' + imp.entetes.map((h, k) => '<div class="se-import-col"><div style="min-width:0"><b>' + esc(h) + '</b><div class="se-hint" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(exemple(k) || '—') + '</div></div>' +
+        '<select class="se-select" data-import-col="' + k + '"><option value="">— ignorer —</option>' + champs.map((c) => '<option value="' + c.id + '"' + (imp.corresp[k] === c.id ? ' selected' : '') + '>' + esc(c.label) + '</option>').join('') + '</select></div>').join('') + '</div>' +
+      '<button class="se-btn soft" style="margin-top:12px" data-act="import-appliquer">Appliquer</button></div>';
+    const C = imp.clients || [];
+    const ok = C.filter((c) => c.etat === 'ok'); const fusions = C.filter((c) => c.etat === 'fusion'); const ignores = C.filter((c) => c.etat === 'ignore');
+    const sim = imp.simulation;
+    const dejaCrm = ok.filter((c) => c.serveur === 'complete').length;
+    const seg = {}; ok.forEach((c) => { seg[c.segment] = (seg[c.segment] || 0) + 1; });
+    const stat = (n, t) => '<div class="se-import-stat"><b>' + num(n) + '</b><span>' + t + '</span></div>';
+    const bilan = '<div class="se-card" style="margin-top:18px"><h3>2 · Tri</h3>' +
+      '<div class="se-import-stats">' + stat(ok.length, 'clients uniques') + stat(fusions.length, 'doublons fusionnés') + stat(ignores.length, 'lignes ignorées') +
+        stat(sim && !sim.erreur ? dejaCrm : '…', 'déjà dans le CRM (complétés)') + stat(sim && !sim.erreur ? ok.length - dejaCrm : '…', 'nouveaux') + '</div>' +
+      (sim && sim.erreur ? '<div class="se-note" style="margin-top:10px">Vérification des doublons avec le CRM impossible : ' + esc(sim.erreur) + '</div>' : '') +
+      '<div class="se-import-stats" style="margin-top:10px">' + Object.keys(I.SEGMENTS).map((k) => stat(seg[k] || 0, I.SEGMENTS[k].nom)).join('') + '</div>' +
+      '<div class="se-tabs" style="margin:16px 0 10px;flex-wrap:wrap">' + [['ok', 'À importer'], ['fusion', 'Doublons'], ['ignore', 'Ignorées']].concat(Object.keys(I.SEGMENTS).map((k) => [k, I.SEGMENTS[k].tag])).map((f) => '<a href="#" data-act="import-filtre" data-id="' + f[0] + '" class="' + ((imp.filtre || 'ok') === f[0] ? 'active' : '') + '">' + f[1] + '</a>').join('') + '</div>' +
+      (function () {
+        const f = imp.filtre || 'ok';
+        const liste = C.filter((c) => (I.SEGMENTS[f] ? c.etat === 'ok' && c.segment === f : c.etat === f));
+        return '<div class="se-list">' + liste.slice(0, 150).map((c) => '<div class="se-list-item" style="gap:10px;align-items:flex-start;flex-wrap:wrap"><div style="flex:1;min-width:200px">' +
+            '<b>' + esc([c.civilite, c.prenom, c.nom].filter(Boolean).join(' ') || '(sans nom)') + '</b>' + (c.fusions > 1 ? ' <span class="se-hint">· ' + c.fusions + ' lignes réunies</span>' : '') +
+            '<div class="se-hint">' + esc([c.email, c.tel, c.adresse].filter(Boolean).join(' · ') || '—') + '</div>' +
+            (c.notes ? '<div class="se-hint" style="margin-top:2px">' + esc(c.notes.slice(0, 160)) + (c.notes.length > 160 ? '…' : '') + '</div>' : '') + '</div>' +
+            '<div class="se-hint" style="text-align:right">' + (c.etat === 'ok' ? esc((I.SEGMENTS[c.segment] || {}).tag || '') + (c.serveur === 'complete' ? '<br>déjà dans le CRM' : '') : esc(c.raison || '')) + (c.date ? '<br>' + c.date.getFullYear() : '') + '<br>ligne ' + c.ligne + '</div></div>').join('') +
+          (liste.length > 150 ? '<p class="se-hint" style="padding:10px 0">… et ' + num(liste.length - 150) + ' autres.</p>' : '') + (liste.length ? '' : '<p class="se-hint">Aucune ligne.</p>') + '</div>';
+      })() + '</div>';
+    const r = imp.resultat;
+    const action = '<div class="se-card" style="margin-top:18px"><h3>3 · Importer</h3>' +
+      (r ? '<div class="se-note" style="margin-top:8px">Import terminé : <b>' + num(r.crees) + '</b> clients créés, <b>' + num(r.completes) + '</b> fiches existantes complétées. Ils sont dans Leads, étiquetés « Fichier clients » et par segment.</div>'
+        : '<p class="se-hint" style="margin:6px 0 12px">Les nouveaux clients arrivent en « prospect », étiquetés « Fichier clients » + leur segment. Les clients déjà connus (même email ou téléphone) sont seulement complétés, rien n’est écrasé. Aucun email ni message n’est envoyé.</p>' +
+          '<button class="se-btn" data-act="import-lancer"' + (imp.envoi || !ok.length ? ' disabled' : '') + '>' + (imp.envoi ? 'Import en cours… ' + (imp.progression || '') : 'Importer ' + num(ok.length) + ' clients') + '</button>') + '</div>';
+    // Propositions de messages par segment.
+    const messages = '<div class="se-card" style="margin-top:18px"><h3>4 · Messages proposés</h3><p class="se-hint" style="margin:4px 0 12px">Un message par segment, personnalisé pour chaque client (prénom, année, quartier, recherche). À copier ou envoyer par WhatsApp / email vous-même : rien ne part automatiquement.</p>' +
+      Object.keys(I.SEGMENTS).filter((k) => seg[k]).map((k) => {
+        const liste = ok.filter((c) => c.segment === k);
+        const ouvert = imp.segOuvert === k;
+        return '<div class="se-import-seg"><div class="se-row" style="justify-content:space-between;gap:10px;flex-wrap:wrap"><div style="min-width:0;flex:1"><b>' + esc(I.SEGMENTS[k].nom) + '</b> <span class="se-hint">· ' + num(liste.length) + '</span><div class="se-hint">' + esc(I.SEGMENTS[k].idee) + '</div></div>' +
+          '<button class="se-btn ghost sm" data-act="import-seg" data-id="' + k + '">' + (ouvert ? 'Fermer' : 'Voir les messages') + '</button></div>' +
+          '<pre class="se-import-msg">' + esc(I.message(liste[0], nomAgent())) + '</pre>' +
+          (ouvert ? '<div class="se-list">' + liste.slice(0, 200).map((c) => {
+            const m = I.message(c, nomAgent());
+            const telWa = c.tel.replace(/\D/g, '').replace(/^0/, '33');
+            return '<div class="se-list-item" style="gap:8px;flex-wrap:wrap"><div style="flex:1;min-width:180px"><b>' + esc([c.prenom, c.nom].join(' ')) + '</b><div class="se-hint">' + esc(c.email || c.tel) + '</div></div><div class="se-actions">' +
+              '<button class="se-btn ghost sm" data-act="copier-contact" data-value="' + esc(m) + '">Copier</button>' +
+              (/^33[67]/.test(telWa) ? '<a class="se-btn ghost sm" target="_blank" rel="noopener" href="https://wa.me/' + telWa + '?text=' + encodeURIComponent(m) + '">WhatsApp</a>' : '') +
+              (c.email ? '<a class="se-btn ghost sm" href="mailto:' + esc(c.email) + '?subject=' + encodeURIComponent('Seecret — des nouvelles de votre agent') + '&body=' + encodeURIComponent(m) + '">Email</a>' : '') +
+              '</div></div>';
+          }).join('') + (liste.length > 200 ? '<p class="se-hint">… et ' + num(liste.length - 200) + ' autres (filtrez par étiquette dans Leads).</p>' : '') + '</div>' : '') + '</div>';
+      }).join('') + '</div>';
+    return intro + depot + corresp + bilan + action + messages;
+  }
+
   function viewClients() {
     const q = (state.filtres.q || '').toLowerCase();
     const type = state.filtres.typeClient || '';
@@ -4580,7 +4678,7 @@
 
     return head('Prospection', 'Leads',
       list.length + ' lead(s) · ' + count('plateforme') + ' plateforme · ' + count('manuel') + ' manuel(s).',
-      '<a class="se-btn ghost sm" href="#/pipeline">Pipeline de relance</a><button class="se-btn ghost sm" data-act="client-nouveau">' + ICONS.plus + ' Nouveau lead</button>') +
+      '<a class="se-btn ghost sm" href="#/import">Importer un fichier</a><a class="se-btn ghost sm" href="#/pipeline">Pipeline de relance</a><button class="se-btn ghost sm" data-act="client-nouveau">' + ICONS.plus + ' Nouveau lead</button>') +
       '<div class="se-tabs" style="margin-bottom:18px">' +
         '<a href="#" data-act="filtre" data-id="leadType:plateforme" class="' + (leadType === 'plateforme' ? 'active' : '') + '">Leads Plateforme<span>' + count('plateforme') + '</span></a>' +
         '<a href="#" data-act="filtre" data-id="leadType:manuel" class="' + (leadType === 'manuel' ? 'active' : '') + '">Leads Manuels<span>' + count('manuel') + '</span></a>' +
@@ -6103,6 +6201,22 @@
       const d = state.demandes.find((x) => x.id === id || x.serverDemandeId === id);
       if (d) { d.statut = 'nouvelle'; commit(); toast('Demande relancée.', 'ok'); }
     },
+    'import-appliquer': () => {
+      document.querySelectorAll('[data-import-col]').forEach((s) => { imp.corresp[Number(s.getAttribute('data-import-col'))] = s.value; });
+      importAppliquer();
+    },
+    'import-filtre': (el, id) => { imp.filtre = id; render(); },
+    'import-seg': (el, id) => { imp.segOuvert = imp.segOuvert === id ? null : id; render(); },
+    'import-lancer': async () => {
+      if (!imp || imp.envoi) return;
+      imp.envoi = true; imp.progression = ''; render();
+      try {
+        imp.resultat = await importEnvoyer(false);
+        toast(num(imp.resultat.crees) + ' clients importés, ' + num(imp.resultat.completes) + ' complétés.', 'ok');
+        if (typeof syncServeur === 'function') syncServeur();
+      } catch (e) { toast('Import interrompu : ' + e.message + ' (relancez : les clients déjà importés seront seulement complétés).', 'warn'); }
+      imp.envoi = false; render();
+    },
     'gazette-rediger': async (el, id) => {
       state.gazetteRedaction = id; render();
       try {
@@ -7071,6 +7185,19 @@
     enregistrerBien(b, { photos: p }, e.detail.vers === 0 ? 'Nouvelle photo principale.' : 'Ordre des photos enregistré.');
   });
   document.addEventListener('change', async (e) => {
+    if (e.target.hasAttribute('data-import-fichier')) {
+      const f = e.target.files && e.target.files[0];
+      if (!f) return;
+      imp = { nom: f.name, chargement: true, lot: 'Import ' + new Date().toLocaleDateString('fr-FR') };
+      render();
+      try {
+        if (!/\.(csv|txt)$/i.test(f.name)) await chargerXlsx();
+        const t = await window.ImportClients.lireFichier(f);
+        imp = { nom: f.name, lot: imp.lot, entetes: t.entetes, lignes: t.lignes, corresp: window.ImportClients.devinerCorrespondance(t.entetes) };
+        importAppliquer();
+      } catch (err) { imp = { nom: f.name, erreur: 'Lecture impossible : ' + err.message }; render(); }
+      return;
+    }
     if (e.target.hasAttribute('data-bien-photos')) {
       const b = bien(e.target.getAttribute('data-bien-photos'));
       const fichiers = Array.from(e.target.files || []);

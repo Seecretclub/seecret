@@ -4995,6 +4995,84 @@ app.post('/api/leads', requireAdmin, (req, res) => {
   res.json({ ok: true, lead: lead });
 });
 
+// ---- Import du fichier clients historique (CRM › Leads › Importer) ----
+// Le navigateur lit le fichier (Excel / CSV), trie et classe les clients, puis
+// envoie les lignes par lots de 500. Ici : création des nouveaux clients et,
+// pour ceux déjà connus (même email ou même téléphone), complément des champs
+// vides + ajout de la note, sans rien écraser. AUCUN email n'est envoyé.
+function telNormalise(t) {
+  let d = String(t || '').replace(/[^\d+]/g, '');
+  if (d.indexOf('+33') === 0) d = '0' + d.slice(3);
+  else if (d.indexOf('0033') === 0) d = '0' + d.slice(4);
+  d = d.replace(/\D/g, '');
+  if (d.length === 9 && /^[1-9]/.test(d)) d = '0' + d;
+  return d;
+}
+app.post('/api/leads/import', requireAdmin, (req, res) => {
+  const lignes = Array.isArray(req.body && req.body.lignes) ? req.body.lignes.slice(0, 1000) : [];
+  const simulation = !!(req.body && req.body.simulation);
+  const lot = String((req.body && req.body.lot) || '').slice(0, 40) || ('import-' + new Date().toISOString().slice(0, 10));
+  const db = readDb();
+  const role = roleOf(req.lead);
+  const agentId = estAgentSimple(role) ? req.lead.id : null;
+  // Téléphone partagé (couple, standard de bureau…) : on ne rapproche par
+  // téléphone que si le nom de famille correspond aussi.
+  const nomCle = (n) => String(n || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z]/g, '');
+  const parEmail = new Map(); const parTel = new Map();
+  const ajouterTel = (t, l) => { if (t.length < 9) return; if (!parTel.has(t)) parTel.set(t, []); parTel.get(t).push(l); };
+  db.leads.forEach((l) => {
+    if (l.email) parEmail.set(String(l.email).toLowerCase(), l);
+    ajouterTel(telNormalise(l.tel), l);
+  });
+  const parTelEtNom = (t, nom, prenom) => (parTel.get(t) || []).find((l) => {
+    const a = nomCle(l.nom); const b = nomCle(nom);
+    return (a && b && a === b) || (!a && !b && nomCle(l.prenom) === nomCle(prenom));
+  }) || null;
+  const str = (v, n) => String(v == null ? '' : v).trim().slice(0, n || 200);
+  const PROJETS = ['acquereur', 'vendeur', 'mixte', 'prospect'];
+  const resultat = { crees: 0, completes: 0, ignores: 0, details: [] };
+  lignes.forEach((x, i) => {
+    const prenom = str(x.prenom, 80); const nom = str(x.nom, 80);
+    const email = str(x.email, 160).toLowerCase(); const tel = str(x.tel, 40);
+    const telN = telNormalise(tel);
+    if ((!nom && !prenom) || (!email && telN.length < 9 && !str(x.adresse))) { resultat.ignores++; resultat.details.push({ i: i, etat: 'ignore' }); return; }
+    const existant = (email && parEmail.get(email)) || (telN.length >= 9 && parTelEtNom(telN, nom, prenom)) || null;
+    const note = str(x.notes, 4000);
+    const tags = Array.isArray(x.tags) ? x.tags.map((t) => str(t, 40)).filter(Boolean).slice(0, 8) : [];
+    if (existant) {
+      resultat.completes++; resultat.details.push({ i: i, etat: 'complete', id: existant.id });
+      if (simulation) return;
+      ['prenom', 'nom', 'tel', 'ville', 'adresse', 'typeBien'].forEach((k) => { if (!existant[k] && str(x[k])) existant[k] = str(x[k]); });
+      if (!existant.email && email && !parEmail.has(email)) { existant.email = email; parEmail.set(email, existant); }
+      if (!existant.budgetMax && Number(x.budgetMax) > 0) existant.budgetMax = Math.round(Number(x.budgetMax));
+      if ((!existant.quartiers || !existant.quartiers.length) && Array.isArray(x.quartiers)) existant.quartiers = x.quartiers.map(String).slice(0, 6);
+      if (note && String(existant.notes || '').indexOf(note.slice(0, 60)) === -1) existant.notes = (existant.notes ? existant.notes + '\n\n' : '') + '[Fichier clients] ' + note;
+      existant.tags = Array.from(new Set((existant.tags || []).concat(tags)));
+      return;
+    }
+    const lead = {
+      id: uid('l'), prenom: prenom, nom: nom, email: email, tel: tel, civilite: str(x.civilite, 10),
+      ville: str(x.ville, 80), adresse: str(x.adresse), adresseBien: str(x.adresseBien || ''),
+      projet: PROJETS.indexOf(x.projet) > -1 ? x.projet : 'prospect', role: 'membre', type: 'personne', natureLead: 'personne',
+      source: 'Fichier clients', statut: 'prospect', importLot: lot,
+      budgetMin: 0, budgetMax: Math.max(0, Math.round(Number(x.budgetMax) || 0)),
+      quartiers: Array.isArray(x.quartiers) ? x.quartiers.map(String).slice(0, 6) : [],
+      piecesMin: Math.max(0, Number(x.pieces) || 0), surfaceMin: Math.max(0, Number(x.surface) || 0), surfaceMax: 0,
+      delai: '', financement: '', apport: 0, courtier: false, bienAVendre: x.projet === 'vendeur' || x.projet === 'mixte', typeBien: str(x.typeBien, 40),
+      notes: note, tags: tags, dernierContact: str(x.dateContact, 30) || null,
+      siren: '', dirigeants: [], parcelle: '', dpe: '', raisonSociale: '', representant: '',
+      creePar: req.lead.id, agentId: agentId, cree: nowISO()
+    };
+    resultat.crees++; resultat.details.push({ i: i, etat: 'cree', id: lead.id });
+    if (simulation) return;
+    db.leads.push(lead);
+    if (email) parEmail.set(email, lead);
+    ajouterTel(telN, lead);
+  });
+  if (!simulation) writeDb(db);
+  res.json(Object.assign({ ok: true, simulation: simulation, lot: lot }, resultat));
+});
+
 // ---- Gestion des comptes agents (super-admin uniquement) ----
 // Au 18/11/2026, aucun agent n'est encore employé (usage solo) — ces routes
 // posent les fondations pour plus tard sans rien changer à l'usage actuel :

@@ -442,3 +442,15 @@ body.se-maps-open { overflow: hidden; }
   .se-notif-item { flex-wrap: wrap; }
   .se-notif-actions { flex: 1 1 100%; max-width: none; justify-content: flex-start; }
 }
+
+/* Import du fichier clients */
+.se-import-depot { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 28px 16px; border: 1.5px dashed var(--color-stroke, #d9d4cc); border-radius: 14px; cursor: pointer; text-align: center; }
+.se-import-depot svg { width: 26px; height: 26px; }
+.se-import-colonnes { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+.se-import-col { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid var(--color-stroke-faint, #eee9e1); border-radius: 10px; }
+.se-import-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+.se-import-stat { padding: 10px 12px; border-radius: 12px; background: var(--color-sand, #f3efe8); display: flex; flex-direction: column; gap: 2px; }
+.se-import-stat b { font-size: 20px; }
+.se-import-stat span { font-size: 12px; color: var(--color-graphite, #6b645c); }
+.se-import-seg { padding: 14px 0; border-top: 1px solid var(--color-stroke-faint, #eee9e1); }
+.se-import-msg { white-space: pre-wrap; font: inherit; font-size: 13px; line-height: 1.55; background: var(--color-sand, #f3efe8); padding: 12px 14px; border-radius: 12px; margin: 10px 0; }
