@@ -1855,7 +1855,44 @@ function consigneArticle(rubrique, recents, sujet) {
       'N’invente aucun chiffre : si tu n’en trouves pas de récent et sourcé, ne le donne pas.';
   }
   return commun + '\n\nSujet : un conseil pratique pour les propriétaires qui vendent. Thème : ' + sujet + '. Donne des conseils concrets et actionnables ; termine par une phrase qui rappelle que l’agent Seecret du membre peut l’accompagner (sans formule commerciale lourde). ' +
-    'Si tu cites un chiffre ou une règle, il doit être exact et à jour (cherche sur le web si besoin).';
+    'Ne cite aucun chiffre daté ni aucune règle dont tu n’es pas certain qu’elle est en vigueur aujourd’hui.';
+}
+// Actualité immobilière des 7 derniers jours via Google Actualités (RSS,
+// gratuit, sans clé) : titres, médias, dates et liens.
+async function actualitesImmo() {
+  const requetes = ['taux crédit immobilier', 'prix immobilier France', 'marché immobilier notaires', 'immobilier Paris prix'];
+  const vus = new Set();
+  const out = [];
+  for (const q of requetes) {
+    try {
+      const url = 'https://news.google.com/rss/search?' + new URLSearchParams({ q: q + ' when:7d', hl: 'fr', gl: 'FR', ceid: 'FR:fr' }).toString();
+      const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (Seecret Gazette)' }, signal: AbortSignal.timeout(12000) });
+      if (!r.ok) continue;
+      const xml = await r.text();
+      const items = xml.split('<item>').slice(1, 9);
+      items.forEach((it) => {
+        const tag = (t) => { const m = new RegExp('<' + t + '[^>]*>([\\s\\S]*?)</' + t + '>').exec(it); return m ? m[1].replace(/<!\[CDATA\[|\]\]>/g, '').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim() : ''; };
+        const media = tag('source'); const lien = tag('link'); const date = tag('pubDate');
+        let titre = tag('title');
+        if (media && titre.endsWith(' - ' + media)) titre = titre.slice(0, -(media.length + 3)); // Google ajoute « - Média »
+        const cle = titre.toLowerCase().slice(0, 60);
+        if (!titre || vus.has(cle)) return;
+        vus.add(cle);
+        out.push({ titre: titre, lien: lien, media: media, date: date ? new Date(date).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' }) : '' });
+      });
+    } catch (e) { /* requête suivante */ }
+  }
+  return out.slice(0, 24);
+}
+async function appelGemini(texte, recherche) {
+  const resp = await fetch(GEMINI_API_BASE + '/v1beta/models/' + encodeURIComponent(GEMINI_MODEL) + ':generateContent', {
+    method: 'POST', signal: AbortSignal.timeout(90000),
+    headers: { 'x-goog-api-key': GEMINI_API_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify(Object.assign({ contents: [{ role: 'user', parts: [{ text: texte }] }], generationConfig: { temperature: 0.6 } }, recherche ? { tools: [{ google_search: {} }] } : {}))
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw Object.assign(new Error((data && data.error && data.error.message) || ('Gemini ' + resp.status)), { code: 'API_ERROR', status: resp.status });
+  return data;
 }
 async function redigerArticle(db, rubrique) {
   if (!GEMINI_API_KEY) throw Object.assign(new Error('La rédaction automatique nécessite la clé Gemini (GEMINI_API_KEY).'), { code: 'NO_KEY' });
@@ -1863,16 +1900,32 @@ async function redigerArticle(db, rubrique) {
   const recents = tous.filter((a) => a.rubrique === rubrique).slice(0, 8).map((a) => a.titre);
   const nbConseils = tous.filter((a) => a.rubrique === 'conseil').length;
   const sujet = SUJETS_CONSEIL[nbConseils % SUJETS_CONSEIL.length];
-  const resp = await fetch(GEMINI_API_BASE + '/v1beta/models/' + encodeURIComponent(GEMINI_MODEL) + ':generateContent', {
-    method: 'POST', signal: AbortSignal.timeout(90000),
-    headers: { 'x-goog-api-key': GEMINI_API_KEY, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: consigneArticle(rubrique, recents, sujet) }] }], tools: [{ google_search: {} }], generationConfig: { temperature: 0.6 } })
-  });
-  const data = await resp.json().catch(() => ({}));
-  if (!resp.ok) throw Object.assign(new Error((data && data.error && data.error.message) || ('Gemini ' + resp.status)), { code: 'API_ERROR' });
+  const consigne = consigneArticle(rubrique, recents, sujet);
+  let data = null;
+  let sourcesRss = null;
+  if (rubrique === 'marche') {
+    // 1. Recherche Google intégrée à Gemini (si le quota de la clé le permet).
+    try { data = await appelGemini(consigne, true); } catch (e) { data = null; }
+    // 2. Sinon (quota gratuit épuisé…) : l'actualité de la semaine lue sur
+    //    Google Actualités, transmise à Célia qui rédige UNIQUEMENT à partir d'elle.
+    if (!data) {
+      const actus = await actualitesImmo();
+      if (actus.length < 3) throw Object.assign(new Error('Actualité immobilière introuvable pour le moment (Google Actualités ne répond pas). Réessayez plus tard.'), { code: 'API_ERROR' });
+      sourcesRss = actus;
+      data = await appelGemini(consigne.replace('Cherche sur le web (sources fiables', 'Appuie-toi UNIQUEMENT sur les actualités listées ci-dessous (sources fiables') +
+        '\n\nActualités immobilières de la semaine (titre — média, date) :\n' + actus.map((a, i) => (i + 1) + '. ' + a.titre + ' — ' + a.media + (a.date ? ', ' + a.date : '')).join('\n') +
+        '\n\nN’utilise que les chiffres présents dans ces titres. Termine ta réponse par une dernière ligne « SOURCES: » suivie des numéros des actualités utilisées, séparés par des virgules.', false);
+    }
+  } else {
+    data = await appelGemini(consigne, false);
+  }
   const cand = (data.candidates || [])[0] || {};
   const brut = ((cand.content || {}).parts || []).map((x) => x.text || '').join('').trim();
-  const m = /TITRE\s*:\s*(.+)\s*\n+\s*CHAPO\s*:\s*(.+)\s*\n+\s*TEXTE\s*:\s*\n?([\s\S]+)/i.exec(brut);
+  let corpsBrut = brut;
+  let utilisees = null;
+  const ls = /\n\s*SOURCES?\s*:\s*([\d,\s]+)\s*$/i.exec(corpsBrut);
+  if (ls) { utilisees = ls[1].split(/[,\s]+/).map(Number).filter((n) => n > 0); corpsBrut = corpsBrut.slice(0, ls.index); }
+  const m = /TITRE\s*:\s*(.+)\s*\n+\s*CHAPO\s*:\s*(.+)\s*\n+\s*TEXTE\s*:\s*\n?([\s\S]+)/i.exec(corpsBrut);
   if (!m) throw Object.assign(new Error('Célia n’a pas renvoyé un article exploitable. Réessayez.'), { code: 'API_ERROR' });
   const nettoie = (t) => String(t).replace(/\*\*|__|^#+\s*/gm, '').trim();
   const sources = [];
@@ -1880,6 +1933,10 @@ async function redigerArticle(db, rubrique) {
     const w = c.web || {}; if (!w.uri || sources.some((x) => x.titre === w.title)) return;
     sources.push({ titre: String(w.title || w.uri).slice(0, 120), url: String(w.uri) });
   });
+  if (sourcesRss) {
+    const choisies = utilisees && utilisees.length ? utilisees.map((n) => sourcesRss[n - 1]).filter(Boolean) : sourcesRss.slice(0, 4);
+    choisies.forEach((a) => sources.push({ titre: (a.media ? a.media + ' — ' : '') + a.titre, url: a.lien }));
+  }
   const id = uid('ga');
   const titre = nettoie(m[1]).replace(/^« |»$/g, '').replace(/\.$/, '').slice(0, 110);
   const images = GAZETTE_RUBRIQUES[rubrique].images;
