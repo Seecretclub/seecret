@@ -1016,7 +1016,10 @@
     return '<div class="ed-gallery">' +
       '<div class="ed-gallery-main ed-card-photo" data-slides="' + photos.length + '" data-galerie>' +
         photos.map((src, k) => cadre(src, 'ed-slide' + (k === 0 ? ' on' : ''))).join('') +
-        (b.video ? '<button type="button" class="ed-video-bouton" data-act="video-voir" data-id="' + b.id + '"><svg viewBox="0 0 20 20" width="14" height="14" fill="currentColor"><path d="M6 4.5v11l9-5.5z"/></svg>Home tour</button>' : '') +
+        ((b.video || b.visite) ? '<span class="ed-media-boutons">' +
+          (b.visite ? '<button type="button" class="ed-video-bouton" data-act="visite-ouvrir" data-id="' + b.id + '"><svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 10a7 3 0 1 0 14 0a7 3 0 1 0-14 0"/><path d="M10 3a3 7 0 1 0 0 14a3 7 0 1 0 0-14"/></svg>Visite virtuelle</button>' : '') +
+          (b.video ? '<button type="button" class="ed-video-bouton" data-act="video-voir" data-id="' + b.id + '"><svg viewBox="0 0 20 20" width="14" height="14" fill="currentColor"><path d="M6 4.5v11l9-5.5z"/></svg>Home tour</button>' : '') +
+        '</span>' : '') +
         (photos.length > 1 ? fleche(-1, 'prev', 'm12 5-5 5 5 5') + fleche(1, 'next', 'm8 5 5 5-5 5') +
           '<span class="ed-slide-compte">1 / ' + photos.length + '</span>' : '') +
       '</div>' +
@@ -1247,6 +1250,98 @@
     return '<a class="ed-gz-carte" href="#/gazette/' + a.slug + '"><span class="ed-gz-carte-photo">' + cadre(a.image, '') + '</span>' +
       '<span class="ed-kicker">' + esc(a.kicker) + '</span><b>' + esc(a.titre) + '</b><span class="ed-gz-carte-chapo">' + a.chapo.replace(/</g, '&lt;') + '</span></a>';
   }
+
+  // ---- Visite virtuelle (côté membre) ----
+  // Plein écran, hors du rendu principal. Étape « photo » : on avance d'une
+  // pièce à l'autre avec un zoom vers l'avant ; étape « 360° » : visionneur
+  // Pannellum (libre, servi par le site), on tourne la tête dans la pièce.
+  let visiteEtat = null;
+  let pannellumPret = null;
+  function chargerPannellum() {
+    if (window.pannellum) return Promise.resolve();
+    if (pannellumPret) return pannellumPret;
+    pannellumPret = new Promise((ok, ko) => {
+      const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = 'assets/vendor/pannellum/pannellum.css'; document.head.appendChild(l);
+      const sc = document.createElement('script'); sc.src = 'assets/vendor/pannellum/pannellum.js'; sc.onload = ok; sc.onerror = ko; document.head.appendChild(sc);
+    });
+    return pannellumPret;
+  }
+  function ouvrirVisite(b) {
+    if (!b || !b.visite || !b.visite.etapes.length) return;
+    visiteEtat = { bien: b, i: 0, viewer: null };
+    let r = document.getElementById('visite-root');
+    if (!r) { r = document.createElement('div'); r.id = 'visite-root'; document.body.appendChild(r); }
+    document.body.style.overflow = 'hidden';
+    const et = b.visite.etapes;
+    r.innerHTML = '<div class="ed-visite" role="dialog" aria-label="Visite virtuelle">' +
+      '<div class="ed-visite-tete"><div><span class="ed-kicker">Visite virtuelle</span><b>' + esc(b.titre || '') + '</b></div>' +
+        '<button type="button" class="ed-visite-fermer" data-act="visite-fermer" aria-label="Fermer">×</button></div>' +
+      '<div class="ed-visite-scene" data-visite-scene></div>' +
+      '<div class="ed-visite-pied">' +
+        '<button type="button" class="ed-visite-fleche" data-act="visite-aller" data-id="-1" aria-label="Pièce précédente">‹</button>' +
+        '<div class="ed-visite-plan">' + et.map((e, k) => '<button type="button" data-act="visite-piece" data-id="' + k + '"><i>' + (k + 1) + '</i>' + esc(e.piece || 'Pièce ' + (k + 1)) + (e.mode === '360' ? ' <small>360°</small>' : '') + '</button>').join('') + '</div>' +
+        '<button type="button" class="ed-visite-fleche avancer" data-act="visite-aller" data-id="1" aria-label="Pièce suivante">Avancer ›</button>' +
+      '</div></div>';
+    afficherEtape(0, 0);
+  }
+  function afficherEtape(i, sens) {
+    if (!visiteEtat) return;
+    const et = visiteEtat.bien.visite.etapes;
+    const n = Math.max(0, Math.min(et.length - 1, i));
+    const scene = document.querySelector('[data-visite-scene]');
+    if (!scene) return;
+    const e = et[n];
+    const ancienne = scene.querySelector('.ed-visite-couche.on');
+    if (visiteEtat.viewer) { try { visiteEtat.viewer.destroy(); } catch (x) { /* ignore */ } visiteEtat.viewer = null; }
+    const couche = document.createElement('div');
+    couche.className = 'ed-visite-couche ' + (sens > 0 ? 'depuis-loin' : sens < 0 ? 'depuis-pres' : '');
+    if (e.mode === '360') {
+      couche.innerHTML = '<div class="ed-visite-pano"></div><span class="ed-visite-astuce">Faites glisser pour regarder autour de vous</span>';
+    } else {
+      couche.innerHTML = '<img src="' + esc(/^(data:|https?:|\/)/.test(e.image) ? e.image : 'assets/img/' + e.image) + '" alt=""/>';
+    }
+    couche.insertAdjacentHTML('beforeend', '<span class="ed-visite-piece">' + (n + 1) + ' / ' + et.length + ' · ' + esc(e.piece || 'Pièce ' + (n + 1)) + '</span>');
+    scene.appendChild(couche);
+    if (ancienne) {
+      ancienne.classList.remove('on');
+      ancienne.classList.add(sens < 0 ? 'part-arriere' : 'part-avant');
+      setTimeout(() => ancienne.remove(), 1000);
+    }
+    requestAnimationFrame(() => requestAnimationFrame(() => couche.classList.add('on')));
+    if (e.mode === '360') {
+      chargerPannellum().then(() => {
+        if (!visiteEtat || !couche.isConnected) return;
+        visiteEtat.viewer = window.pannellum.viewer(couche.querySelector('.ed-visite-pano'), {
+          type: 'equirectangular', panorama: e.image, autoLoad: true, showControls: false,
+          compass: false, hfov: 100, autoRotate: -2, autoRotateInactivityDelay: 4000, strings: { loadingLabel: 'Chargement…' }
+        });
+      }).catch(() => { couche.querySelector('.ed-visite-pano').innerHTML = '<p class="ed-visite-erreur">Le panorama n’a pas pu être chargé.</p>'; });
+    }
+    visiteEtat.i = n;
+    document.querySelectorAll('.ed-visite-plan button').forEach((x, k) => x.classList.toggle('on', k === n));
+    const actif = document.querySelector('.ed-visite-plan button.on'); if (actif) actif.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
+    const av = document.querySelector('.ed-visite-fleche.avancer'); if (av) av.textContent = n === et.length - 1 ? 'Recommencer ↺' : 'Avancer ›';
+    const prec = document.querySelector('.ed-visite-fleche[data-id="-1"]'); if (prec) prec.disabled = n === 0;
+  }
+  function fermerVisite() {
+    if (visiteEtat && visiteEtat.viewer) { try { visiteEtat.viewer.destroy(); } catch (x) { /* ignore */ } }
+    visiteEtat = null;
+    const r = document.getElementById('visite-root'); if (r) r.innerHTML = '';
+    document.body.style.overflow = '';
+  }
+  document.addEventListener('keydown', (e) => {
+    if (!visiteEtat) return;
+    if (e.key === 'Escape') fermerVisite();
+    else if (e.key === 'ArrowRight') afficherEtape(visiteEtat.i + 1, 1);
+    else if (e.key === 'ArrowLeft') afficherEtape(visiteEtat.i - 1, -1);
+  });
+  let visiteToucher = null;
+  document.addEventListener('touchstart', (e) => { if (visiteEtat && e.target.closest && e.target.closest('.ed-visite-couche') && !e.target.closest('.ed-visite-pano')) visiteToucher = e.touches[0].clientX; }, { passive: true });
+  document.addEventListener('touchend', (e) => {
+    if (visiteToucher == null || !visiteEtat) return;
+    const dx = e.changedTouches[0].clientX - visiteToucher; visiteToucher = null;
+    if (Math.abs(dx) > 50) afficherEtape(visiteEtat.i + (dx < 0 ? 1 : -1), dx < 0 ? 1 : -1);
+  }, { passive: true });
 
   // ---- Journal de bord (page « Mon bien ») ----
   function rdvTxt(r) {
@@ -2495,6 +2590,16 @@
       state.__chatBrouillon = 'Bonjour, je souhaiterais faire le point sur le prix de mon bien et organiser une réestimation avec vous.';
       actions['chat-ouvrir']();
     },
+    'visite-ouvrir': (el, id) => { ouvrirVisite(bien(id)); },
+    'visite-fermer': () => { fermerVisite(); },
+    'visite-aller': (el, sens) => {
+      if (!visiteEtat) return;
+      const n = visiteEtat.bien.visite.etapes.length;
+      const cible = visiteEtat.i + Number(sens);
+      if (Number(sens) > 0 && visiteEtat.i === n - 1) afficherEtape(0, 1);
+      else afficherEtape(cible, Number(sens));
+    },
+    'visite-piece': (el, i) => { if (visiteEtat) afficherEtape(Number(i), Number(i) >= visiteEtat.i ? 1 : -1); },
     'video-voir': (el, id) => {
       const b = bien(id); if (!b || !b.video) return;
       modal = '<div class="ed-video-modale"><video src="' + esc(b.video.url) + '" controls autoplay playsinline></video>' +

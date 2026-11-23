@@ -335,6 +335,50 @@
     const base = propre != null && !isNaN(propre) ? propre : BAREME.acq;
     return estMixte(c) ? Math.min(base, BAREME.mixte) : base;
   }
+  // ---- Visite virtuelle : parcours pièce par pièce (photos et/ou 360°) ----
+  function brouillonVisite(b) {
+    state.visiteEdition = state.visiteEdition || {};
+    if (!state.visiteEdition[b.serverId]) {
+      state.visiteEdition[b.serverId] = ((b.visite && b.visite.etapes) || []).map((e) => Object.assign({}, e));
+    }
+    return state.visiteEdition[b.serverId];
+  }
+  function srcImg(p) { return /^(data:|https?:|\/)/.test(p) ? p : 'assets/img/' + p; }
+  function carteVisite(b) {
+    if (!b.serverId) return '';
+    const etapes = brouillonVisite(b);
+    const v = b.visite || {};
+    const utilisees = new Set(etapes.map((e) => e.image));
+    const libres = (b.photos || []).filter((p) => !utilisees.has(p));
+    const id = esc(b.serverId);
+    return '<div class="se-card se-visite-carte" data-visite="' + id + '">' +
+      '<div class="se-row" style="justify-content:space-between;gap:10px;flex-wrap:wrap"><h3>Visite virtuelle</h3>' +
+        (v.publie ? '<span class="se-badge open">En ligne sur la fiche</span>' : '<span class="se-badge muted">Non publiée</span>') + '</div>' +
+      '<p class="se-hint" style="margin:6px 0 12px">Rangez les pièces dans l’ordre du parcours (entrée → séjour → cuisine…). Le membre « avance » d’une pièce à l’autre. Ajoutez des panoramas 360° pour qu’il puisse aussi tourner la tête dans une pièce.</p>' +
+      (etapes.length ? '<ol class="se-visite-liste">' + etapes.map((e, i) =>
+        '<li><img src="' + esc(srcImg(e.image)) + '" alt=""/>' +
+          '<div class="se-visite-champs"><input class="se-input" data-visite-piece="' + i + '" maxlength="40" value="' + esc(e.piece || '') + '" placeholder="Nom de la pièce (ex. Séjour)"/>' +
+          '<span class="se-badge ' + (e.mode === '360' ? 'offer' : 'muted') + '">' + (e.mode === '360' ? '360°' : 'Photo') + '</span></div>' +
+          '<div class="se-visite-actions">' +
+            '<button type="button" class="se-btn ghost sm" data-act="visite-monter" data-id="' + id + '" data-i="' + i + '"' + (i === 0 ? ' disabled' : '') + ' aria-label="Monter">↑</button>' +
+            '<button type="button" class="se-btn ghost sm" data-act="visite-descendre" data-id="' + id + '" data-i="' + i + '"' + (i === etapes.length - 1 ? ' disabled' : '') + ' aria-label="Descendre">↓</button>' +
+            '<button type="button" class="se-btn ghost sm" data-act="visite-retirer" data-id="' + id + '" data-i="' + i + '" aria-label="Retirer">✕</button>' +
+          '</div></li>').join('') + '</ol>'
+        : '<p class="se-muted">Aucune pièce pour l’instant.</p>') +
+      (libres.length ? '<div class="se-visite-ajout"><span class="se-sub">Ajouter une photo du bien :</span><div class="se-visite-vignettes">' +
+        libres.map((p) => '<button type="button" data-act="visite-ajouter-photo" data-id="' + id + '" data-url="' + esc(p) + '"><img src="' + esc(srcImg(p)) + '" alt="Ajouter"/></button>').join('') + '</div></div>' : '') +
+      '<div class="se-row" style="gap:8px;flex-wrap:wrap;margin-top:12px">' +
+        '<label class="se-btn ghost" style="cursor:pointer">' + (state.panoEnvoi === b.serverId ? 'Envoi du panorama…' : 'Ajouter un panorama 360°') +
+          '<input type="file" accept="image/jpeg,image/png,image/webp" hidden data-pano="' + id + '"/></label>' +
+        '<span style="flex:1"></span>' +
+        '<button type="button" class="se-btn ghost" data-act="visite-enregistrer" data-id="' + id + '" data-publie="0">Enregistrer sans publier</button>' +
+        '<button type="button" class="se-btn" data-act="visite-enregistrer" data-id="' + id + '" data-publie="1">Publier sur la fiche</button>' +
+      '</div>' +
+      '<details class="se-visite-aide"><summary>Comment faire un panorama 360° ?</summary>' +
+        '<p>Placez-vous au centre de la pièce, téléphone à hauteur des yeux. Avec une appli de photo 360° gratuite (sphère complète) ou une caméra 360°, prenez la photo en tournant lentement sur vous-même. Exportez l’image « équirectangulaire » : une photo deux fois plus large que haute (ex. 6000 × 3000 px), puis ajoutez-la ici.</p></details>' +
+    '</div>';
+  }
+
   // ---- Vidéo « home tour » (format Reel 9:16) ----
   // Fabriquée dans le navigateur, sans service externe : les photos défilent
   // avec un lent zoom (effet Ken Burns) et des fondus, encadrées d'une
@@ -1633,7 +1677,7 @@
       delai: b.delai || '', dejaEnVente: b.dejaEnVente || '', motif: b.motif || '',
       statut: b.statut || 'brouillon', etapeProposition: b.etapeProposition || '', proprietaireId: lead ? lead.id : null,
       photos: b.photos || [], description: b.description || '',
-      coupDeCoeur: b.coupDeCoeur || '', editorial: b.editorial || null, video: b.video || null, venduParAgence: b.venduParAgence === true ? true : (b.venduParAgence === false ? false : null),
+      coupDeCoeur: b.coupDeCoeur || '', editorial: b.editorial || null, video: b.video || null, visite: b.visite || null, panoramas: b.panoramas || [], venduParAgence: b.venduParAgence === true ? true : (b.venduParAgence === false ? false : null),
       atouts: b.atouts || b.annexes || [], annexes: b.annexes || [], mandat: { type: 'simple', fin: '' }, cree: b.cree || nowISO(),
       exclusivite: b.exclusivite || { statut: 'scan_en_cours', liens: [] },
       validation: b.validation || 'en_attente',
@@ -4718,6 +4762,7 @@
             '<div class="se-photos" style="padding:12px">' + (b.photos || []).map((p) => '<div class="se-photo"><img src="' + (/^(data:|https?:|\/)/.test(p) ? p : 'assets/img/' + p) + '" alt=""/></div>').join('') + '</div></div>' +
           carteEditorial(b) +
           carteVideo(b) +
+          carteVisite(b) +
           '<div class="se-card"><h3>Prix et honoraires</h3><div class="se-kv" style="margin-top:10px">' +
             kv('Prix net vendeur', euro(b.prix)) +
             kv('Honoraires acquéreur', tauxTxt(tauxPour(b, null)) + ' % TTC' + ((b.tauxHonoraires === null || b.tauxHonoraires === undefined || b.tauxHonoraires === '') ? ' (barème)' : ' (propre au bien)')) +
@@ -6686,6 +6731,28 @@
       toast('Offre refusée.');
     },
     'message-ouvrir': (el, id) => { location.hash = '#/messages/' + id; },
+    'visite-ajouter-photo': (el, id) => {
+      const b = (state.biensServeur || []).find((x) => x.serverId === id); if (!b) return;
+      brouillonVisite(b).push({ piece: '', image: el.getAttribute('data-url'), mode: 'photo' });
+      render();
+    },
+    'visite-monter': (el, id) => { const l = state.visiteEdition[id]; const i = Number(el.getAttribute('data-i')); if (i > 0) { const x = l[i]; l[i] = l[i - 1]; l[i - 1] = x; } render(); },
+    'visite-descendre': (el, id) => { const l = state.visiteEdition[id]; const i = Number(el.getAttribute('data-i')); if (i < l.length - 1) { const x = l[i]; l[i] = l[i + 1]; l[i + 1] = x; } render(); },
+    'visite-retirer': (el, id) => { state.visiteEdition[id].splice(Number(el.getAttribute('data-i')), 1); render(); },
+    'visite-enregistrer': async (el, id) => {
+      const publie = el.getAttribute('data-publie') === '1';
+      const etapes = state.visiteEdition[id] || [];
+      try {
+        const r = await fetch('/api/biens/' + encodeURIComponent(id) + '/visite', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ etapes: etapes, publie: publie }) });
+        const res = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(res.error || 'Enregistrement impossible');
+        const b = (state.biensServeur || []).find((x) => x.serverId === id);
+        if (b) { b.visite = res.visite; b.panoramas = res.panoramas; }
+        state.visiteEdition[id] = res.visite.etapes.map((e) => Object.assign({}, e));
+        toast(publie ? 'Visite virtuelle publiée sur la fiche.' : 'Visite enregistrée (non publiée).', 'ok');
+      } catch (err) { toast(err.message || 'Enregistrement impossible', 'warn'); }
+      render();
+    },
     'video-generer': async (el, id) => {
       const b = (state.biensServeur || []).find((x) => x.serverId === id);
       if (!b || state.videoEnCours) return;
@@ -6802,6 +6869,27 @@
   });
 
   document.addEventListener('change', async (e) => {
+    if (e.target.hasAttribute('data-pano')) {
+      const id = e.target.getAttribute('data-pano');
+      const f = e.target.files && e.target.files[0];
+      if (!f) return;
+      const charger = () => new Promise((ok) => { const img = new Image(); img.onload = () => ok(img); img.onerror = () => ok(null); img.src = URL.createObjectURL(f); });
+      const img = await charger();
+      if (!img) { toast('Image illisible.', 'warn'); return; }
+      const ratio = img.naturalWidth / img.naturalHeight;
+      if (ratio < 1.9 || ratio > 2.1) toast('Attention : un panorama 360° doit être deux fois plus large que haut (celui-ci fait ' + img.naturalWidth + ' × ' + img.naturalHeight + ' px). Il risque d’être déformé.', 'warn');
+      state.panoEnvoi = id; render();
+      try {
+        const r = await fetch('/api/biens/' + encodeURIComponent(id) + '/panorama', { method: 'POST', headers: { 'content-type': f.type || 'image/jpeg' }, body: f });
+        const res = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(res.error || 'Envoi impossible');
+        const b = (state.biensServeur || []).find((x) => x.serverId === id);
+        if (b) { b.panoramas = (b.panoramas || []).concat([res.url]); brouillonVisite(b).push({ piece: '', image: res.url, mode: '360' }); }
+        toast('Panorama ajouté. Nommez la pièce puis enregistrez.', 'ok');
+      } catch (err) { toast(err.message || 'Envoi impossible', 'warn'); }
+      state.panoEnvoi = null; render();
+      return;
+    }
     if (e.target.matches('form[data-form="bien"] [name="statut"]')) {
       const bloc = e.target.form.querySelector('[data-si-vendu]');
       if (bloc) bloc.hidden = e.target.value !== 'vendu';
@@ -7278,6 +7366,11 @@
   });
 
   document.addEventListener('input', (e) => {
+    if (e.target.hasAttribute && e.target.hasAttribute('data-visite-piece')) {
+      const carte = e.target.closest('[data-visite]');
+      const l = state.visiteEdition && state.visiteEdition[carte.getAttribute('data-visite')];
+      if (l && l[Number(e.target.getAttribute('data-visite-piece'))]) l[Number(e.target.getAttribute('data-visite-piece'))].piece = e.target.value;
+    }
     const fEdito = e.target.closest && e.target.closest('form[data-form="editorial"]');
     if (fEdito) {
       const id = fEdito.getAttribute('data-id');

@@ -350,10 +350,48 @@
     .ed-une-points button span { display: none; }
     .ed-gz-sommaire { grid-template-columns: 1fr; }
   }
-  .ed-video-bouton { position: absolute; left: 12px; top: 12px; z-index: 3; display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 13px; font-weight: 600; padding: 8px 12px; border-radius: 999px; border: 0; background: rgba(20,18,16,.78); color: #fff; cursor: pointer; }
+  .ed-media-boutons { position: absolute; left: 12px; top: 12px; z-index: 3; display: flex; gap: 6px; flex-wrap: wrap; }
+  .ed-video-bouton { position: relative; display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 13px; font-weight: 600; padding: 8px 12px; border-radius: 999px; border: 0; background: rgba(20,18,16,.78); color: #fff; cursor: pointer; }
   .ed-video-bouton:hover { background: rgba(20,18,16,.92); }
   .se-modal:has(.ed-video-modale) { width: min(420px, 100%); }
   .ed-video-modale video { display: block; width: 100%; max-height: 74svh; aspect-ratio: 9/16; background: #141210; border-radius: 14px; object-fit: contain; }
+  /* ---- visite virtuelle ---- */
+  .ed-visite { position: fixed; inset: 0; z-index: 95; background: #0d0c0b; color: #fff; display: flex; flex-direction: column; }
+  .ed-visite-tete { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: calc(12px + env(safe-area-inset-top, 0px)) max(18px, env(safe-area-inset-right, 0px)) 12px max(18px, env(safe-area-inset-left, 0px)); }
+  .ed-visite-tete div { display: flex; flex-direction: column; min-width: 0; }
+  .ed-visite-tete .ed-kicker { color: rgba(255,255,255,.6); }
+  .ed-visite-tete b { font-family: var(--font-serif); font-weight: 420; font-size: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ed-visite-fermer { width: 40px; height: 40px; border-radius: 999px; border: 0; background: rgba(255,255,255,.12); color: #fff; font-size: 24px; cursor: pointer; flex: 0 0 40px; }
+  .ed-visite-scene { position: relative; flex: 1; overflow: hidden; }
+  .ed-visite-couche { position: absolute; inset: 0; opacity: 0; transition: opacity .9s ease, transform 1s cubic-bezier(.2,.7,.2,1); }
+  .ed-visite-couche.depuis-loin { transform: scale(.92); }
+  .ed-visite-couche.depuis-pres { transform: scale(1.12); }
+  .ed-visite-couche.on { opacity: 1; transform: none; }
+  .ed-visite-couche.part-avant { opacity: 0; transform: scale(1.35); }
+  .ed-visite-couche.part-arriere { opacity: 0; transform: scale(.85); }
+  .ed-visite-couche img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .ed-visite-couche.on img { animation: ed-avance 9s ease-out forwards; }
+  @keyframes ed-avance { from { transform: scale(1); } to { transform: scale(1.08); } }
+  .ed-visite-pano { position: absolute; inset: 0; }
+  .ed-visite-piece { position: absolute; left: 18px; top: 14px; z-index: 3; font-size: 13px; font-weight: 600; padding: 6px 10px; border-radius: 8px; background: rgba(13,12,11,.6); }
+  .ed-visite-astuce { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 3; font-size: 12.5px; padding: 6px 12px; border-radius: 999px; background: rgba(13,12,11,.6); pointer-events: none; white-space: nowrap; }
+  .ed-visite-erreur { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; }
+  .ed-visite-pied { display: flex; align-items: center; gap: 10px; padding: 12px max(14px, env(safe-area-inset-right, 0px)) calc(12px + env(safe-area-inset-bottom, 0px)) max(14px, env(safe-area-inset-left, 0px)); }
+  .ed-visite-plan { flex: 1; min-width: 0; display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
+  .ed-visite-plan::-webkit-scrollbar { display: none; }
+  .ed-visite-plan button { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 13px; padding: 8px 12px; border-radius: 999px; border: 1px solid rgba(255,255,255,.22); background: none; color: rgba(255,255,255,.75); cursor: pointer; white-space: nowrap; }
+  .ed-visite-plan button i { font-style: normal; font-size: 11px; opacity: .7; }
+  .ed-visite-plan button small { font-size: 10px; font-weight: 700; opacity: .8; }
+  .ed-visite-plan button.on { background: #fff; color: #141210; border-color: #fff; }
+  .ed-visite-fleche { flex: 0 0 auto; font: inherit; font-size: 14px; font-weight: 600; padding: 10px 14px; border-radius: 999px; border: 0; background: rgba(255,255,255,.14); color: #fff; cursor: pointer; }
+  .ed-visite-fleche.avancer { background: #fff; color: #141210; }
+  .ed-visite-fleche:disabled { opacity: .35; cursor: default; }
+  .ed-visite .pnlm-container { background: #0d0c0b; }
+  @media (max-width: 640px) {
+    .ed-visite-pied { flex-wrap: wrap; }
+    .ed-visite-plan { order: -1; flex: 1 1 100%; }
+    .ed-visite-fleche { flex: 1; }
+  }
   .ed-tour.coin { right: 24px; bottom: 24px; }
   .ed-tour.bas { left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); width: auto; }
   @media (max-width: 860px) {
