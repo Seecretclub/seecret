@@ -876,7 +876,7 @@
     const resultats = appliquerFiltres(visibles, f);
     return edHead('Bonjour ' + (p.prenom || ''), 'Votre cercle off-market',
       'Les biens du club, visibles nulle part ailleurs.') +
-      (plusSuivis.length ? edHero(plusSuivis) : '') +
+      (gazetteUne() || (plusSuivis.length ? edHero(plusSuivis) : '')) +
       (mien
         ? '<a class="ed-panel ed-mien" data-tour="mon-bien" href="#/mon-bien" style="display:flex;gap:16px;align-items:center;text-decoration:none;color:inherit;margin-bottom:28px">' +
             (photoOf(mien) ? '<img src="' + photoOf(mien) + '" alt="" style="width:84px;height:64px;object-fit:cover;border-radius:12px;flex:0 0 84px"/>' : '') +
@@ -890,7 +890,6 @@
             '<div class="ed-card-title" style="font-size:24px;color:#fff;margin:8px 0">Pour voir les biens des autres, montrez le vôtre.</div>' +
             '<a class="se-btn light" href="#/mon-bien">Déposer mon bien</a>' +
           '</div>') +
-      gazetteAccroche() +
       '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:14px;flex-wrap:wrap">' +
         '<div><span class="ed-kicker">Catalogue</span><h2 class="ed-title" style="font-size:28px;margin:4px 0 0">Les biens du club</h2></div>' +
       '</div>' +
@@ -915,7 +914,7 @@
     const prenom = (state.profil.prenom || '').trim();
     const img = (f) => '<img src="assets/img/' + f + '" alt=""/>';
     return '<div class="ed-bienvenue">' +
-      '<div class="ed-bienvenue-visuel">' + img('trocadero-1.jpg') + img('saintgermain-1.jpg') + img('marais-1.jpg') + '<span class="ed-logo">S</span></div>' +
+      '<div class="ed-bienvenue-visuel">' + img('home-loft-bright.jpg') + img('saintgermain-1.jpg') + img('marais-1.jpg') + '<span class="ed-logo">S</span></div>' +
       '<div class="ed-bienvenue-txt">' +
         '<span class="ed-kicker">Bienvenue au club' + (prenom ? ', ' + esc(prenom) : '') + '</span>' +
         '<h2 class="ed-title" style="font-size:clamp(26px,5vw,36px)">Vous avez été accepté sur Seecret.</h2>' +
@@ -1086,9 +1085,10 @@
   }
 
   // ---- La Gazette du club ----
-  // Les chiffres viennent du serveur (vraies données du club) ; le bien du
-  // mois, le quartier et le portrait sont calculés sur le catalogue que le
-  // membre voit déjà (prix HAI, popularité seulement au-dessus du seuil).
+  // Chaque rubrique est un « article » : un bandeau défilant sur l'accueil
+  // (la une), un sommaire (#/gazette) et une page par article
+  // (#/gazette/<rubrique>). Les chiffres viennent du serveur (vraies données
+  // du club) ; le reste est calculé sur le catalogue que le membre voit déjà.
   async function chargerGazette() {
     try { state.gazette = await API.get('/api/gazette'); } catch (e) { /* gazette indisponible */ }
   }
@@ -1097,91 +1097,154 @@
     const j = Math.round(h / 24);
     return { n: j, u: 'jour' + (j > 1 ? 's' : '') };
   }
-  function contenuGazette() {
-    const g = state.gazette || {};
-    const visibles = visiblesPourMembre(state.biens);
-    const bienDuMois = visibles.slice().sort((a, b) => (b.suiveurs || 0) - (a.suiveurs || 0) || new Date(b.cree || 0) - new Date(a.cree || 0))[0] || null;
-    const parQuartier = {};
-    visibles.forEach((b) => { if (!b.quartier) return; const q = parQuartier[b.quartier] = parQuartier[b.quartier] || { id: b.quartier, label: b.label || nomQuartier(b.quartier), n: 0, suiveurs: 0, prix: 0, surface: 0 }; q.n++; q.suiveurs += b.suiveurs || 0; if (b.surface) { q.prix += b.prix; q.surface += b.surface; } });
-    const quartier = Object.keys(parQuartier).map((k) => parQuartier[k]).sort((a, b) => b.n - a.n || b.suiveurs - a.suiveurs)[0] || null;
-    const portrait = visibles.find((b) => b.coupDeCoeur && (!bienDuMois || b.id !== bienDuMois.id)) || visibles.find((b) => b.coupDeCoeur) || null;
-    const coup = g.coupDeCoeur ? bien(g.coupDeCoeur.bienId) : null;
-    return { g: g, bienDuMois: bienDuMois, quartier: quartier, portrait: portrait, coup: coup };
-  }
   function extrait(b, n) {
     const t = ((b.editorial && b.editorial.texte) || b.description || '').replace(/\s+/g, ' ').trim();
     return t.length > n ? t.slice(0, n).replace(/\s\S*$/, '') + '…' : t;
   }
-  function gazetteAccroche() {
-    const c = contenuGazette();
-    const g = c.g;
-    if (!g.numero && !c.bienDuMois) return '';
-    const tuile = (kicker, titre, sous, lien, act) => '<a class="ed-gz-tuile" href="' + (lien || '#/gazette') + '"' + (act ? ' data-act="' + act + '"' : '') + '><span class="ed-kicker">' + kicker + '</span><b>' + titre + '</b><span>' + sous + '</span></a>';
-    const tuiles = [];
-    if (c.bienDuMois) tuiles.push(tuile('Le bien du mois', esc(c.bienDuMois.titre), esc(c.bienDuMois.label || '') + (popularite(c.bienDuMois) ? ' · suivi par ' + num(c.bienDuMois.suiveurs) + ' membres' : ''), '#/gazette'));
-    if (g.record) { const d = dureeTxt(g.record.heures); tuiles.push(tuile('Le record du mois', d.n + ' ' + d.u, 'entre l’ouverture des visites et la première offre', '#/gazette')); }
-    else if (g.chiffres) tuiles.push(tuile('Les chiffres du club', num(g.chiffres.biens) + ' biens', 'visibles nulle part ailleurs', '#/gazette'));
-    tuiles.push(tuile('Booster ma vente', 'La réestimation avec votre agent', 'Trois leviers pour vendre plus vite', '#/gazette'));
-    return '<section class="ed-gz-accroche">' +
-      '<div class="ed-gz-accroche-tete"><span class="ed-gz-logo">La Gazette</span><span class="ed-kicker">' + esc(g.numero || '') + '</span><a class="se-btn ghost sm" href="#/gazette">Lire la Gazette</a></div>' +
-      '<div class="ed-gz-tuiles">' + tuiles.join('') + '</div>' +
-    '</section>';
-  }
-  function edViewGazette() {
-    const c = contenuGazette();
-    const g = c.g;
+  function paragraphes(t) { return String(t || '').split(/\n\s*\n/).map((x) => x.trim()).filter(Boolean).map((x) => '<p>' + esc(x).replace(/\n/g, '<br>') + '</p>').join(''); }
+  function articlesGazette() {
+    const g = state.gazette || {};
     const ch = g.chiffres || {};
-    const b = c.bienDuMois;
-    const blocs = [];
-    if (b) {
-      blocs.push('<article class="ed-gz-une">' +
-        '<a class="ed-gz-une-photo" href="#/bien/' + b.id + '">' + (estVerrouille(b) ? '' : cadre(photoOf(b), '')) + '</a>' +
-        '<div class="ed-gz-une-txt"><span class="ed-kicker">Le bien du mois</span>' +
-          '<h2 class="ed-title">' + esc((b.editorial && b.editorial.titre) || b.titre) + '</h2>' +
-          '<p class="ed-gz-meta">' + esc([b.type, b.label].filter(Boolean).join(' · ')) + ' · ' + euro(b.prix) + '</p>' +
-          (popularite(b) ? '<span class="ed-pop">' + esc(popularite(b).texte) + '</span>' : '') +
-          (extrait(b, 320) ? '<p class="ed-gz-chapo">' + esc(extrait(b, 320)) + '</p>' : '') +
-          (b.coupDeCoeur ? '<blockquote class="ed-aime"><span>Ses propriétaires l’aiment pour…</span>« ' + esc(b.coupDeCoeur) + ' »</blockquote>' : '') +
-          '<a class="se-btn" style="margin-top:16px;align-self:flex-start" href="#/bien/' + b.id + '">Découvrir le bien</a>' +
-        '</div></article>');
+    const visibles = visiblesPourMembre(state.biens);
+    const photoBien = (b, defaut) => (b && !estVerrouille(b) && photoOf(b)) || ('assets/img/' + defaut);
+    const lienBien = (b, libelle) => b && !estVerrouille(b) ? '<a class="se-btn" href="#/bien/' + b.id + '">' + (libelle || 'Découvrir le bien') + '</a>' : '';
+    const aime = (b) => b && b.coupDeCoeur ? '<blockquote class="ed-aime"><span>Ses propriétaires l’aiment pour…</span>« ' + esc(b.coupDeCoeur) + ' »</blockquote>' : '';
+    const out = [];
+
+    const bm = visibles.slice().sort((a, b) => (b.suiveurs || 0) - (a.suiveurs || 0) || new Date(b.cree || 0) - new Date(a.cree || 0))[0];
+    if (bm) {
+      out.push({ slug: 'bien-du-mois', kicker: 'Le plus suivi du mois', lienDirect: estVerrouille(bm) ? null : '#/bien/' + bm.id, bouton: 'Découvrir le bien', titre: (bm.editorial && bm.editorial.titre) || bm.titre,
+        chapo: [bm.type, bm.label].filter(Boolean).join(' · ') + ' · ' + euro(bm.prix) + (popularite(bm) ? ' · ' + popularite(bm).texte.toLowerCase() : ''),
+        image: photoBien(bm, 'home-1.jpg'),
+        corps: (popularite(bm) ? '<span class="ed-pop">' + esc(popularite(bm).texte) + '</span>' : '') +
+          '<div class="ed-edito">' + paragraphes((bm.editorial && bm.editorial.texte) || bm.description) + '</div>' + aime(bm) + lienBien(bm) });
     }
-    const colonnes = [];
     if (g.record) {
       const d = dureeTxt(g.record.heures);
-      colonnes.push('<article class="ed-gz-col"><span class="ed-kicker">Le record du mois</span><div class="ed-gz-chiffre">' + d.n + '<small>' + d.u + '</small></div>' +
-        '<p>C’est le temps qu’il a fallu à <b>' + esc(g.record.titre) + '</b>' + (g.record.quartier ? ' (' + esc(g.record.quartier) + ')' : '') + ' pour recevoir sa première offre après l’ouverture des visites.</p>' +
-        '<p class="se-hint">Les biens présentés en avant-première arrivent aux visites avec un public déjà conquis.</p></article>');
+      const rb = bien(g.record.bienId);
+      out.push({ slug: 'record', kicker: 'Le record du mois', titre: d.n + ' ' + d.u + ' pour une première offre',
+        chapo: esc(g.record.titre) + (g.record.quartier ? ' (' + esc(g.record.quartier) + ')' : '') + ' a reçu sa première offre ' + d.n + ' ' + d.u + ' après l’ouverture des visites.',
+        image: photoBien(rb, 'home-5.jpg'),
+        corps: '<div class="ed-gz-chiffre">' + d.n + '<small>' + d.u + '</small></div>' +
+          '<p>C’est le temps qu’il a fallu à <b>' + esc(g.record.titre) + '</b>' + (g.record.quartier ? ' (' + esc(g.record.quartier) + ')' : '') + ' pour recevoir sa première offre, après l’ouverture des visites.</p>' +
+          '<p>La raison tient au fonctionnement du club : en avant-première, le bien est déjà suivi par des membres qualifiés, financement en main. Le jour où les visites ouvrent, ils sont prêts.</p>' + (rb ? lienBien(rb, 'Voir le bien') : '') });
     }
-    colonnes.push('<article class="ed-gz-col"><span class="ed-kicker">Les chiffres du club</span><div class="ed-gz-stats">' +
-      '<div><b>' + num(ch.biens || 0) + '</b><span>bien' + ((ch.biens || 0) > 1 ? 's' : '') + ' visible' + ((ch.biens || 0) > 1 ? 's' : '') + ' nulle part ailleurs</span></div>' +
-      '<div><b>' + num(ch.membres || 0) + '</b><span>membres</span></div>' +
-      '<div><b>' + num(ch.visites || 0) + '</b><span>visite' + ((ch.visites || 0) > 1 ? 's organisées' : ' organisée') + '</span></div>' +
-      (ch.ventes ? '<div><b>' + euro(ch.commissionsEvitees || 0) + '</b><span>de commissions vendeur évitées*</span></div>' : '<div><b>0 €</b><span>de commission côté vendeur, toujours</span></div>') +
-      '</div>' + (ch.ventes ? '<p class="se-hint">* Estimation sur ' + num(ch.ventes) + ' vente' + (ch.ventes > 1 ? 's' : '') + ' du club, sur la base d’une commission vendeur classique de ' + ch.commissionReference + ' %.</p>' : '') + '</article>');
-    if (c.quartier) {
-      const q = c.quartier;
-      colonnes.push('<article class="ed-gz-col"><span class="ed-kicker">Le quartier du mois</span><h3 class="ed-gz-h3">' + esc(q.label) + '</h3>' +
-        '<p>' + num(q.n) + ' bien' + (q.n > 1 ? 's' : '') + ' du club' + (q.surface ? ', autour de <b>' + euro(Math.round(q.prix / q.surface)) + ' / m²</b> honoraires inclus' : '') + '.</p>' +
-        '<button type="button" class="se-btn ghost sm" data-act="gazette-quartier" data-id="' + esc(q.id) + '">Voir les biens du quartier</button></article>');
+    out.push({ slug: 'chiffres', kicker: 'Les chiffres du club', titre: num(ch.biens || 0) + ' bien' + ((ch.biens || 0) > 1 ? 's' : '') + ' que vous ne verrez nulle part ailleurs',
+      chapo: num(ch.membres || 0) + ' membres, ' + num(ch.visites || 0) + ' visite' + ((ch.visites || 0) > 1 ? 's organisées' : ' organisée') + ', et toujours zéro commission côté vendeur.',
+      image: 'assets/img/saintgermain-3.jpg',
+      corps: '<div class="ed-gz-stats">' +
+        '<div><b>' + num(ch.biens || 0) + '</b><span>bien' + ((ch.biens || 0) > 1 ? 's visibles' : ' visible') + ' nulle part ailleurs</span></div>' +
+        '<div><b>' + num(ch.membres || 0) + '</b><span>membres</span></div>' +
+        '<div><b>' + num(ch.visites || 0) + '</b><span>visite' + ((ch.visites || 0) > 1 ? 's organisées' : ' organisée') + '</span></div>' +
+        (ch.ventes ? '<div><b>' + euro(ch.commissionsEvitees || 0) + '</b><span>de commissions vendeur évitées*</span></div>' : '<div><b>0 €</b><span>de commission côté vendeur, toujours</span></div>') + '</div>' +
+        (ch.ventes ? '<p class="se-hint">* Estimation sur ' + num(ch.ventes) + ' vente' + (ch.ventes > 1 ? 's' : '') + ' du club, sur la base d’une commission vendeur classique de ' + ch.commissionReference + ' %.</p>' : '') +
+        '<p>Sur Seecret, un bien n’est montré qu’aux membres du club : ni portail, ni vitrine. C’est ce qui préserve la discrétion des propriétaires et la valeur de leur bien.</p>' });
+    const parQ = {};
+    visibles.forEach((b) => { if (!b.quartier) return; const q = parQ[b.quartier] = parQ[b.quartier] || { id: b.quartier, label: b.label || nomQuartier(b.quartier), n: 0, suiveurs: 0, prix: 0, surface: 0, biens: [] }; q.n++; q.suiveurs += b.suiveurs || 0; q.biens.push(b); if (b.surface) { q.prix += b.prix; q.surface += b.surface; } });
+    const q = Object.keys(parQ).map((k) => parQ[k]).sort((a, b) => b.n - a.n || b.suiveurs - a.suiveurs)[0];
+    if (q) {
+      out.push({ slug: 'quartier', kicker: 'Le quartier du mois', titre: q.label,
+        chapo: num(q.n) + ' bien' + (q.n > 1 ? 's' : '') + ' du club' + (q.surface ? ', autour de ' + euro(Math.round(q.prix / q.surface)) + ' / m² honoraires inclus' : '') + '.',
+        image: photoBien(q.biens[0], 'marais-1.jpg'),
+        corps: '<p>' + esc(q.label) + ' est le quartier le plus présent du club ce mois-ci : ' + num(q.n) + ' bien' + (q.n > 1 ? 's' : '') + (q.surface ? ', pour un prix moyen d’environ <b>' + euro(Math.round(q.prix / q.surface)) + ' / m²</b> honoraires inclus' : '') + '.</p>' +
+          '<div class="ed-grid" style="margin-top:6px">' + q.biens.slice(0, 3).map(edCard).join('') + '</div>' +
+          '<button type="button" class="se-btn ghost" data-act="gazette-quartier" data-id="' + esc(q.id) + '">Voir tous les biens du quartier</button>' });
     }
-    const booster = '<article class="ed-gz-article"><span class="ed-kicker">Booster ma vente</span><h3 class="ed-gz-h3">La réestimation avec votre agent</h3>' +
-      '<p class="ed-gz-chapo">Un bien bien présenté et au juste prix se vend plus vite, et souvent mieux. Trois leviers à activer avec votre agent :</p>' +
-      '<ol class="ed-gz-liste"><li><b>Le juste prix.</b> Votre agent compare votre bien aux ventes réelles de la rue et à l’intérêt mesuré sur Seecret (membres qui le suivent, visites demandées).</li>' +
-      '<li><b>Les photos.</b> Lumière naturelle, angles larges, pièces désencombrées : la première photo décide du clic.</li>' +
-      '<li><b>Le bon moment.</b> L’avant-première crée l’attente ; l’ouverture des visites la transforme en offres.</li></ol>' +
-      '<button type="button" class="se-btn" data-act="gazette-reestimation">Demander une réestimation</button></article>';
-    const portrait = c.portrait ? '<article class="ed-gz-article ed-gz-portrait"><span class="ed-kicker">Portrait</span><h3 class="ed-gz-h3">' + esc(c.portrait.titre) + '</h3>' +
-      '<blockquote class="ed-gz-citation">« ' + esc(c.portrait.coupDeCoeur) + ' »</blockquote><p class="se-hint">Ses propriétaires, à propos de leur bien.</p>' +
-      '<a class="se-btn ghost sm" href="#/bien/' + c.portrait.id + '">Voir le bien</a></article>' : '';
-    const mot = g.mot ? '<article class="ed-gz-article ed-gz-mot"><span class="ed-kicker">Le mot du mois</span>' + (g.mot.titre ? '<h3 class="ed-gz-h3">' + esc(g.mot.titre) + '</h3>' : '') +
-      String(g.mot.texte).split(/\n\s*\n/).map((x) => '<p>' + esc(x.trim()).replace(/\n/g, '<br>') + '</p>').join('') + (g.mot.auteur ? '<p class="se-hint">— ' + esc(g.mot.auteur) + '</p>' : '') + '</article>' : '';
-    const coup = c.coup ? '<article class="ed-gz-article"><span class="ed-kicker">Le coup de cœur de l’agent</span><h3 class="ed-gz-h3">' + esc(c.coup.titre) + '</h3>' +
-      (g.coupDeCoeur.phrase ? '<p class="ed-gz-chapo">« ' + esc(g.coupDeCoeur.phrase) + ' »</p>' : '') + (g.coupDeCoeur.auteur ? '<p class="se-hint">— ' + esc(g.coupDeCoeur.auteur) + '</p>' : '') +
-      '<a class="se-btn ghost sm" href="#/bien/' + c.coup.id + '">Voir le bien</a></article>' : '';
+    out.push({ slug: 'booster-ma-vente', kicker: 'Booster ma vente', titre: 'La réestimation avec votre agent',
+      chapo: 'Un bien bien présenté et au juste prix se vend plus vite, et souvent mieux. Trois leviers à activer.',
+      image: 'assets/img/home-6.jpg',
+      corps: '<ol class="ed-gz-liste"><li><b>Le juste prix.</b> Votre agent compare votre bien aux ventes réelles de la rue et à l’intérêt mesuré sur Seecret : membres qui le suivent, visites demandées.</li>' +
+        '<li><b>Les photos.</b> Lumière naturelle, angles larges, pièces désencombrées : la première photo décide du clic.</li>' +
+        '<li><b>Le bon moment.</b> L’avant-première crée l’attente ; l’ouverture des visites la transforme en offres.</li></ol>' +
+        '<button type="button" class="se-btn" data-act="gazette-reestimation">Demander une réestimation</button>' });
+    const pt = visibles.find((b) => b.coupDeCoeur && (!bm || b.id !== bm.id)) || (bm && bm.coupDeCoeur ? null : visibles.find((b) => b.coupDeCoeur));
+    if (pt) {
+      out.push({ slug: 'portrait', kicker: 'Portrait', titre: '« ' + pt.coupDeCoeur + ' »', chapo: 'Ses propriétaires, à propos de ' + (pt.titre || 'leur bien') + '.',
+        image: photoBien(pt, 'home-3.jpg'),
+        corps: '<blockquote class="ed-gz-citation">« ' + esc(pt.coupDeCoeur) + ' »</blockquote><p class="se-hint">Ses propriétaires, à propos de leur bien.</p>' +
+          '<div class="ed-edito">' + paragraphes(extrait(pt, 600)) + '</div>' + lienBien(pt, 'Voir le bien') });
+    }
+    if (g.mot) {
+      out.push({ slug: 'mot-du-mois', kicker: 'Le mot du mois', titre: g.mot.titre || 'Le mot de l’agence', chapo: String(g.mot.texte).replace(/\s+/g, ' ').slice(0, 150).replace(/\s\S*$/, '') + '…',
+        image: 'assets/img/home-jardin.jpg',
+        corps: '<div class="ed-edito">' + paragraphes(g.mot.texte) + '</div>' + (g.mot.auteur ? '<p class="se-hint">— ' + esc(g.mot.auteur) + '</p>' : '') });
+    }
+    const cb = g.coupDeCoeur ? bien(g.coupDeCoeur.bienId) : null;
+    if (cb) {
+      out.push({ slug: 'coup-de-coeur', kicker: 'Le coup de cœur de l’agent', titre: cb.titre, chapo: g.coupDeCoeur.phrase ? '« ' + g.coupDeCoeur.phrase + ' »' : [cb.type, cb.label].filter(Boolean).join(' · '),
+        image: photoBien(cb, 'home-loft-bright.jpg'),
+        corps: (g.coupDeCoeur.phrase ? '<p class="ed-gz-chapo">« ' + esc(g.coupDeCoeur.phrase) + ' »</p>' : '') + (g.coupDeCoeur.auteur ? '<p class="se-hint">— ' + esc(g.coupDeCoeur.auteur) + '</p>' : '') +
+          '<div class="ed-edito">' + paragraphes(extrait(cb, 600)) + '</div>' + aime(cb) + lienBien(cb) });
+    }
+    return out;
+  }
+
+  // La une : bandeau de l'accueil, articles qui défilent seuls (pause au
+  // survol), flèches, points et glissé du doigt ; un clic ouvre l'article.
+  function gazetteUne() {
+    const arts = articlesGazette();
+    if (!arts.length) return '';
+    return '<section class="ed-une" data-une aria-roledescription="carrousel" aria-label="La Gazette du club">' +
+      arts.map((a, i) => '<a class="ed-une-slide' + (i === 0 ? ' on' : '') + '" href="' + (a.lienDirect || '#/gazette/' + a.slug) + '" aria-hidden="' + (i === 0 ? 'false' : 'true') + '"' + (i === 0 ? '' : ' tabindex="-1"') + '>' +
+        cadre(a.image, '') + '<span class="ed-une-voile"></span>' +
+        '<span class="ed-une-txt"><span class="ed-une-marque">' + (a.lienDirect ? '' : 'La Gazette · ') + esc(a.kicker) + '</span>' +
+          '<span class="ed-une-titre">' + esc(a.titre) + '</span>' +
+          '<span class="ed-une-chapo">' + a.chapo.replace(/</g, '&lt;') + '</span>' +
+          '<span class="se-btn light sm ed-une-lire">' + esc(a.bouton || 'Lire l’article') + '</span></span></a>').join('') +
+      (arts.length > 1
+        ? '<button type="button" class="ed-une-nav prev" data-act="une-defiler" data-id="-1" aria-label="Article précédent"><svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m12 5-5 5 5 5"/></svg></button>' +
+          '<button type="button" class="ed-une-nav next" data-act="une-defiler" data-id="1" aria-label="Article suivant"><svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m8 5 5 5-5 5"/></svg></button>' +
+          '<div class="ed-une-points" role="tablist">' + arts.map((a, i) => '<button type="button" role="tab" class="' + (i === 0 ? 'on' : '') + '" data-act="une-aller" data-id="' + i + '" aria-label="' + esc(a.kicker) + '"><span>' + esc(a.kicker) + '</span></button>').join('') + '</div>'
+        : '') +
+    '</section>';
+  }
+  function uneAller(box, i) {
+    if (!box) return;
+    const slides = box.querySelectorAll('.ed-une-slide');
+    if (!slides.length) return;
+    const n = (i + slides.length) % slides.length;
+    slides.forEach((s, k) => { s.classList.toggle('on', k === n); s.setAttribute('aria-hidden', k === n ? 'false' : 'true'); if (k === n) s.removeAttribute('tabindex'); else s.setAttribute('tabindex', '-1'); });
+    box.querySelectorAll('.ed-une-points button').forEach((d, k) => d.classList.toggle('on', k === n));
+    box.__index = n;
+  }
+  setInterval(() => {
+    const box = document.querySelector('[data-une]');
+    if (!box || box.__pause || document.visibilityState !== 'visible') return;
+    uneAller(box, (box.__index || 0) + 1);
+  }, 6500);
+  document.addEventListener('pointerenter', (e) => { if (e.target && e.target.hasAttribute && e.target.hasAttribute('data-une') && e.pointerType !== 'touch') e.target.__pause = true; }, true);
+  document.addEventListener('pointerleave', (e) => { if (e.target && e.target.hasAttribute && e.target.hasAttribute('data-une')) e.target.__pause = false; }, true);
+  let uneToucher = null;
+  document.addEventListener('touchstart', (e) => { const box = e.target.closest && e.target.closest('[data-une]'); if (box) uneToucher = { box: box, x: e.touches[0].clientX, y: e.touches[0].clientY }; }, { passive: true });
+  document.addEventListener('touchend', (e) => {
+    if (!uneToucher) return;
+    const dx = e.changedTouches[0].clientX - uneToucher.x; const dy = e.changedTouches[0].clientY - uneToucher.y;
+    if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy)) { uneToucher.box.__glisse = Date.now(); uneAller(uneToucher.box, (uneToucher.box.__index || 0) + (dx < 0 ? 1 : -1)); }
+    uneToucher = null;
+  }, { passive: true });
+  // Un glissé ne doit pas ouvrir l'article sous le doigt.
+  document.addEventListener('click', (e) => { const box = e.target.closest && e.target.closest('[data-une]'); if (box && box.__glisse && Date.now() - box.__glisse < 400) { e.preventDefault(); e.stopPropagation(); } }, true);
+
+  function edViewGazette(r) {
+    const arts = articlesGazette();
+    const g = state.gazette || {};
+    const art = r && r.param ? arts.find((a) => a.slug === r.param) : null;
+    if (art) {
+      const autres = arts.filter((a) => a.slug !== art.slug);
+      return '<div style="margin-bottom:18px"><a class="se-btn ghost sm" href="#/gazette">← La Gazette</a></div>' +
+        '<article class="ed-gz-article-page">' +
+          '<header><span class="ed-kicker">La Gazette · ' + esc(art.kicker) + '</span><h1 class="ed-title">' + esc(art.titre) + '</h1><p class="ed-gz-chapo">' + art.chapo.replace(/</g, '&lt;') + '</p></header>' +
+          '<div class="ed-gz-article-photo">' + cadre(art.image, '') + '</div>' +
+          '<div class="ed-gz-article-corps">' + art.corps + '</div>' +
+        '</article>' +
+        (autres.length ? '<section class="ed-gz-autres"><span class="ed-kicker">À lire aussi</span><div class="ed-gz-sommaire">' + autres.slice(0, 3).map(carteArticle).join('') + '</div></section>' : '');
+    }
     return '<header class="ed-gz-tete"><span class="ed-kicker">Le magazine du club · ' + esc(g.numero || '') + '</span><h1 class="ed-gz-titre">La Gazette</h1><p class="ed-sub">Les biens qui font parler le club, les chiffres du mois, et nos conseils pour vendre mieux.</p></header>' +
-      blocs.join('') +
-      '<div class="ed-gz-colonnes">' + colonnes.join('') + '</div>' +
-      '<div class="ed-gz-articles">' + mot + booster + portrait + coup + '</div>';
+      '<div class="ed-gz-sommaire">' + arts.map(carteArticle).join('') + '</div>';
+  }
+  function carteArticle(a) {
+    return '<a class="ed-gz-carte" href="#/gazette/' + a.slug + '"><span class="ed-gz-carte-photo">' + cadre(a.image, '') + '</span>' +
+      '<span class="ed-kicker">' + esc(a.kicker) + '</span><b>' + esc(a.titre) + '</b><span class="ed-gz-carte-chapo">' + a.chapo.replace(/</g, '&lt;') + '</span></a>';
   }
 
   // ---- Journal de bord (page « Mon bien ») ----
@@ -1485,6 +1548,9 @@
       document.body.appendChild(back);
     }
 
+    const cleVue = r.name + '/' + (r.param || '');
+    if (r.name === 'gazette' && cleVue !== state.__derniereVue) window.scrollTo({ top: 0 });
+    state.__derniereVue = cleVue;
     if (r.name !== lastRoute) {
       // L'ancien lien « Catalogue » mène à l'accueil, directement sur les filtres.
       const ancre = r.name === 'catalogue' ? document.getElementById('catalogue') : null;
@@ -2428,6 +2494,8 @@
       state.__chatBrouillon = 'Bonjour, je souhaiterais faire le point sur le prix de mon bien et organiser une réestimation avec vous.';
       actions['chat-ouvrir']();
     },
+    'une-defiler': (el, sens) => { const box = el.closest('[data-une]'); uneAller(box, (box.__index || 0) + Number(sens)); },
+    'une-aller': (el, i) => { uneAller(el.closest('[data-une]'), Number(i) || 0); },
     'menu-toggle': () => { state.__menuOuvert = !state.__menuOuvert; render(); },
     'bienvenue-ok': () => {
       modal = null;
@@ -3010,12 +3078,11 @@
     const vig = box.parentNode && box.parentNode.querySelector('.ed-vignettes');
     if (vig && box.hasAttribute('data-galerie')) vig.querySelectorAll('button').forEach((x, k) => x.classList.toggle('on', k === i));
   }
-  // Photo verticale dans un cadre horizontal : affichée entière sur fond flou.
+  // Toutes les photos remplissent un cadre horizontal (recadrage centré) ;
+  // une photo verticale est simplement cadrée un peu plus haut que le centre.
   function ajusterCadre(img) {
     if (!img || !img.naturalWidth) return;
-    const box = img.parentNode;
-    const w = box.clientWidth || 4; const h = box.clientHeight || 3;
-    box.classList.toggle('vertical', img.naturalWidth / img.naturalHeight < (w / h) * 0.8);
+    img.parentNode.classList.toggle('vertical', img.naturalWidth / img.naturalHeight < 1);
   }
   document.addEventListener('load', (e) => { if (e.target && e.target.hasAttribute && e.target.hasAttribute('data-cadre')) ajusterCadre(e.target); }, true);
   let survolPhotos = null;
