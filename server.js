@@ -1635,6 +1635,89 @@ app.delete('/api/biens/:id/video', requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------------- Sectorisation scolaire (Ville de Paris, open data) ----------------
+// Maternelle, élémentaire et collège de secteur pour la position EXACTE du
+// bien (secteurs officiels de la rentrée la plus récente). Les lycées
+// parisiens ne sont pas sectorisés à l'adresse (affectation Affelnet).
+// Côté membres, la sectorisation est réservée au propriétaire et aux
+// visites confirmées : un secteur d'école élémentaire couvre quelques rues
+// et dévoilerait l'adresse.
+const ECOLES_CACHE = {};
+const ECOLES_JEUX = { maternelle: 'secteurs-scolaires-maternelles', elementaire: 'secteurs-scolaires-ecoles-elementaires', college: 'secteurs-scolaires-colleges' };
+function casse(t) {
+  return String(t || '').toLowerCase().replace(/\s+/g, ' ').trim()
+    .replace(/(^|[\s'’(-])([a-zàâçéèêëîïôûùüÿñæœ])/g, (m, a, c) => a + c.toUpperCase())
+    .replace(/\b(De|Du|Des|La|Le|Les|Et|D'|L')\b/g, (m) => m.toLowerCase()).replace(/^./, (c) => c.toUpperCase())
+    .replace(/\b(Rue|Avenue|Boulevard|Place|Quai|Impasse|Passage|Square|Cité|Villa|Allée)\b/g, (m) => m.toLowerCase());
+}
+// « QUATRE FILS 10 B ELEM - DANIEL CORDIER » + « 10 bis RUE DES QUATRE FILS »
+//   → « École élémentaire Daniel Cordier, 10 bis rue des Quatre Fils »
+function nomEtablissement(lib, adr, type) {
+  const brut = String(lib || '').replace(/\s+/g, ' ').trim();
+  if (type === 'college') return 'Collège ' + casse(brut);
+  const m = /^(.*?)\s+(\d+\s*(?:B(?:IS)?|T(?:ER)?)?)\s+(MAT|ELEM|POLY)\b\s*(?:-\s*(.*))?$/i.exec(brut);
+  const genre = type === 'maternelle' ? 'École maternelle' : 'École élémentaire';
+  if (!m) return genre + ' ' + casse(brut.replace(/\b(MAT|ELEM|POLY)\b/gi, ''));
+  const nom = m[4] ? ' ' + casse(m[4]) : '';
+  if (adr) return genre + nom + ', ' + casse(adr).replace(/ (Bis|Ter)\b/g, (x) => x.toLowerCase());
+  return genre + (nom || ' ' + casse(m[1])) + ' (' + m[2].replace(/\s*B(IS)?$/i, ' bis').trim() + ')';
+}
+async function sectorisationEcoles(lat, lon) {
+  const cle = Number(lat).toFixed(5) + ',' + Number(lon).toFixed(5);
+  if (ECOLES_CACHE[cle] && Date.now() - ECOLES_CACHE[cle].at < 7 * 24 * 3600 * 1000) return ECOLES_CACHE[cle].data;
+  const point = "geom'POINT(" + Number(lon) + ' ' + Number(lat) + ")'";
+  const out = { source: 'Ville de Paris — secteurs scolaires (open data)' };
+  for (const type of Object.keys(ECOLES_JEUX)) {
+    const url = 'https://opendata.paris.fr/api/explore/v2.1/catalog/datasets/' + ECOLES_JEUX[type] + '/records?' + new URLSearchParams({ where: 'intersects(geo_shape, ' + point + ')', order_by: 'annee_scol desc', limit: '1', select: 'lib_etab_1,lib_etab_2,adr_etab_1,adr_etab_2,annee_scol' }).toString();
+    const r = await fetchAvecRetry(url, { headers: { Accept: 'application/json' } }, 2);
+    if (!r.ok) throw new Error('Open data Paris HTTP ' + r.status);
+    const x = ((await r.json()).results || [])[0];
+    out[type] = x ? { etablissements: [[x.lib_etab_1, x.adr_etab_1], [x.lib_etab_2, x.adr_etab_2]].filter((e) => e[0]).map((e) => nomEtablissement(e[0], e[1], type)), annee: x.annee_scol || '' } : null;
+  }
+  ECOLES_CACHE[cle] = { at: Date.now(), data: out };
+  return out;
+}
+function bienEstParis(b) { return /^75\d{3}$/.test(String(b.codePostal || '')) || /^p\d{1,2}$/.test(String(b.quartier || '')) || /paris/i.test(String(b.ville || '')); }
+// Position du bien : celle enregistrée, sinon géocodage de son adresse
+// (Base Adresse Nationale), mémorisé sur le bien.
+async function positionBien(b) {
+  if (b.lat && b.lon) return true;
+  const adr = [b.adresse, b.codePostal, b.ville].filter(Boolean).join(' ').trim();
+  if (!adr || !/\d/.test(b.adresse || '')) return false;
+  try {
+    const r = await fetch('https://api-adresse.data.gouv.fr/search/?' + new URLSearchParams({ q: adr, limit: '1' }).toString(), { signal: AbortSignal.timeout(8000) });
+    const f = ((await r.json()).features || [])[0];
+    if (!f || (f.properties && f.properties.score < 0.5)) return false;
+    const db = readDb();
+    const bb = db.biens.find((x) => x.id === b.id);
+    if (bb) { bb.lat = f.geometry.coordinates[1]; bb.lon = f.geometry.coordinates[0]; writeDb(db); }
+    b.lat = f.geometry.coordinates[1]; b.lon = f.geometry.coordinates[0];
+    return true;
+  } catch (e) { return false; }
+}
+async function repondreEcoles(res, b) {
+  if (!b) return res.status(404).json({ error: 'Bien introuvable.' });
+  if (!bienEstParis(b)) return res.json({ ok: true, disponible: false, raison: 'La sectorisation automatique couvre Paris intra-muros.' });
+  if (!(await positionBien(b))) return res.json({ ok: true, disponible: false, raison: 'Position du bien inconnue : renseignez son adresse exacte (numéro et rue).' });
+  try { res.json(Object.assign({ ok: true, disponible: true }, await sectorisationEcoles(b.lat, b.lon))); }
+  catch (e) { res.status(502).json({ error: 'Secteurs scolaires indisponibles pour le moment.' }); }
+}
+app.get('/api/biens/:id/ecoles', requireAdmin, async (req, res) => {
+  const db = readDb();
+  await repondreEcoles(res, db.biens.find((x) => x.id === req.params.id));
+});
+app.get('/api/ecoles/:bienId', requireAuth, async (req, res) => {
+  const db = req.db;
+  const b = db.biens.find((x) => x.id === req.params.bienId);
+  if (!b) return res.status(404).json({ error: 'Bien introuvable.' });
+  const proprietaire = b.leadId === req.lead.id;
+  const visiteConfirmee = db.demandes.some((d) => d.type === 'visite' && d.leadId === req.lead.id && d.bienId === b.id && d.rdv);
+  if (!proprietaire && !visiteConfirmee && ROLES_STAFF.indexOf(roleOf(req.lead)) === -1) {
+    return res.json({ ok: true, disponible: false, reserve: true, raison: 'Les écoles de secteur vous sont communiquées avec l’adresse, à la confirmation de votre visite.' });
+  }
+  await repondreEcoles(res, b);
+});
+
 // ---------------- Visite virtuelle (pas à pas + 360°) ----------------
 // Une visite = une suite d'étapes (pièces) : soit une photo du bien (visite
 // « pas à pas » : on avance d'une pièce à l'autre), soit un panorama 360°
@@ -3069,7 +3152,10 @@ app.get('/api/robot/health', async (req, res) => {
     const r = await fetch(ROBOT_URL + '/health', { signal: AbortSignal.timeout(3000) });
     res.json({ ok: r.ok, status: r.status, url: ROBOT_URL, body: await r.json().catch(() => ({})) });
   } catch (e) {
-    res.json({ ok: false, error: 'Serveur Python injoignable (' + ROBOT_URL + '). Lancez ./start-local.command puis réessayez.', url: ROBOT_URL });
+    const local = /localhost|127\.0\.0\.1/.test(ROBOT_URL);
+    res.json({ ok: false, error: local && process.env.RAILWAY_ENVIRONMENT
+      ? 'Le moteur Python (recherche cadastrale) tourne uniquement sur l’ordinateur de l’agence : il n’est pas installé sur le site en ligne. Utilisez la recherche DPE et le Radar, ou lancez le moteur en local.'
+      : 'Serveur Python injoignable (' + ROBOT_URL + '). Lancez ./start-local.command puis réessayez.', url: ROBOT_URL, horsLigne: local && !!process.env.RAILWAY_ENVIRONMENT });
   }
 });
 
@@ -3827,43 +3913,54 @@ app.get('/api/robot/prospecting', requireAdmin, async (req, res) => {
   }
 });
 
-// Chemin du fichier DVF (ValeursFoncieres-*.txt). Configurable via la variable
-// d'environnement DVF_PATH (ex. un volume Railway ou un stockage monté en
-// production) — fallback sur le chemin de dev local si elle n'est pas définie.
-const DVF_PATH = process.env.DVF_PATH || '/Users/taieb/Desktop/immo-data-robot-foundation/data/dvf/ValeursFoncieres-2025.txt';
+// DVF (ventes réelles) : API publique DVF+ open data du Cerema, sans clé.
+// (Avant : lecture d'un fichier ValeursFoncieres posé sur l'ordinateur de
+// l'agence — introuvable une fois le site en ligne.) Résultats gardés en
+// mémoire 24 h par requête.
+const DVF_API = 'https://apidf-preprod.cerema.fr/dvf_opendata/mutations/';
+const DVF_CACHE = {};
+const CODES_TYPE_DVF = { appartement: '121', maison: '111' };
+async function dvfCerema(params, pagesMax) {
+  const cle = JSON.stringify(params) + '|' + pagesMax;
+  if (DVF_CACHE[cle] && Date.now() - DVF_CACHE[cle].at < 24 * 3600 * 1000) return DVF_CACHE[cle].data;
+  const out = [];
+  let url = DVF_API + '?' + new URLSearchParams(Object.assign({ page_size: '500' }, params)).toString();
+  for (let p = 0; p < pagesMax && url; p++) {
+    const r = await fetchAvecRetry(url, { headers: { Accept: 'application/json', 'User-Agent': 'Seecret/1.0' } }, 3);
+    if (!r.ok) throw new Error('DVF Cerema HTTP ' + r.status);
+    const j = await r.json();
+    (j.results || []).forEach((x) => out.push(x));
+    url = j.next || null;
+  }
+  const cles = Object.keys(DVF_CACHE);
+  if (cles.length > 40) delete DVF_CACHE[cles[0]];
+  DVF_CACHE[cle] = { at: Date.now(), data: out };
+  return out;
+}
+function mutationDvf(x) {
+  return {
+    date: x.datemut || '', nature: x.libnatmut || '', valeur: x.valeurfonc || '',
+    adresse: '', codePostal: '', commune: (x.l_codinsee || [])[0] || '',
+    typeLocal: String(x.libtypbien || '').replace(/^(UN|UNE|DES)\s+/i, '').toLowerCase().replace(/^./, (c) => c.toUpperCase()),
+    surface: x.sbati || '', pieces: '', parcelles: x.l_idpar || [], lots: x.nblocmut || 0
+  };
+}
 
-// Historique des mutations foncières d'une parcelle (DVF). Lecture streaming,
-// filtre sur code_departement|code_commune|prefixe|section|no_plan (commune sans zéros).
+// Historique des mutations foncières d'une parcelle (DVF).
 app.get('/api/robot/dvf', requireAdmin, async (req, res) => {
   const codeInsee = String(req.query.code_insee || '').trim();
   const section = String(req.query.section || '').trim().toUpperCase();
   const numero = String(req.query.numero || '').trim();
   if (!codeInsee || !section || !numero) return res.status(400).json({ error: 'code_insee, section et numero requis.' });
-  const dept = codeInsee.slice(0, 2);
-  const commune = String(parseInt(codeInsee.slice(2) || '0', 10));
-  const plan = String(parseInt(numero, 10));
-  const needle = '|' + dept + '|' + commune + '||' + section + '|' + plan + '|';
-  const mutations = [];
+  // Identifiant de parcelle DVF : INSEE (5) + préfixe (3) + section (2) + numéro (4).
+  const idpar = codeInsee + '000' + section.padStart(2, '0') + String(parseInt(numero, 10) || 0).padStart(4, '0');
   try {
-    const { createReadStream } = require('fs');
-    const { createInterface } = require('readline');
-    const rl = createInterface({ input: createReadStream(DVF_PATH, { encoding: 'utf8' }), crlfDelay: Infinity });
-    for await (const line of rl) {
-      if (line.includes(needle)) {
-        const f = line.split('|');
-        mutations.push({
-          date: f[8] || '', nature: f[9] || '', valeur: f[10] || '',
-          adresse: [f[13], f[14], f[15]].filter(Boolean).join(' ') || f[15] || '',
-          codePostal: f[16] || '', commune: f[17] || '',
-          typeLocal: f[36] || '', surface: f[38] || '', pieces: f[39] || '',
-          section: f[21] || '', plan: f[22] || ''
-        });
-        if (mutations.length >= 100) break;
-      }
-    }
-    res.json({ ok: true, parcelle: codeInsee + section + numero, mutations: mutations });
+    const toutes = await dvfCerema({ code_insee: codeInsee, anneemut_min: String(new Date().getFullYear() - 12) }, 40);
+    const mutations = toutes.filter((x) => (x.l_idpar || []).indexOf(idpar) > -1).map(mutationDvf)
+      .sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(0, 100);
+    res.json({ ok: true, source: 'DVF (Cerema, open data)', parcelle: idpar, mutations: mutations });
   } catch (e) {
-    res.status(502).json({ error: 'Lecture DVF impossible : ' + String(e.message || e) });
+    res.status(502).json({ error: 'DVF indisponible pour le moment (' + String(e.message || e) + '). Réessayez dans quelques minutes.' });
   }
 });
 
@@ -3893,35 +3990,21 @@ app.get('/api/robot/dvf-secteur', requireAdmin, async (req, res) => {
   const typeLocal = String(req.query.type_local || '').trim();
   const surfaceCible = parseFloat(String(req.query.surface || '0').replace(',', '.')) || 0;
   if (!/^[0-9][0-9AB][0-9]{3}$/.test(codeInsee)) return res.status(400).json({ error: 'code_insee invalide (5 caractères attendus).' });
-  const dept = codeInsee.slice(0, 2);
-  const commune = String(parseInt(codeInsee.slice(2) || '0', 10));
-  const needle = '|' + dept + '|' + commune + '||';
-  const comparables = [];
+  const params = { code_insee: codeInsee, anneemut_min: String(new Date().getFullYear() - 3) };
+  const code = CODES_TYPE_DVF[typeLocal.toLowerCase()];
+  if (code) params.codtypbien = code;
+  // Comparables pertinents : surface à ±30 % de celle du bien à estimer (si fournie).
+  if (surfaceCible) { params.sbati_min = String(Math.floor(surfaceCible * 0.7)); params.sbati_max = String(Math.ceil(surfaceCible * 1.3)); }
   try {
-    const { createReadStream } = require('fs');
-    const { createInterface } = require('readline');
-    const rl = createInterface({ input: createReadStream(DVF_PATH, { encoding: 'utf8' }), crlfDelay: Infinity });
-    for await (const line of rl) {
-      if (!line.includes(needle)) continue;
-      const f = line.split('|');
-      const nature = f[9] || '';
-      if (!/vente/i.test(nature)) continue; // écarte adjudications, expropriations, etc.
-      const tl = f[36] || '';
-      if (typeLocal && tl.toLowerCase() !== typeLocal.toLowerCase()) continue;
-      const surface = parseFloat(String(f[38] || '').replace(',', '.'));
-      // Comparables pertinents : surface à ±30 % de celle du bien à estimer (si fournie).
-      if (surfaceCible && surface && (surface < surfaceCible * 0.7 || surface > surfaceCible * 1.3)) continue;
-      comparables.push({
-        date: f[8] || '', nature: nature, valeur: f[10] || '',
-        adresse: [f[13], f[14], f[15]].filter(Boolean).join(' ') || f[15] || '',
-        typeLocal: tl, surface: f[38] || '', pieces: f[39] || ''
-      });
-      if (comparables.length >= 300) break;
-    }
+    const brut = await dvfCerema(params, 4);
+    const comparables = brut
+      .filter((x) => /^vente$/i.test(x.libnatmut || '') && Number(x.nblocmut || 0) <= 2 && Number(x.valeurfonc) > 0 && Number(x.sbati) > 0)
+      .map(mutationDvf)
+      .sort((a, b) => String(b.date).localeCompare(String(a.date)));
     const stats = statsPrixM2(comparables);
-    res.json({ ok: true, codeInsee: codeInsee, typeLocal: typeLocal || 'tous types', comparables: comparables.slice(0, 20), stats: stats });
+    res.json({ ok: true, source: 'DVF (Cerema, open data)', codeInsee: codeInsee, typeLocal: typeLocal || 'tous types', periode: 'depuis ' + params.anneemut_min, comparables: comparables.slice(0, 20), stats: stats });
   } catch (e) {
-    res.status(502).json({ error: 'Lecture DVF impossible : ' + String(e.message || e) });
+    res.status(502).json({ error: 'DVF indisponible pour le moment (' + String(e.message || e) + '). Réessayez dans quelques minutes.' });
   }
 });
 
@@ -4391,7 +4474,14 @@ app.get('/api/robot/societes-adresse', requireAdmin, async (req, res) => {
   const q = pmParserAdresse(adresse);
   const appel = async (extra) => {
     const p = new URLSearchParams(Object.assign({ q: adresse, per_page: '25', page: '1', etat_administratif: 'A' }, q.cp ? { code_postal: q.cp } : {}, extra));
-    const r = await fetch('https://recherche-entreprises.api.gouv.fr/search?' + p.toString(), { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(15000) });
+    // L'API publique limite le nombre d'appels par seconde : on réessaie après
+    // une courte pause si elle répond 429 ou 5xx.
+    let r = null;
+    for (let essai = 0; essai < 4; essai++) {
+      r = await fetch('https://recherche-entreprises.api.gouv.fr/search?' + p.toString(), { headers: { Accept: 'application/json', 'User-Agent': 'Seecret/1.0 (contact@seecret.fr)' }, signal: AbortSignal.timeout(15000) });
+      if (r.status !== 429 && r.status < 500) break;
+      await new Promise((ok) => setTimeout(ok, 800 * (essai + 1)));
+    }
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const d = await r.json().catch(() => ({}));
     return Array.isArray(d.results) ? d.results : [];
@@ -4399,8 +4489,12 @@ app.get('/api/robot/societes-adresse', requireAdmin, async (req, res) => {
   try {
     // Deux requêtes : une limitée aux SCI (nature juridique 6540) pour ne pas les
     // noyer sous les commerces de la rue, une générale pour les autres sociétés.
-    const [scis, autres] = await Promise.all([appel({ nature_juridique: '6540' }).catch(() => []), appel({}).catch(() => null)]);
-    if (autres === null && !scis.length) throw new Error('injoignable');
+    // Appels l'un après l'autre (deux appels simultanés déclenchaient la limite
+    // de débit de l'API, d'où « injoignable » en production).
+    let derniereErreur = '';
+    const scis = await appel({ nature_juridique: '6540' }).catch((e) => { derniereErreur = e.message; return []; });
+    const autres = await appel({}).catch((e) => { derniereErreur = e.message; return null; });
+    if (autres === null && !scis.length) throw new Error(derniereErreur || 'injoignable');
     const vus = {};
     const societes = [];
     scis.concat(autres || []).forEach((e) => {
@@ -5686,7 +5780,13 @@ app.use((req, res, next) => {
   if ((req.method === 'GET' || req.method === 'HEAD') && !CHEMINS_PUBLICS.test(req.path)) return res.status(404).send('Introuvable');
   next();
 });
-app.use(express.static(__dirname, { dotfiles: 'deny', index: 'index.html' }));
+// Pages, scripts et feuilles de style : le navigateur doit revérifier à chaque
+// visite (réponse 304 instantanée si rien n'a changé). Sans cela, il gardait
+// d'anciennes versions en cache pendant des heures après une mise à jour.
+app.use(express.static(__dirname, {
+  dotfiles: 'deny', index: 'index.html',
+  setHeaders: (res, fichier) => { if (/\.(html|js|css)$/i.test(fichier)) res.setHeader('Cache-Control', 'no-cache'); }
+}));
 
 app.listen(PORT, () => {
   try {

@@ -328,31 +328,6 @@
   /* ================================ rendu ================================ */
 
   /* ---------- écoles, coordonnées approx, estimation (page produit) ---------- */
-  const ECOLES = {
-    p1: { primaire: 'École élémentaire Louvre', college: 'Collège Malherbe', lycee: 'Lycée Charlemagne' },
-    p2: { primaire: 'École élémentaire Montorgueil', college: 'Collège Béranger', lycee: 'Lycée Voltaire' },
-    p3: { primaire: 'École élémentaire Bretagne', college: 'Collège Pierre-Jean-de-Béranger', lycee: 'Lycée Victor-Hugo' },
-    p4: { primaire: 'École élémentaire Saint-Paul', college: 'Collège Massillon', lycee: 'Lycée Charlemagne' },
-    p5: { primaire: 'École élémentaire Buffon', college: 'Collège Valmy', lycee: 'Lycée Lavoisier' },
-    p6: { primaire: 'École élémentaire Cherche-Midi', college: 'Collège Sévigné', lycee: 'Lycée Montaigne' },
-    p7: { primaire: 'École élémentaire Grenelle', college: 'Collège Évariste-Galois', lycee: 'Lycée Victor-Duruy' },
-    p8: { primaire: 'École élémentaire Monceau', college: 'Collège Condorcet', lycee: 'Lycée Carnot' },
-    p9: { primaire: 'École élémentaire Saint-Georges', college: 'Collège Lamartine', lycee: 'Lycée Jules-Ferry' },
-    p10: { primaire: 'École élémentaire Saint-Maur', college: 'Collège Jean-Baptiste-Clément', lycee: 'Lycée Colbert' },
-    p11: { primaire: 'École élémentaire Voltaire', college: 'Collège Léon-Gambetta', lycee: 'Lycée Voltaire' },
-    p12: { primaire: 'École élémentaire Daumesnil', college: 'Collège Élisa-Lemonnier', lycee: 'Lycée Paul-Valéry' },
-    p13: { primaire: 'École élémentaire Jeanne-d\'Arc', college: 'Collège Claude-Monet', lycee: 'Lycée Claude-Monet' },
-    p14: { primaire: 'École élémentaire Montsouris', college: 'Collège Jean-Moulin', lycee: 'Lycée Rodin' },
-    p15: { primaire: 'École élémentaire Grenelle', college: 'Collège Camille-Sée', lycee: 'Lycée Buffon' },
-    p16: { primaire: 'École élémentaire Passy', college: 'Collège La Fontaine', lycee: 'Lycée Jean-de-La-Fontaine' },
-    p17: { primaire: 'École élémentaire Batignolles', college: 'Collège Carnot', lycee: 'Lycée Chaptal' },
-    p18: { primaire: 'École élémentaire Montmartre', college: 'Collège Yvonne-Le-Tac', lycee: 'Lycée Jacques-Decour' },
-    p19: { primaire: 'École élémentaire Buttes-Chaumont', college: 'Collège Georges-Méliès', lycee: 'Lycée Hélène-Boucher' },
-    p20: { primaire: 'École élémentaire Belleville', college: 'Collège Pierre-Mendès-France', lycee: 'Lycée Maurice-Ravel' },
-    boulogne: { primaire: 'École élémentaire Jean-Jaurès', college: 'Collège Jean-Renoir', lycee: 'Lycée Jacques-Prévert' },
-    neuilly: { primaire: 'École élémentaire Peretti', college: 'Collège Théophile-Gautier', lycee: 'Lycée Pasteur' },
-    vincennes: { primaire: 'École élémentaire Est', college: 'Collège Antoine-de-Saint-Exupéry', lycee: 'Lycée Hector-Berlioz' }
-  };
   const COORDS = {
     p1: [48.863, 2.336], p2: [48.867, 2.341], p3: [48.864, 2.362], p4: [48.856, 2.355],
     p5: [48.846, 2.350], p6: [48.850, 2.332], p7: [48.858, 2.310], p8: [48.873, 2.308],
@@ -393,15 +368,28 @@
       '<div class="se-map-label">' + esc(label) + '<span>Localisation approximative</span></div>' +
     '</div>';
   }
+  // Écoles de secteur RÉELLES (secteurs officiels de la Ville de Paris),
+  // calculées à l'adresse exacte côté serveur. Réservées au propriétaire et
+  // aux visites confirmées : un secteur d'école couvre quelques rues et
+  // dévoilerait l'adresse. (Remplace l'ancienne liste fixe par
+  // arrondissement, qui n'était pas une vraie sectorisation.)
   function ecolesBlock(b) {
-    const e = ECOLES[b.quartier] || { primaire: 'Sectorisation à confirmer', college: 'Sectorisation à confirmer', lycee: 'Sectorisation à confirmer' };
-    return '<div class="se-card"><h3>Écoles à proximité</h3><p class="se-muted">Sectorisation indicative du quartier.</p>' +
-      '<div class="se-ecoles">' +
-        '<div><span class="kicker">Primaire</span><b>' + esc(e.primaire) + '</b></div>' +
-        '<div><span class="kicker">Collège</span><b>' + esc(e.college) + '</b></div>' +
-        '<div><span class="kicker">Lycée</span><b>' + esc(e.lycee) + '</b></div>' +
-      '</div></div>';
+    state.ecoles = state.ecoles || {};
+    const e = state.ecoles[b.id];
+    if (e === undefined) {
+      state.ecoles[b.id] = null;
+      API.get('/api/ecoles/' + encodeURIComponent(b.id)).then((j) => { state.ecoles[b.id] = j; render(); }).catch(() => { state.ecoles[b.id] = { error: true }; render(); });
+    }
+    const ligne = (t, x) => '<div><span class="kicker">' + t + '</span><b>' + esc(x && x.etablissements && x.etablissements.length ? x.etablissements.join(' · ') : '—') + '</b></div>';
+    return '<div class="se-card"><h3>Écoles de secteur</h3>' +
+      (!e ? '<p class="se-muted">Recherche des secteurs scolaires…</p>'
+        : e.error ? '<p class="se-muted">Secteurs scolaires indisponibles pour le moment.</p>'
+        : !e.disponible ? '<p class="se-muted">' + esc(e.raison || 'Sectorisation indisponible.') + '</p>'
+        : '<p class="se-muted">Secteurs officiels ' + esc((e.elementaire && e.elementaire.annee) || '') + ', Ville de Paris.</p><div class="se-ecoles">' + ligne('Maternelle', e.maternelle) + ligne('Élémentaire', e.elementaire) + ligne('Collège', e.college) + '</div>' +
+          '<p class="se-hint" style="margin-top:8px">Lycées : affectation par Affelnet, sans secteur à l’adresse.</p>') +
+    '</div>';
   }
+
   function carouselSuivis(list) {
     return '<div class="se-hero" data-hero>' +
       list.map((b, i) => '<div class="se-hero-slide ' + (i === 0 ? 'on' : '') + '">' +
