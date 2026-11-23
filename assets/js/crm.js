@@ -3528,7 +3528,7 @@
       if (surface) params.set('surface', String(surface));
       const r = await fetch('/api/robot/dvf-secteur?' + params.toString(), { credentials: 'same-origin' }).then((x) => x.json());
       if (!r.ok) { toast(r.error || 'Valorisation impossible.', 'warn'); return; }
-      b.valorisation = { stats: r.stats, comparables: r.comparables || [], surfaceUtilisee: surface, typeLocal: r.typeLocal, calculeLe: new Date().toISOString() };
+      b.valorisation = { stats: r.stats, comparables: r.comparables || [], surfaceUtilisee: surface, typeLocal: r.typeLocal, avertissement: r.avertissement || '', calculeLe: new Date().toISOString() };
       commit();
       toast(r.stats ? r.stats.nbComparables + ' comparable(s) trouvé(s).' : 'Aucun comparable DVF trouvé dans ce secteur.', r.stats ? 'ok' : 'warn');
     } catch (e) { toast('Valorisation impossible.', 'warn'); }
@@ -3546,6 +3546,7 @@
       kv('Fourchette au m²', s.prixM2Min.toLocaleString('fr-FR') + ' – ' + s.prixM2Max.toLocaleString('fr-FR') + ' €/m²') +
       (surface ? kv('Estimation du bien (' + surface + ' m²)', Math.round(s.prixM2Min * surface).toLocaleString('fr-FR') + ' – ' + Math.round(s.prixM2Max * surface).toLocaleString('fr-FR') + ' € (médiane ' + Math.round(s.prixM2Median * surface).toLocaleString('fr-FR') + ' €)') : '') +
       '</div>' +
+      (v.avertissement ? '<p class="se-hint" style="margin-top:10px;color:var(--color-warn, #a8562a)">⚠ ' + esc(v.avertissement) + '</p>' : '') +
       '<p class="se-hint" style="margin-top:10px">Estimation indicative à partir de ' + s.nbComparables + ' transaction(s) DVF (source officielle, gratuite) — ne remplace pas une estimation professionnelle sur place.</p>';
     const liste = (v.comparables || []).length
       ? '<details style="margin-top:10px"><summary style="cursor:pointer;font-size:12px;color:var(--color-taupe)">Voir les comparables (' + v.comparables.length + ')</summary><div class="se-list" style="margin-top:8px">' +
@@ -6347,7 +6348,7 @@
       toast('Lecture DVF en cours…');
       try {
         const r = await fetch('/api/robot/dvf?code_insee=' + encodeURIComponent(b.codeInsee) + '&section=' + encodeURIComponent(b.section) + '&numero=' + encodeURIComponent(b.numero), { credentials: 'same-origin' }).then((x) => x.json());
-        if (r.ok && r.mutations) { b.dvfMutations = r.mutations; commit(); render(); toast(r.mutations.length + ' mutation(s) DVF trouvée(s).', 'ok'); }
+        if (r.ok && r.mutations) { b.dvfMutations = r.mutations; commit(); render(); toast(r.avertissement || (r.mutations.length + ' mutation(s) DVF trouvée(s).'), r.avertissement ? 'warn' : 'ok'); }
         else toast(r.error || 'Aucune mutation DVF.', 'warn');
       } catch (e) { toast('Lecture DVF impossible.', 'warn'); }
     },

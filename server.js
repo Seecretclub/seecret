@@ -3963,22 +3963,63 @@ app.get('/api/robot/prospecting', requireAdmin, async (req, res) => {
 const DVF_API = 'https://apidf-preprod.cerema.fr/dvf_opendata/mutations/';
 const DVF_CACHE = {};
 const CODES_TYPE_DVF = { appartement: '121', maison: '111' };
-async function dvfCerema(params, pagesMax) {
-  const cle = JSON.stringify(params) + '|' + pagesMax;
-  if (DVF_CACHE[cle] && Date.now() - DVF_CACHE[cle].at < 24 * 3600 * 1000) return DVF_CACHE[cle].data;
+// Budget de temps : Railway coupe une requête qui ne répond pas en ~100 s, et
+// l'API du Cerema peut mettre 10 à 30 s par page. On s'arrête donc à temps et
+// on renvoie ce qui a été lu (out.partiel = true) plutôt qu'une erreur 502.
+const DVF_BUDGET_MS = parseInt(process.env.DVF_BUDGET_MS || '25000', 10);
+async function dvfCerema(params, pagesMax, options) {
+  const opt = options || {};
+  const base = opt.geo ? DVF_API.replace('/mutations/', '/geomutations/') : DVF_API;
+  const budget = opt.budgetMs || DVF_BUDGET_MS;
+  const cle = base + JSON.stringify(params) + '|' + pagesMax;
+  const enCache = DVF_CACHE[cle];
+  if (enCache && Date.now() - enCache.at < (enCache.data.partiel ? 3600 * 1000 : 24 * 3600 * 1000)) return enCache.data;
+  const fin = Date.now() + budget;
   const out = [];
-  let url = DVF_API + '?' + new URLSearchParams(Object.assign({ page_size: '500' }, params)).toString();
+  out.total = 0;
+  let url = base + '?' + new URLSearchParams(Object.assign({ page_size: '500' }, params)).toString();
   for (let p = 0; p < pagesMax && url; p++) {
-    const r = await fetchAvecRetry(url, { headers: { Accept: 'application/json', 'User-Agent': 'Seecret/1.0' } }, 3);
-    if (!r.ok) throw new Error('DVF Cerema HTTP ' + r.status);
-    const j = await r.json();
-    (j.results || []).forEach((x) => out.push(x));
+    const reste = fin - Date.now();
+    if (reste < 1500) { out.partiel = true; break; }
+    let j;
+    try {
+      const r = await fetch(url, { headers: { Accept: 'application/json', 'User-Agent': 'Seecret/1.0' }, signal: AbortSignal.timeout(reste) });
+      if (!r.ok) throw new Error('DVF Cerema HTTP ' + r.status);
+      j = await r.json();
+    } catch (e) {
+      const delai = e && (e.name === 'TimeoutError' || e.name === 'AbortError');
+      // Rien lu du tout : vraie erreur. Sinon on garde les pages déjà lues.
+      if (!out.length && p === 0) throw new Error(delai ? 'le Cerema met trop de temps à répondre' : String(e.message || e));
+      out.partiel = true;
+      break;
+    }
+    out.total = j.count || out.total;
+    (j.results || j.features || []).forEach((x) => out.push(x.properties || x));
     url = j.next || null;
   }
+  if (url && !out.partiel && out.length < out.total) out.tronque = true; // plafond de pages atteint
   const cles = Object.keys(DVF_CACHE);
   if (cles.length > 40) delete DVF_CACHE[cles[0]];
   DVF_CACHE[cle] = { at: Date.now(), data: out };
   return out;
+}
+
+// Contour d'une parcelle (cadastre IGN, sans clé) → rectangle englobant
+// "xmin,ymin,xmax,ymax". Paris, Lyon et Marseille : commune + arrondissement.
+async function bboxParcelle(codeInsee, section, numero) {
+  const villes = { '75': '75056', '69': '69123', '13': '13055' };
+  const p = new URLSearchParams({ section: section, numero: numero });
+  const arr = /^(751|6938|132)/.test(codeInsee) ? villes[codeInsee.slice(0, 2)] : null;
+  if (arr) { p.set('code_insee', arr); p.set('code_arr', codeInsee.slice(2)); } else p.set('code_insee', codeInsee);
+  const r = await fetch('https://apicarto.ign.fr/api/cadastre/parcelle?' + p.toString(), { headers: { Accept: 'application/json', 'User-Agent': 'Seecret/1.0' }, signal: AbortSignal.timeout(12000) });
+  if (!r.ok) return null;
+  const j = await r.json();
+  const f = j.features && j.features[0];
+  if (!f || !f.geometry) return null;
+  const xs = []; const ys = [];
+  JSON.stringify(f.geometry.coordinates).replace(/\[(-?[\d.]+),(-?[\d.]+)\]/g, (m, x, y) => { xs.push(+x); ys.push(+y); return m; });
+  if (!xs.length) return null;
+  return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)].map((v) => v.toFixed(6)).join(',');
 }
 function mutationDvf(x) {
   return {
@@ -3998,10 +4039,21 @@ app.get('/api/robot/dvf', requireAdmin, async (req, res) => {
   // Identifiant de parcelle DVF : INSEE (5) + préfixe (3) + section (2) + numéro (4).
   const idpar = codeInsee + '000' + section.padStart(2, '0') + String(parseInt(numero, 10) || 0).padStart(4, '0');
   try {
-    const toutes = await dvfCerema({ code_insee: codeInsee, anneemut_min: String(new Date().getFullYear() - 12) }, 40);
+    // Rapide : on lit seulement les ventes situées sur le contour de la
+    // parcelle (1 à 2 s). Secours si le cadastre ne répond pas : balayage de
+    // la commune dans la limite du budget de temps (résultat possiblement partiel).
+    let toutes = null;
+    let methode = 'contour';
+    try {
+      const bbox = await bboxParcelle(codeInsee, section, String(parseInt(numero, 10) || 0).padStart(4, '0'));
+      if (bbox) toutes = await dvfCerema({ code_insee: codeInsee, in_bbox: bbox }, 6, { geo: true });
+    } catch (e) { toutes = null; }
+    if (!toutes) { methode = 'commune'; toutes = await dvfCerema({ code_insee: codeInsee, anneemut_min: String(new Date().getFullYear() - 12) }, 40); }
     const mutations = toutes.filter((x) => (x.l_idpar || []).indexOf(idpar) > -1).map(mutationDvf)
       .sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(0, 100);
-    res.json({ ok: true, source: 'DVF (Cerema, open data)', parcelle: idpar, mutations: mutations });
+    const incomplet = !!(toutes.partiel || toutes.tronque);
+    res.json({ ok: true, source: 'DVF (Cerema, open data)', parcelle: idpar, methode: methode, mutations: mutations, partiel: incomplet,
+      avertissement: incomplet ? 'Recherche incomplète : le Cerema a répondu trop lentement, certaines ventes peuvent manquer. Réessayez plus tard.' : '' });
   } catch (e) {
     res.status(502).json({ error: 'DVF indisponible pour le moment (' + String(e.message || e) + '). Réessayez dans quelques minutes.' });
   }
@@ -4045,7 +4097,10 @@ app.get('/api/robot/dvf-secteur', requireAdmin, async (req, res) => {
       .map(mutationDvf)
       .sort((a, b) => String(b.date).localeCompare(String(a.date)));
     const stats = statsPrixM2(comparables);
-    res.json({ ok: true, source: 'DVF (Cerema, open data)', codeInsee: codeInsee, typeLocal: typeLocal || 'tous types', periode: 'depuis ' + params.anneemut_min, comparables: comparables.slice(0, 20), stats: stats });
+    const incomplet = !!(brut.partiel || brut.tronque);
+    res.json({ ok: true, source: 'DVF (Cerema, open data)', codeInsee: codeInsee, typeLocal: typeLocal || 'tous types', periode: 'depuis ' + params.anneemut_min, comparables: comparables.slice(0, 20), stats: stats,
+      echantillon: { lues: brut.length, total: brut.total || brut.length }, partiel: incomplet,
+      avertissement: incomplet ? 'Calcul sur un échantillon de ' + brut.length + ' ventes sur ' + (brut.total || '?') + (brut.partiel ? ' (le Cerema a répondu lentement)' : '') + '. Précisez le type et la surface pour un calcul plus précis.' : '' });
   } catch (e) {
     res.status(502).json({ error: 'DVF indisponible pour le moment (' + String(e.message || e) + '). Réessayez dans quelques minutes.' });
   }
