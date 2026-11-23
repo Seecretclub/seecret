@@ -250,6 +250,11 @@
     .ed-chat-bouton { padding: 14px; }
     .ed-j-grille { grid-template-columns: 1fr; }
   }
+  .ed-edito { margin-top: 10px; display: flex; flex-direction: column; gap: 12px; max-width: 64ch; }
+  .ed-edito p { margin: 0; font-size: 15.5px; line-height: 1.75; color: var(--color-graphite); }
+  .ed-edito p:first-child::first-letter { font-family: var(--font-serif); font-size: 3.1em; float: left; line-height: .8; margin: 5px 4px 0 0; color: var(--color-ink); }
+  .ed-aime { margin: 20px 0 0; padding: 16px 18px; border-left: 2px solid var(--color-ink); background: var(--color-sand); border-radius: 0 12px 12px 0; font-family: var(--font-serif); font-size: 19px; line-height: 1.45; color: var(--color-ink); }
+  .ed-aime span { display: block; font-family: inherit; font-size: 11px; letter-spacing: .13em; text-transform: uppercase; color: var(--color-taupe); font-weight: 600; margin-bottom: 6px; font-family: system-ui, sans-serif; }
   .ed-tour.coin { right: 24px; bottom: 24px; }
   .ed-tour.bas { left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); width: auto; }
   @media (max-width: 860px) {

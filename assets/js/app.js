@@ -1022,6 +1022,15 @@
     '</div>';
   }
 
+  // Texte de la fiche : texte éditorial publié par l'agence (sinon la
+  // description), puis la phrase du propriétaire s'il en a écrit une.
+  function texteFiche(b) {
+    const brut = (b.editorial && b.editorial.texte) || b.description || '';
+    const paras = String(brut).split(/\n\s*\n/).map((x) => x.trim()).filter(Boolean);
+    return '<div class="ed-edito">' + paras.map((x) => '<p>' + esc(x).replace(/\n/g, '<br>') + '</p>').join('') + '</div>' +
+      (b.coupDeCoeur ? '<blockquote class="ed-aime"><span>Ses propriétaires l’aiment pour…</span>« ' + esc(b.coupDeCoeur) + ' »</blockquote>' : '');
+  }
+
   function edViewBien(r) {
     const b = bien(r.param);
     if (!b) return '<div class="ed-panel"><div class="ed-card-title">Bien introuvable</div><a class="se-btn" style="margin-top:12px" href="#/catalogue">Retour au catalogue</a></div>';
@@ -1041,8 +1050,8 @@
           galerieBien(b, lock) +
           '<div class="ed-panel" style="margin-top:18px">' +
             '<span class="ed-kicker">' + esc(b.type) + ' · ' + esc(b.label) + '</span>' +
-            '<h1 class="ed-title">' + esc(b.titre) + '</h1>' +
-            '<p class="ed-sub" style="margin:8px 0 0">' + esc(b.description) + '</p>' +
+            '<h1 class="ed-title">' + esc((b.editorial && b.editorial.titre) || b.titre) + '</h1>' +
+            texteFiche(b) +
             '<div class="se-chips" style="margin-top:14px">' + (b.atouts || []).map((a) => '<span class="se-chip" style="cursor:default">' + esc(a) + '</span>').join('') + '</div>' +
           '</div>' +
         '</div>' +
@@ -1258,6 +1267,8 @@
               '<div class="se-field full"><label>Titre de l’annonce</label><input class="se-input" name="titre" value="' + esc(b.titre || '') + '"/></div>' +
               '<div class="se-field full"><label>Prix net vendeur (€)</label><input class="se-input" name="prix" type="number" value="' + esc(b.prix || '') + '"/></div>' +
               '<div class="se-field full"><label>Description</label><textarea class="se-textarea" name="description" style="min-height:110px">' + esc(b.description || '') + '</textarea></div>' +
+              '<div class="se-field full"><label>Ce que vous aimez le plus dans votre bien</label><textarea class="se-textarea" name="coupDeCoeur" maxlength="280" style="min-height:70px" placeholder="La lumière du matin dans le salon, le calme de la cour…">' + esc(b.coupDeCoeur || '') + '</textarea>' +
+                '<span class="se-hint">Affiché sur votre fiche : « Ses propriétaires l’aiment pour… ». Facultatif.</span></div>' +
             '</div>' +
             '<button class="se-btn block" type="submit" style="margin-top:14px">Demander une modification</button>' +
           '</form>' +
@@ -2642,7 +2653,8 @@
           message: 'Demande de modification de mon bien',
           titre: String(data.get('titre') || ''),
           prix: Number(data.get('prix')) || 0,
-          description: String(data.get('description') || '')
+          description: String(data.get('description') || ''),
+          coupDeCoeur: String(data.get('coupDeCoeur') || '')
         });
         toast('Votre demande de modification a été envoyée à l’agence pour validation.', 'ok');
       } catch (err) { toast(err.message || 'Envoi impossible.', 'warn'); }

@@ -644,7 +644,7 @@
       projet: null,
       recherche: { types: [], quartiers: [], prixMax: '', piecesMin: '', surfaceMin: '', surfaceMax: '', delai: '' },
       budget: { apport: '', financement: '', courtier: false, bienAVendre: false },
-      bien: { adresse: '', codePostal: '', ville: '', lat: null, lon: null, type: '', quartier: '', surface: '', pieces: '', chambres: '', sdb: '', etage: '', dpe: '', ges: '', etat: '', exterieur: '', surfaceExterieur: '', annexes: [], charges: '', description: '', photos: [] },
+      bien: { adresse: '', codePostal: '', ville: '', lat: null, lon: null, type: '', quartier: '', surface: '', pieces: '', chambres: '', sdb: '', etage: '', dpe: '', ges: '', etat: '', exterieur: '', surfaceExterieur: '', annexes: [], charges: '', description: '', coupDeCoeur: '', photos: [] },
       vente: { prix: '', delai: '', dejaEnVente: '', mandat: '', motif: '' },
       vous: { prenom: '', nom: '', email: '', tel: '', ville: '' },
       verifs: { identite: '', financement: '', bien: '', consent: false }
@@ -914,7 +914,10 @@
           '<div class="se-form-grid" style="margin-bottom:18px">' +
             field('Charges annuelles (€)', 'bien.charges', rep.bien.charges, { type: 'number', placeholder: '2 400' }) +
           '</div>' +
-          field('Description du bien', 'bien.description', rep.bien.description, { type: 'textarea', min: '110px', placeholder: 'Décrivez votre bien en quelques mots…', full: true });
+          field('Description du bien', 'bien.description', rep.bien.description, { type: 'textarea', min: '110px', placeholder: 'Décrivez votre bien en quelques mots…', full: true }) +
+          '<div style="margin-top:14px"></div>' +
+          field('Ce que vous aimez le plus dans votre bien (facultatif)', 'bien.coupDeCoeur', rep.bien.coupDeCoeur, { type: 'textarea', min: '80px', placeholder: 'La lumière du matin dans le salon, le calme de la cour, la vue sur les toits…', full: true }) +
+          '<p class="se-hint" style="margin:6px 0 0">Cette phrase pourra apparaître sur votre fiche : « Ses propriétaires l’aiment pour… ».</p>';
       }
 
       if (id === 'photos') {
