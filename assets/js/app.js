@@ -1112,6 +1112,36 @@
         corps: (popularite(bm) ? '<span class="ed-pop">' + esc(popularite(bm).texte) + '</span>' : '') +
           '<div class="ed-edito">' + paragraphes((bm.editorial && bm.editorial.texte) || bm.description) + '</div>' + aime(bm) + lienBien(bm) });
     }
+    // Articles rédigés par Célia (marché immobilier, conseils vendeur), du plus récent au plus ancien.
+    const redac = (g.articles || []).map((a) => ({ slug: a.slug, kicker: a.kicker, titre: a.titre, chapo: a.chapo, image: a.image,
+      corps: '<p class="se-hint">' + (a.date ? new Date(a.date).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' }) + ' · ' : '') + 'Rédigé par Célia, l’assistante de l’agence, à partir de sources publiques.</p>' +
+        '<div class="ed-edito">' + paragraphes(a.texte) + '</div>' +
+        ((a.sources || []).length ? '<div class="ed-gz-sources"><span class="ed-kicker">Sources</span><ul>' + a.sources.map((x) => '<li><a href="' + esc(x.url) + '" target="_blank" rel="noopener nofollow">' + esc(x.titre) + '</a></li>').join('') + '</ul></div>' : '') +
+        (a.rubrique === 'conseil' ? '<button type="button" class="se-btn" data-act="gazette-reestimation">Parler de ma vente à mon agent</button>' : '') }));
+    const marche = redac.filter((a, i) => (g.articles[i] || {}).rubrique === 'marche');
+    const conseils = redac.filter((a, i) => (g.articles[i] || {}).rubrique === 'conseil');
+    if (marche[0]) out.push(marche[0]);
+    // Vendu récemment dans votre secteur : ventes du club (6 derniers mois)
+    // dans les quartiers du membre (son bien, sa recherche), sinon toutes.
+    const vendus = g.vendus || [];
+    if (vendus.length) {
+      const rec = state.recherche || {};
+      const mesQ = [].concat(state.monBien && state.monBien.quartier ? [state.monBien.quartier] : [], rec.quartiers || []);
+      const proches = vendus.filter((v) => mesQ.indexOf(v.quartier) > -1);
+      const liste = (proches.length ? proches : vendus).slice(0, 6);
+      const ici = proches.length ? (liste[0].label || 'votre secteur') : 'le club';
+      out.push({ slug: 'vendus-secteur', kicker: 'Vendu dans votre secteur', titre: proches.length ? 'Vendu récemment près de chez vous' : 'Les dernières ventes du club',
+        chapo: num(liste.length) + ' vente' + (liste.length > 1 ? 's' : '') + ' récente' + (liste.length > 1 ? 's' : '') + (proches.length ? ' dans ' + ici : ' du club') + ' ces six derniers mois.',
+        image: 'assets/img/saintgermain-1.jpg',
+        corps: '<div class="se-list ed-gz-vendus">' + liste.map((v) => '<div class="se-list-item"><div style="flex:1;min-width:0"><b>' + esc([v.type, v.pieces ? v.pieces + ' p.' : '', v.surface ? num(v.surface) + ' m²' : ''].filter(Boolean).join(' · ')) + '</b>' +
+            '<div class="se-hint">' + esc(v.label || '') + (v.venduLe ? ' · vendu en ' + new Date(v.venduLe).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' }) : '') + (v.parSeecret ? ' · par Seecret' : '') + '</div></div>' +
+            (v.prixM2 ? '<span style="white-space:nowrap">≈ ' + euro(v.prixM2) + ' / m²</span>' : '') + '</div>').join('') + '</div>' +
+          '<p class="se-hint" style="margin-top:10px">Prix au m² arrondis, honoraires inclus. Adresses non communiquées.</p>' +
+          '<p>Vous vous demandez ce que vaut votre bien aujourd’hui ? Votre agent compare ces ventes à votre bien et à l’intérêt mesuré sur Seecret.</p>' +
+          '<button type="button" class="se-btn" data-act="gazette-reestimation">Demander une estimation</button>' });
+    }
+    if (conseils[0]) out.push(conseils[0]);
+    marche.slice(1).concat(conseils.slice(1)).forEach((a) => out.push(a));
     if (g.record) {
       const d = dureeTxt(g.record.heures);
       const rb = bien(g.record.bienId);
@@ -1175,7 +1205,7 @@
   // La une : bandeau de l'accueil, articles qui défilent seuls (pause au
   // survol), flèches, points et glissé du doigt ; un clic ouvre l'article.
   function gazetteUne() {
-    const arts = articlesGazette();
+    const arts = articlesGazette().slice(0, 7);
     if (!arts.length) return '';
     return '<section class="ed-une" data-une aria-roledescription="carrousel" aria-label="La Gazette du club">' +
       arts.map((a, i) => '<a class="ed-une-slide' + (i === 0 ? ' on' : '') + '" href="' + (a.lienDirect || '#/gazette/' + a.slug) + '" aria-hidden="' + (i === 0 ? 'false' : 'true') + '"' + (i === 0 ? '' : ' tabindex="-1"') + '>' +
