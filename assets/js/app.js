@@ -1016,6 +1016,7 @@
     return '<div class="ed-gallery">' +
       '<div class="ed-gallery-main ed-card-photo" data-slides="' + photos.length + '" data-galerie>' +
         photos.map((src, k) => cadre(src, 'ed-slide' + (k === 0 ? ' on' : ''))).join('') +
+        (b.video ? '<button type="button" class="ed-video-bouton" data-act="video-voir" data-id="' + b.id + '"><svg viewBox="0 0 20 20" width="14" height="14" fill="currentColor"><path d="M6 4.5v11l9-5.5z"/></svg>Home tour</button>' : '') +
         (photos.length > 1 ? fleche(-1, 'prev', 'm12 5-5 5 5 5') + fleche(1, 'next', 'm8 5 5 5-5 5') +
           '<span class="ed-slide-compte">1 / ' + photos.length + '</span>' : '') +
       '</div>' +
@@ -2493,6 +2494,12 @@
     'gazette-reestimation': () => {
       state.__chatBrouillon = 'Bonjour, je souhaiterais faire le point sur le prix de mon bien et organiser une réestimation avec vous.';
       actions['chat-ouvrir']();
+    },
+    'video-voir': (el, id) => {
+      const b = bien(id); if (!b || !b.video) return;
+      modal = '<div class="ed-video-modale"><video src="' + esc(b.video.url) + '" controls autoplay playsinline></video>' +
+        '<div class="se-modal-foot"><span class="se-hint">' + esc(b.titre || '') + '</span><button class="se-btn ghost" type="button" data-act="modal-close">Fermer</button></div></div>';
+      render();
     },
     'une-defiler': (el, sens) => { const box = el.closest('[data-une]'); uneAller(box, (box.__index || 0) + Number(sens)); },
     'une-aller': (el, i) => { uneAller(el.closest('[data-une]'), Number(i) || 0); },

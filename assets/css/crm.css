@@ -375,3 +375,8 @@ body.se-maps-open { overflow: hidden; }
   .se-maps-head .se-studio-tab { padding: 7px 12px; }
   .se-maps-foot { display: none; }
 }
+
+/* ---- vidéo home tour ---- */
+.se-video { display: block; width: min(100%, 300px); aspect-ratio: 9 / 16; background: #141210; border-radius: 14px; object-fit: contain; }
+.se-video-progres { height: 6px; border-radius: 999px; background: var(--color-sand, #efebe4); overflow: hidden; margin-bottom: 6px; }
+.se-video-progres i { display: block; height: 100%; width: 0; background: var(--color-button-ink, #221a2c); transition: width .3s; }
