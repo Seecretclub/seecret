@@ -406,29 +406,21 @@
   .ed-musique-invite small { font-size: 12px; color: var(--color-taupe); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .ed-musique-note { width: 32px; height: 32px; border-radius: 999px; background: var(--color-button-ink); color: #fff; display: grid; place-items: center; flex: 0 0 32px; }
   .ed-musique-x { border: 0; background: none; font-size: 20px; color: var(--color-taupe); cursor: pointer; padding: 0 4px; }
-  .ed-musique { position: fixed; left: max(20px, env(safe-area-inset-left, 0px)); bottom: calc(20px + env(safe-area-inset-bottom, 0px)); z-index: 69; width: 320px; background: var(--color-surface); border: 1px solid var(--color-stroke-faint); border-radius: 16px; box-shadow: 0 12px 34px rgba(20,18,16,.18); overflow: hidden; }
-  .ed-musique-barre { display: flex; align-items: center; gap: 6px; padding: 6px 6px 6px 12px; }
-  .ed-musique-nom { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .ed-musique-btn { display: inline-flex; align-items: center; gap: 5px; font: inherit; font-size: 12.5px; font-weight: 600; border: 0; border-radius: 999px; padding: 7px 12px; cursor: pointer; background: var(--color-button-ink); color: #fff; white-space: nowrap; }
-  .ed-musique-btn.secondaire { background: var(--color-sand); color: var(--color-ink); font-weight: 500; }
-  .ed-musique-ico { font-size: 11px; line-height: 1; }
+  .ed-musique { position: fixed; left: max(20px, env(safe-area-inset-left, 0px)); bottom: calc(20px + env(safe-area-inset-bottom, 0px)); z-index: 69; width: min(340px, calc(100vw - 110px)); background: var(--color-surface); border: 1px solid var(--color-stroke-faint); border-radius: 16px; box-shadow: 0 12px 34px rgba(20,18,16,.18); overflow: hidden; }
+  .ed-musique-barre { display: flex; align-items: center; gap: 6px; padding: 6px 6px 6px 6px; }
+  .ed-musique-titre { flex: 1; min-width: 0; text-align: left; font: inherit; font-size: 13px; font-weight: 600; border: 0; background: none; cursor: pointer; color: var(--color-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ed-musique-btn { font: inherit; font-size: 12px; border: 0; background: var(--color-sand); border-radius: 999px; padding: 6px 10px; cursor: pointer; color: var(--color-ink); }
+  .ed-musique-toggle { border: 0; cursor: pointer; font-size: 16px; line-height: 1; transition: transform .15s, box-shadow .15s; box-shadow: 0 0 0 0 rgba(20,18,16,.18); }
+  .ed-musique-toggle:hover { transform: scale(1.08); box-shadow: 0 0 0 4px rgba(20,18,16,.08); }
+  .ed-musique-toggle:focus-visible { outline: 2px solid var(--color-club-violet); outline-offset: 2px; }
   .ed-musique iframe { display: block; width: 100%; height: 152px; border: 0; }
   .ed-musique.youtube iframe { height: auto; aspect-ratio: 16/9; }
-  .ed-musique.replie { width: auto; max-width: 260px; border-radius: 999px; }
-  .ed-musique.replie .ed-musique-barre { padding: 5px 5px 5px 14px; }
+  .ed-musique.replie { width: auto; border-radius: 999px; }
   .ed-musique.replie iframe { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
-  .ed-musique.replie .ed-musique-btn.secondaire { display: none; }
+  .ed-musique.replie .ed-musique-btn { display: none; }
+  .ed-musique.replie .ed-musique-titre { max-width: 160px; padding-right: 8px; }
   .se-modal:has(.ed-musique-choix) { width: min(560px, 100%); }
-  @media (max-width: 640px) {
-    .ed-musique { left: 12px; bottom: calc(14px + env(safe-area-inset-bottom, 0px)); width: min(250px, calc(100vw - 96px)); border-radius: 14px; }
-    .ed-musique-barre { padding: 4px 4px 4px 10px; gap: 4px; }
-    .ed-musique-nom { font-size: 12px; }
-    .ed-musique-btn { font-size: 12px; padding: 6px 10px; }
-    .ed-musique:not(.youtube) iframe { height: 80px; }
-    .ed-musique.replie { max-width: 190px; }
-    .ed-musique-invite { left: 12px; bottom: calc(14px + env(safe-area-inset-bottom, 0px)); padding: 8px 8px 8px 10px; gap: 8px; }
-    .ed-musique-invite small { display: none; }
-  }
+  @media (max-width: 640px) { .ed-musique:not(.youtube) iframe { height: 80px; } .ed-musique { width: calc(100vw - 100px); } }
   .ed-tour.coin { right: 24px; bottom: 24px; }
   .ed-tour.bas { left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); width: auto; }
   @media (max-width: 860px) {
