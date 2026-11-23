@@ -4244,7 +4244,7 @@
       // on résout le client local via serverId pour que le message pré-rempli et
       // le bouton WhatsApp fonctionnent aussi pour une vraie candidature reçue.
       const c = d.clientId ? client(d.clientId) : (d.leadId ? state.clients.find((x) => x.serverId === d.leadId) : null);
-      out.push({ id: 'demande-' + d.id, clientId: c ? c.id : '', sujet: 'Nouvelle demande d’adhésion', actionAuto: 'Dossier reçu', actionHumaine: 'Traiter la demande', date: d.cree || new Date().toISOString(), priorite: 'haute', type: 'demande' });
+      out.push({ id: 'demande-' + d.id, lien: '#/demande/' + d.id, lienTexte: 'Ouvrir la demande', clientId: c ? c.id : '', sujet: 'Nouvelle demande d’adhésion', actionAuto: 'Dossier reçu', actionHumaine: 'Traiter la demande', date: d.cree || new Date().toISOString(), priorite: 'haute', type: 'demande' });
     });
     state.clients.filter((c) => c.serveurStatut === 'suspendu').forEach((c) => {
       out.push({ id: 'suspendu-' + c.id, clientId: c.id, sujet: 'Adhésion suspendue', actionAuto: 'Suspension enregistrée', actionHumaine: 'Régularisation à suivre', date: new Date().toISOString(), priorite: 'moyenne', type: 'adhesion' });
@@ -4286,8 +4286,7 @@
       const tel = c ? String(c.tel || '').replace(/[^0-9]/g, '') : '';
       const msg = c ? prevenirMessage(n, c) : '';
       const wa = tel ? 'https://wa.me/' + tel + '?text=' + encodeURIComponent(msg) : '';
-      return '<div class="se-list-item" style="align-items:flex-start">' +
-        '<label class="se-reseau-check" style="padding-top:2px"><input type="checkbox" data-act="notification-traiter" data-id="' + n.id + '" title="Fait"/></label>' +
+      return '<div class="se-list-item se-notif-item">' +
         '<div style="flex:1;min-width:0">' +
           '<div class="se-kicker" style="font-size:9.5px">' + esc(n.type.toUpperCase()) + '</div>' +
           '<div style="font-size:13.5px;font-weight:500">' + esc(n.sujet) + '</div>' +
@@ -4295,14 +4294,18 @@
           '<div class="se-hint">' + anciennete(n.date) + (c ? ' · ' + esc(nomClient(c)) : '') + '</div>' +
           (c ? '<p class="se-reseau-msg">' + esc(msg.replace(/\n+/g, ' ')) + '</p>' : '') +
         '</div>' +
-        '<div style="flex:0 0 auto;display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end">' +
-          (c ? '<button class="se-btn ghost sm" data-act="copier-contact" data-value="' + esc(msg) + '">Copier</button>' : '') +
+        '<div class="se-notif-actions">' +
+          (n.lien ? '<a class="se-btn soft sm" href="' + n.lien + '">' + esc(n.lienTexte || 'Ouvrir') + '</a>' : '') +
+          (c ? '<button class="se-btn ghost sm" data-act="copier-contact" data-value="' + esc(msg) + '">Copier le message</button>' : '') +
           (wa ? '<a class="se-btn ghost sm" href="' + esc(wa) + '" target="_blank" rel="noopener">WhatsApp</a>' : '') +
           (c ? '<a class="se-btn ghost sm" href="#/client/' + c.id + '">Fiche</a>' : '') +
+          '<button class="se-btn sm" data-act="notification-traiter" data-id="' + n.id + '">' + ICONS.check + ' Fait</button>' +
         '</div>' +
       '</div>';
     };
-    return head('Intelligence', 'À prévenir', list.length + ' action(s) humaine(s) à effectuer — case « Fait » une fois le contact recontacté.', '') +
+    const dernier = state.notifDerniere && Date.now() - (state.notifDerniere.at || 0) < 10 * 60 * 1000 ? state.notifDerniere : null;
+    return head('Intelligence', 'À prévenir', 'Ce que vous devez faire vous-même : traiter une demande, rappeler un client, vérifier une pièce… Une fois fait, cliquez « Fait » : la ligne quitte la liste.', '') +
+      (dernier ? '<div class="se-note" style="margin-bottom:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span style="flex:1;min-width:0">« ' + esc(dernier.sujet) + ' » est marquée comme faite.</span><button class="se-btn ghost sm" data-act="notification-annuler" data-id="' + dernier.id + '">Annuler</button></div>' : '') +
       (list.length ? '<div class="se-card"><div class="se-list">' + list.map(carte).join('') + '</div></div>' : '<div class="se-card"><p class="se-muted">Aucune action en attente. Tout est à jour.</p></div>');
   }
 
@@ -6375,13 +6378,23 @@
       el.textContent = texteInitial;
       render();
     },
+    'notification-annuler': (el) => {
+      const id = el.getAttribute('data-id');
+      state.notificationsTraitees = (state.notificationsTraitees || []).filter((x) => x !== id);
+      state.notifDerniere = null;
+      commit();
+      fetch('/api/notifications', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ traitees: state.notificationsTraitees }) }).catch(() => {});
+      toast('Action remise dans la liste.', 'ok');
+    },
     'notification-traiter': async (el) => {
       const id = el.getAttribute('data-id');
+      const n = notifications().find((x) => x.id === id);
+      state.notifDerniere = n ? { at: Date.now(), id: id, sujet: n.sujet + (n.clientId && client(n.clientId) ? ' — ' + nomClient(client(n.clientId)) : '') } : null;
       state.notificationsTraitees = state.notificationsTraitees || [];
       if (state.notificationsTraitees.indexOf(id) === -1) state.notificationsTraitees.push(id);
       commit();
       fetch('/api/notifications', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ traitees: state.notificationsTraitees }) }).catch(() => {});
-      toast('Notification traitée.', 'ok');
+      toast('Marqué comme fait. Vous pouvez annuler en haut de la liste.', 'ok');
     },
     'notification-whatsapp': (el) => {
       const id = el.getAttribute('data-id');
@@ -7646,7 +7659,7 @@
     }
   });
 
-  window.addEventListener('hashchange', () => { modal = null; fermerCarte(); render(); });
+  window.addEventListener('hashchange', () => { modal = null; state.notifDerniere = null; fermerCarte(); render(); });
 
   /* -------------------------------- démarrage ------------------------------ */
 
