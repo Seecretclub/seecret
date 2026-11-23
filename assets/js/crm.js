@@ -5533,7 +5533,68 @@
             '<div class="se-field full"><label>Pourquoi ce bien</label><textarea class="se-textarea" name="phrase" maxlength="400" style="min-height:90px">' + esc(coup.phrase || '') + '</textarea></div>' +
           '</div>' +
           '<button class="se-btn" type="submit" style="margin-top:12px">Publier dans la Gazette</button></form>' +
-      '</div>';
+      '</div>' + carteArticlesAuto();
+  }
+
+  // Articles rédigés automatiquement par Célia (marché immobilier, conseils).
+  function carteArticlesAuto() {
+    const A = state.gazetteArticles;
+    if (!A) {
+      if (!state.gazetteArticlesCharge) { state.gazetteArticlesCharge = true; chargerArticlesGazette(); }
+      return '<div class="se-card" style="margin-top:18px"><h3>Articles automatiques</h3><p class="se-hint">Chargement…</p></div>';
+    }
+    const r = A.reglages || {};
+    const enCours = state.gazetteRedaction;
+    const statut = { publie: ['open', 'Publié'], a_valider: ['warn', 'À valider'], retire: ['', 'Retiré'] };
+    const rub = { marche: 'Le marché', conseil: 'Conseil vendeur' };
+    const opt = (v, cur, txt) => '<option value="' + v + '"' + (String(cur) === String(v) ? ' selected' : '') + '>' + txt + '</option>';
+    return '<div class="se-card" style="margin-top:18px">' +
+      '<h3>Articles automatiques</h3>' +
+      '<p class="se-hint" style="margin:6px 0 14px">Célia rédige seule l’actualité du marché immobilier en France (taux, prix, ventes, mesures — avec les sources citées) et un conseil vendeur. Ils s’ajoutent à la Gazette des membres, en plus du bien à la une, des ventes récentes dans leur secteur et des chiffres du club.</p>' +
+      (A.cle ? '' : '<div class="se-note" style="margin-bottom:12px">La clé Gemini (GEMINI_API_KEY) n’est pas configurée sur le serveur : aucun article ne peut être rédigé.</div>') +
+      '<form class="se-form-grid" data-form="gazette-reglages">' +
+        '<div class="se-field"><label>Rédaction automatique</label><select class="se-select" name="auto">' + opt('true', r.auto, 'Activée') + opt('false', r.auto, 'En pause') + '</select></div>' +
+        '<div class="se-field"><label>Publication</label><select class="se-select" name="publication">' + opt('auto', r.publication, 'Directement dans la Gazette') + opt('validation', r.publication, 'Après ma validation') + '</select></div>' +
+        '<div class="se-field"><label>Actualité du marché</label><select class="se-select" name="marcheJours">' + opt(2, r.marcheJours, 'Tous les 2 jours') + opt(3, r.marcheJours, 'Tous les 3 jours') + opt(7, r.marcheJours, 'Chaque semaine') + '</select></div>' +
+        '<div class="se-field"><label>Conseil vendeur</label><select class="se-select" name="conseilJours">' + opt(7, r.conseilJours, 'Chaque semaine') + opt(14, r.conseilJours, 'Toutes les 2 semaines') + '</select></div>' +
+        '<div class="se-field full" style="display:flex;flex-direction:row"><button class="se-btn soft" type="submit">Enregistrer les réglages</button></div>' +
+      '</form>' +
+      '<div class="se-actions" style="margin-top:14px">' +
+        '<button class="se-btn" data-act="gazette-rediger" data-id="marche"' + (enCours || !A.cle ? ' disabled' : '') + '>' + (enCours === 'marche' ? 'Rédaction… (jusqu’à 1 min)' : 'Rédiger l’actualité du marché maintenant') + '</button>' +
+        '<button class="se-btn ghost" data-act="gazette-rediger" data-id="conseil"' + (enCours || !A.cle ? ' disabled' : '') + '>' + (enCours === 'conseil' ? 'Rédaction…' : 'Rédiger un conseil vendeur') + '</button>' +
+      '</div>' +
+      '<div class="se-list" style="margin-top:16px">' +
+        ((A.articles || []).length ? A.articles.slice(0, 30).map((a) => {
+          const st = statut[a.statut] || ['', a.statut];
+          const ouvert = state.gazetteArticleOuvert === a.id;
+          return '<div class="se-list-item" style="flex-wrap:wrap;align-items:flex-start;gap:10px">' +
+            '<div style="flex:1;min-width:220px"><div class="se-hint">' + esc(rub[a.rubrique] || '') + ' · ' + dFR(a.cree) + ' · <span class="se-badge ' + st[0] + '">' + st[1] + '</span></div>' +
+              '<b style="display:block;margin-top:4px">' + esc(a.titre) + '</b><div class="se-hint" style="margin-top:2px">' + esc(a.chapo || '') + '</div></div>' +
+            '<div class="se-actions">' +
+              '<button class="se-btn ghost sm" data-act="gazette-article-ouvrir" data-id="' + a.id + '">' + (ouvert ? 'Fermer' : 'Lire / modifier') + '</button>' +
+              (a.statut !== 'publie' ? '<button class="se-btn sm" data-act="gazette-article-statut" data-id="' + a.id + '" data-statut="publie">Publier</button>' : '<button class="se-btn ghost sm" data-act="gazette-article-statut" data-id="' + a.id + '" data-statut="retire">Retirer</button>') +
+            '</div>' +
+            (ouvert ? '<form data-form="gazette-article" data-id="' + a.id + '" style="flex:1 1 100%" class="se-form-grid">' +
+                '<div class="se-field full"><label>Titre</label><input class="se-input" name="titre" maxlength="110" value="' + esc(a.titre) + '"/></div>' +
+                '<div class="se-field full"><label>Chapô</label><input class="se-input" name="chapo" maxlength="260" value="' + esc(a.chapo || '') + '"/></div>' +
+                '<div class="se-field full"><label>Texte</label><textarea class="se-textarea" name="texte" style="min-height:260px">' + esc(a.texte) + '</textarea></div>' +
+                ((a.sources || []).length ? '<div class="se-field full"><label>Sources</label><div class="se-hint">' + a.sources.map((x) => '<a href="' + esc(x.url) + '" target="_blank" rel="noopener">' + esc(x.titre) + '</a>').join(' · ') + '</div></div>' : '') +
+                '<div class="se-field full" style="display:flex;flex-direction:row;flex-wrap:wrap;gap:8px;align-items:center"><button class="se-btn" type="submit">Enregistrer</button><button class="se-btn danger sm" type="button" data-act="gazette-article-suppr" data-id="' + a.id + '">Supprimer</button></div>' +
+              '</form>' : '') +
+          '</div>';
+        }).join('') : '<p class="se-hint">Aucun article pour l’instant. Le premier arrive dans l’heure qui suit l’activation, ou tout de suite avec « Rédiger… ».</p>') +
+      '</div></div>';
+  }
+  async function chargerArticlesGazette() {
+    try { const r = await fetch('/api/gazette/articles', { credentials: 'same-origin' }); const d = await r.json(); if (r.ok) state.gazetteArticles = d; } catch (e) { /* hors ligne */ }
+    state.gazetteArticlesCharge = false;
+    render();
+  }
+  async function appelGazette(methode, url, corps) {
+    const r = await fetch(url, { method: methode, headers: { 'content-type': 'application/json' }, credentials: 'same-origin', body: corps ? JSON.stringify(corps) : undefined });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || 'Erreur');
+    return d;
   }
 
   function viewReglages() {
@@ -6038,6 +6099,27 @@
     'demande-relancer': (el, id) => {
       const d = state.demandes.find((x) => x.id === id || x.serverDemandeId === id);
       if (d) { d.statut = 'nouvelle'; commit(); toast('Demande relancée.', 'ok'); }
+    },
+    'gazette-rediger': async (el, id) => {
+      state.gazetteRedaction = id; render();
+      try {
+        const d = await appelGazette('POST', '/api/gazette/articles/generer', { rubrique: id });
+        toast('Article rédigé : « ' + d.article.titre + ' »' + (d.article.statut === 'publie' ? ' — publié.' : ' — à valider.'), 'ok');
+        state.gazetteArticleOuvert = d.article.id;
+      } catch (err) { toast('Rédaction impossible : ' + err.message, 'warn'); }
+      state.gazetteRedaction = null;
+      await chargerArticlesGazette();
+    },
+    'gazette-article-ouvrir': (el, id) => { state.gazetteArticleOuvert = state.gazetteArticleOuvert === id ? null : id; render(); },
+    'gazette-article-statut': async (el, id) => {
+      const st = el.getAttribute('data-statut');
+      try { await appelGazette('PATCH', '/api/gazette/articles/' + encodeURIComponent(id), { statut: st }); toast(st === 'publie' ? 'Article publié dans la Gazette.' : 'Article retiré de la Gazette.', 'ok'); } catch (err) { toast(err.message, 'warn'); }
+      await chargerArticlesGazette();
+    },
+    'gazette-article-suppr': async (el, id) => {
+      if (el.getAttribute('data-confirme') !== '1') { el.setAttribute('data-confirme', '1'); el.textContent = 'Confirmer la suppression'; return; }
+      try { await appelGazette('DELETE', '/api/gazette/articles/' + encodeURIComponent(id)); state.gazetteArticleOuvert = null; toast('Article supprimé.', 'ok'); } catch (err) { toast(err.message, 'warn'); }
+      await chargerArticlesGazette();
     },
     'bien-sur-seecret': async (el, id) => {
       const b = bien(id); if (!b || !b.serveur) return;
@@ -7383,6 +7465,22 @@
       return;
     }
 
+    if (kind === 'gazette-reglages') {
+      try {
+        const d = await appelGazette('PUT', '/api/gazette/reglages', { auto: data.get('auto') === 'true', publication: data.get('publication'), marcheJours: Number(data.get('marcheJours')), conseilJours: Number(data.get('conseilJours')) });
+        state.gazetteArticles = Object.assign({}, state.gazetteArticles, { reglages: d.reglages });
+        render(); toast('Réglages de la Gazette enregistrés.', 'ok');
+      } catch (err) { toast(err.message, 'warn'); }
+      return;
+    }
+    if (kind === 'gazette-article') {
+      const id = form.getAttribute('data-id');
+      try {
+        await appelGazette('PATCH', '/api/gazette/articles/' + encodeURIComponent(id), { titre: data.get('titre'), chapo: data.get('chapo'), texte: data.get('texte') });
+        state.gazetteArticleOuvert = null; await chargerArticlesGazette(); toast('Article enregistré.', 'ok');
+      } catch (err) { toast(err.message, 'warn'); }
+      return;
+    }
     if (kind === 'gazette-mot' || kind === 'gazette-coup') {
       const corps = kind === 'gazette-mot'
         ? { mot: { titre: data.get('titre'), texte: data.get('texte') } }

@@ -1798,6 +1798,173 @@ app.put('/api/biens/:id/visite', requireAdmin, (req, res) => {
 // Chiffres calculés sur les vraies données du club (aucune donnée de marché
 // inventée) + le mot du mois et le coup de cœur, rédigés par l'agence.
 const COMMISSION_REFERENCE = Number(process.env.GAZETTE_COMMISSION_REFERENCE || 5);
+
+// ---- Articles automatiques de la Gazette (Célia + Gemini) ----
+// Deux rubriques rédigées seules :
+//  • « marche »  : l'actualité de l'immobilier en France (taux de crédit,
+//    prix, volume de ventes, mesures…). Gemini cherche l'actualité de la
+//    semaine sur le web (Google Search) ; les sources sont citées.
+//  • « conseil » : un conseil concret pour vendre plus vite / mieux.
+// Fréquences et publication (automatique ou après validation) se règlent dans
+// le CRM (Le Club › La Gazette). Rien n'est inventé côté club : les rubriques
+// « bien à la une », « vendus dans votre secteur », chiffres… restent
+// calculées sur les vraies données.
+const GAZETTE_RUBRIQUES = {
+  marche: { nom: 'Le marché', images: ['trocadero-1.jpg', 'ilesaintlouis-1.jpg', 'montmartre-1.jpg', 'saintsulpice-1.jpg', 'ilesaintlouis-3.jpg', 'montmartre-3.jpg'] },
+  conseil: { nom: 'Conseil vendeur', images: ['home-6.jpg', 'home-3.jpg', 'home-loft-bright.jpg', 'home-jardin.jpg', 'home-5.jpg', 'saintgermain-3.jpg'] }
+};
+const GAZETTE_REGLAGES_DEFAUT = { auto: true, publication: 'auto', marcheJours: 3, conseilJours: 7 };
+const SUJETS_CONSEIL = [
+  'Fixer le juste prix dès le départ (et pourquoi un bien surévalué se vend moins cher au final)',
+  'Les photos qui font vendre : lumière, angles, home staging léger',
+  'Préparer son dossier vendeur (diagnostics, PV d’AG, taxe foncière…) pour signer plus vite',
+  'Vendre en off-market : discrétion, acheteurs qualifiés et négociation',
+  'Réussir les visites : ce que les acheteurs regardent vraiment',
+  'Négocier une offre : prix, conditions suspensives, délais',
+  'Petits travaux qui rapportent avant de vendre (et ceux qui ne servent à rien)',
+  'Le DPE et la vente : ce qui change pour les vendeurs',
+  'Vendre occupé ou vide : avantages et pièges',
+  'Choisir le bon moment pour vendre dans l’année'
+];
+function reglagesGazette(db) { return Object.assign({}, GAZETTE_REGLAGES_DEFAUT, (db.gazette && db.gazette.auto) || {}); }
+function articlePublic(a) {
+  return { id: a.id, slug: a.slug, rubrique: a.rubrique, kicker: (GAZETTE_RUBRIQUES[a.rubrique] || {}).nom || 'La Gazette', titre: a.titre, chapo: a.chapo, texte: a.texte, sources: a.sources || [], image: a.image, date: a.publieLe || a.cree };
+}
+// Ventes du club des 6 derniers mois (sans adresse ni photo : quartier, type,
+// surface et prix au m² arrondi à la centaine).
+function ventesRecentesClub(db) {
+  const depuis = Date.now() - 183 * 864e5;
+  return db.biens.filter((b) => b.statut === 'vendu' && new Date(b.venduLe || b.majLe || b.cree || 0).getTime() > depuis)
+    .sort((a, b) => new Date(b.venduLe || b.cree || 0) - new Date(a.venduLe || a.cree || 0)).slice(0, 20)
+    .map((b) => ({ quartier: b.quartier || '', label: labelQuartier(b.quartier) || '', type: b.type || '', surface: Number(b.surface) || null, pieces: Number(b.pieces) || null,
+      prixM2: b.surface && b.prix ? Math.round(prixHai(b.prix, 5) / b.surface / 100) * 100 : null, venduLe: b.venduLe || null, parSeecret: b.venduParAgence === true }));
+}
+function slugArticle(titre, id) {
+  return String(titre || 'article').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60) + '-' + id.slice(-4);
+}
+function consigneArticle(rubrique, recents, sujet) {
+  const aujourd = new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  const commun = 'Tu es Célia, la plume de la Gazette de Seecret, un club immobilier off-market à Paris. Nous sommes le ' + aujourd + '. ' +
+    'Ton : élégant, clair, concret, sans jargon ni superlatifs creux, vouvoiement. Pas de conseil financier personnalisé. ' +
+    'Titres déjà publiés récemment (ne les répète pas, trouve un autre angle) : ' + (recents.length ? recents.map((t) => '« ' + t + ' »').join(', ') : 'aucun') + '.\n\n' +
+    'Réponds EXACTEMENT dans ce format, sans rien d’autre :\nTITRE: <titre court et accrocheur, 70 caractères max>\nCHAPO: <une phrase de résumé, 180 caractères max>\nTEXTE:\n<4 à 6 paragraphes séparés par une ligne vide, 350 à 550 mots au total>';
+  if (rubrique === 'marche') {
+    return commun + '\n\nSujet : l’actualité du marché immobilier en France des 7 derniers jours. Cherche sur le web (sources fiables : notaires, Banque de France, courtiers comme Meilleurtaux ou CAFPI, INSEE, presse économique) le fait marquant de la semaine : ' +
+      'taux de crédit immobilier en hausse ou en baisse, évolution des prix (France, Paris, grandes villes), volume de ventes, conditions d’octroi, mesures publiques (PTZ, DPE, fiscalité)… ' +
+      'Choisis UN sujet principal, donne les chiffres récents avec leur date et leur source dans le texte (ex. « selon l’Observatoire Crédit Logement de novembre »), puis explique ce que cela change concrètement pour un vendeur et pour un acheteur à Paris. ' +
+      'N’invente aucun chiffre : si tu n’en trouves pas de récent et sourcé, ne le donne pas.';
+  }
+  return commun + '\n\nSujet : un conseil pratique pour les propriétaires qui vendent. Thème : ' + sujet + '. Donne des conseils concrets et actionnables ; termine par une phrase qui rappelle que l’agent Seecret du membre peut l’accompagner (sans formule commerciale lourde). ' +
+    'Si tu cites un chiffre ou une règle, il doit être exact et à jour (cherche sur le web si besoin).';
+}
+async function redigerArticle(db, rubrique) {
+  if (!GEMINI_API_KEY) throw Object.assign(new Error('La rédaction automatique nécessite la clé Gemini (GEMINI_API_KEY).'), { code: 'NO_KEY' });
+  const tous = db.gazetteArticles || [];
+  const recents = tous.filter((a) => a.rubrique === rubrique).slice(0, 8).map((a) => a.titre);
+  const nbConseils = tous.filter((a) => a.rubrique === 'conseil').length;
+  const sujet = SUJETS_CONSEIL[nbConseils % SUJETS_CONSEIL.length];
+  const resp = await fetch(GEMINI_API_BASE + '/v1beta/models/' + encodeURIComponent(GEMINI_MODEL) + ':generateContent', {
+    method: 'POST', signal: AbortSignal.timeout(90000),
+    headers: { 'x-goog-api-key': GEMINI_API_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: consigneArticle(rubrique, recents, sujet) }] }], tools: [{ google_search: {} }], generationConfig: { temperature: 0.6 } })
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw Object.assign(new Error((data && data.error && data.error.message) || ('Gemini ' + resp.status)), { code: 'API_ERROR' });
+  const cand = (data.candidates || [])[0] || {};
+  const brut = ((cand.content || {}).parts || []).map((x) => x.text || '').join('').trim();
+  const m = /TITRE\s*:\s*(.+)\s*\n+\s*CHAPO\s*:\s*(.+)\s*\n+\s*TEXTE\s*:\s*\n?([\s\S]+)/i.exec(brut);
+  if (!m) throw Object.assign(new Error('Célia n’a pas renvoyé un article exploitable. Réessayez.'), { code: 'API_ERROR' });
+  const nettoie = (t) => String(t).replace(/\*\*|__|^#+\s*/gm, '').trim();
+  const sources = [];
+  ((cand.groundingMetadata || {}).groundingChunks || []).forEach((c) => {
+    const w = c.web || {}; if (!w.uri || sources.some((x) => x.titre === w.title)) return;
+    sources.push({ titre: String(w.title || w.uri).slice(0, 120), url: String(w.uri) });
+  });
+  const id = uid('ga');
+  const titre = nettoie(m[1]).replace(/^« |»$/g, '').replace(/\.$/, '').slice(0, 110);
+  const images = GAZETTE_RUBRIQUES[rubrique].images;
+  return {
+    id: id, slug: slugArticle(titre, id), rubrique: rubrique, titre: titre, chapo: nettoie(m[2]).slice(0, 260), texte: nettoie(m[3]).replace(/\s*\[\d+(,\s*\d+)*\]/g, '').slice(0, 6000),
+    sources: sources.slice(0, 6), image: 'assets/img/' + images[tous.filter((a) => a.rubrique === rubrique).length % images.length],
+    sujet: rubrique === 'conseil' ? sujet : null, auteur: 'Célia (IA)', cree: nowISO()
+  };
+}
+async function creerArticleGazette(rubrique, publier) {
+  const art = await redigerArticle(readDb(), rubrique);
+  const db = readDb();
+  art.statut = publier ? 'publie' : 'a_valider';
+  if (publier) art.publieLe = nowISO();
+  db.gazetteArticles = [art].concat(db.gazetteArticles || []).slice(0, 200);
+  writeDb(db);
+  return art;
+}
+// Vérifie (au plus une fois toutes les 30 min) si un article est dû.
+let gazetteAutoEnCours = false;
+let gazetteAutoDernier = 0;
+function gazetteAutoVerifier() {
+  if (gazetteAutoEnCours || !GEMINI_API_KEY || Date.now() - gazetteAutoDernier < 30 * 60 * 1000) return;
+  gazetteAutoDernier = Date.now();
+  const db = readDb();
+  const r = reglagesGazette(db);
+  if (!r.auto) return;
+  const dernier = (rub) => Math.max(0, ...(db.gazetteArticles || []).filter((a) => a.rubrique === rub).map((a) => new Date(a.cree).getTime()));
+  const du = ['marche', 'conseil'].find((rub) => Date.now() - dernier(rub) > (rub === 'marche' ? r.marcheJours : r.conseilJours) * 864e5 - 3600e3);
+  if (!du) return;
+  gazetteAutoEnCours = true;
+  creerArticleGazette(du, r.publication === 'auto')
+    .then((a) => console.log('[gazette] article « ' + a.titre + ' » (' + du + ', ' + a.statut + ')'))
+    .catch((e) => console.warn('[gazette] rédaction impossible :', e.message))
+    .finally(() => { gazetteAutoEnCours = false; });
+}
+setTimeout(gazetteAutoVerifier, 60 * 1000);
+setInterval(gazetteAutoVerifier, 60 * 60 * 1000).unref();
+
+app.get('/api/gazette/articles', requireAdmin, (req, res) => {
+  const db = readDb();
+  res.json({ ok: true, reglages: reglagesGazette(db), cle: !!GEMINI_API_KEY, articles: db.gazetteArticles || [] });
+});
+app.put('/api/gazette/reglages', requireAdmin, (req, res) => {
+  const db = readDb();
+  const b = req.body || {};
+  const r = reglagesGazette(db);
+  if (typeof b.auto === 'boolean') r.auto = b.auto;
+  if (b.publication === 'auto' || b.publication === 'validation') r.publication = b.publication;
+  if ([2, 3, 7].indexOf(Number(b.marcheJours)) > -1) r.marcheJours = Number(b.marcheJours);
+  if ([7, 14].indexOf(Number(b.conseilJours)) > -1) r.conseilJours = Number(b.conseilJours);
+  db.gazette = db.gazette || {};
+  db.gazette.auto = r;
+  writeDb(db);
+  res.json({ ok: true, reglages: r });
+});
+app.post('/api/gazette/articles/generer', requireAdmin, async (req, res) => {
+  const rubrique = (req.body && req.body.rubrique) === 'conseil' ? 'conseil' : 'marche';
+  try {
+    const r = reglagesGazette(readDb());
+    const a = await creerArticleGazette(rubrique, r.publication === 'auto');
+    res.json({ ok: true, article: a });
+  } catch (e) { res.status(e.code === 'NO_KEY' ? 503 : 502).json({ error: e.message || 'Rédaction impossible.' }); }
+});
+app.patch('/api/gazette/articles/:id', requireAdmin, (req, res) => {
+  const db = readDb();
+  const a = (db.gazetteArticles || []).find((x) => x.id === req.params.id);
+  if (!a) return res.status(404).json({ error: 'Article introuvable.' });
+  const b = req.body || {};
+  if (typeof b.titre === 'string' && b.titre.trim()) a.titre = b.titre.trim().slice(0, 110);
+  if (typeof b.chapo === 'string') a.chapo = b.chapo.trim().slice(0, 260);
+  if (typeof b.texte === 'string' && b.texte.trim()) a.texte = b.texte.trim().slice(0, 6000);
+  if (['publie', 'retire', 'a_valider'].indexOf(b.statut) > -1) { if (b.statut === 'publie' && a.statut !== 'publie') a.publieLe = nowISO(); a.statut = b.statut; }
+  a.modifieLe = nowISO();
+  writeDb(db);
+  res.json({ ok: true, article: a });
+});
+app.delete('/api/gazette/articles/:id', requireAdmin, (req, res) => {
+  const db = readDb();
+  const avant = (db.gazetteArticles || []).length;
+  db.gazetteArticles = (db.gazetteArticles || []).filter((x) => x.id !== req.params.id);
+  if (db.gazetteArticles.length === avant) return res.status(404).json({ error: 'Article introuvable.' });
+  writeDb(db);
+  res.json({ ok: true });
+});
 app.get('/api/gazette', requireAuth, (req, res) => {
   const db = req.db;
   const g = db.gazette || {};
@@ -1826,8 +1993,11 @@ app.get('/api/gazette', requireAuth, (req, res) => {
     chiffres: { biens: surPlateforme.length, membres: membres, visites: visites, ventes: vendusAgence.length, commissionsEvitees: evitees, commissionReference: COMMISSION_REFERENCE },
     record: record,
     mot: g.mot && g.mot.texte ? { titre: g.mot.titre || '', texte: g.mot.texte, auteur: g.mot.auteur || '', date: g.mot.date || null } : null,
-    coupDeCoeur: coup ? { bienId: coup.id, phrase: g.coupDeCoeur.phrase || '', auteur: g.coupDeCoeur.auteur || '' } : null
+    coupDeCoeur: coup ? { bienId: coup.id, phrase: g.coupDeCoeur.phrase || '', auteur: g.coupDeCoeur.auteur || '' } : null,
+    articles: (db.gazetteArticles || []).filter((a) => a.statut === 'publie').slice(0, 12).map(articlePublic),
+    vendus: ventesRecentesClub(db)
   });
+  gazetteAutoVerifier(); // en arrière-plan : rédige l'article du moment s'il est dû
 });
 app.get('/api/gazette/edition', requireAdmin, (req, res) => {
   const db = readDb();
@@ -2559,6 +2729,7 @@ app.patch('/api/biens/:id', requireAdmin, (req, res) => {
       return res.status(400).json({ error: 'Précisez si le bien a été vendu par Seecret.' });
     }
     if (typeof body.venduParAgence === 'boolean') bien.venduParAgence = body.venduParAgence;
+    if (bien.statut !== 'vendu') bien.venduLe = nowISO(); // pour « vendu récemment dans votre secteur »
   } else if (typeof body.statut === 'string' && body.statut !== 'vendu') {
     delete bien.venduParAgence;
   }
