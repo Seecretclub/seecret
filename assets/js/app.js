@@ -505,6 +505,7 @@
         '<a class="ed-brand" href="#/accueil"><span class="ed-logo">S</span><span><b>Seecret</b><small>Le club off-market</small></span></a>' +
         '<nav class="ed-nav">' +
           '<a href="#/accueil" data-tour="biens" class="' + (surBiens ? 'active' : '') + '">Les biens</a>' +
+          '<a href="#/gazette" class="' + (r.name === 'gazette' ? 'active' : '') + '">La Gazette</a>' +
           '<a href="#/favoris" data-tour="favoris" class="' + (r.name === 'favoris' ? 'active' : '') + '">Mes favoris' + (nbFavoris ? ' <span class="ed-count">' + nbFavoris + '</span>' : '') + '</a>' +
           '<a href="/index.html" target="_blank" rel="noopener" data-tour="concept">Le concept</a>' +
         '</nav>' +
@@ -889,6 +890,7 @@
             '<div class="ed-card-title" style="font-size:24px;color:#fff;margin:8px 0">Pour voir les biens des autres, montrez le vôtre.</div>' +
             '<a class="se-btn light" href="#/mon-bien">Déposer mon bien</a>' +
           '</div>') +
+      gazetteAccroche() +
       '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:14px;flex-wrap:wrap">' +
         '<div><span class="ed-kicker">Catalogue</span><h2 class="ed-title" style="font-size:28px;margin:4px 0 0">Les biens du club</h2></div>' +
       '</div>' +
@@ -1081,6 +1083,105 @@
           '<div class="ed-panel"><span class="ed-kicker">Quartier</span><div style="margin-top:10px">' + ecolesBlock(b) + '</div></div>' +
         '</div>' +
       '</div>';
+  }
+
+  // ---- La Gazette du club ----
+  // Les chiffres viennent du serveur (vraies données du club) ; le bien du
+  // mois, le quartier et le portrait sont calculés sur le catalogue que le
+  // membre voit déjà (prix HAI, popularité seulement au-dessus du seuil).
+  async function chargerGazette() {
+    try { state.gazette = await API.get('/api/gazette'); } catch (e) { /* gazette indisponible */ }
+  }
+  function dureeTxt(h) {
+    if (h < 48) return { n: h, u: 'heure' + (h > 1 ? 's' : '') };
+    const j = Math.round(h / 24);
+    return { n: j, u: 'jour' + (j > 1 ? 's' : '') };
+  }
+  function contenuGazette() {
+    const g = state.gazette || {};
+    const visibles = visiblesPourMembre(state.biens);
+    const bienDuMois = visibles.slice().sort((a, b) => (b.suiveurs || 0) - (a.suiveurs || 0) || new Date(b.cree || 0) - new Date(a.cree || 0))[0] || null;
+    const parQuartier = {};
+    visibles.forEach((b) => { if (!b.quartier) return; const q = parQuartier[b.quartier] = parQuartier[b.quartier] || { id: b.quartier, label: b.label || nomQuartier(b.quartier), n: 0, suiveurs: 0, prix: 0, surface: 0 }; q.n++; q.suiveurs += b.suiveurs || 0; if (b.surface) { q.prix += b.prix; q.surface += b.surface; } });
+    const quartier = Object.keys(parQuartier).map((k) => parQuartier[k]).sort((a, b) => b.n - a.n || b.suiveurs - a.suiveurs)[0] || null;
+    const portrait = visibles.find((b) => b.coupDeCoeur && (!bienDuMois || b.id !== bienDuMois.id)) || visibles.find((b) => b.coupDeCoeur) || null;
+    const coup = g.coupDeCoeur ? bien(g.coupDeCoeur.bienId) : null;
+    return { g: g, bienDuMois: bienDuMois, quartier: quartier, portrait: portrait, coup: coup };
+  }
+  function extrait(b, n) {
+    const t = ((b.editorial && b.editorial.texte) || b.description || '').replace(/\s+/g, ' ').trim();
+    return t.length > n ? t.slice(0, n).replace(/\s\S*$/, '') + '…' : t;
+  }
+  function gazetteAccroche() {
+    const c = contenuGazette();
+    const g = c.g;
+    if (!g.numero && !c.bienDuMois) return '';
+    const tuile = (kicker, titre, sous, lien, act) => '<a class="ed-gz-tuile" href="' + (lien || '#/gazette') + '"' + (act ? ' data-act="' + act + '"' : '') + '><span class="ed-kicker">' + kicker + '</span><b>' + titre + '</b><span>' + sous + '</span></a>';
+    const tuiles = [];
+    if (c.bienDuMois) tuiles.push(tuile('Le bien du mois', esc(c.bienDuMois.titre), esc(c.bienDuMois.label || '') + (popularite(c.bienDuMois) ? ' · suivi par ' + num(c.bienDuMois.suiveurs) + ' membres' : ''), '#/gazette'));
+    if (g.record) { const d = dureeTxt(g.record.heures); tuiles.push(tuile('Le record du mois', d.n + ' ' + d.u, 'entre l’ouverture des visites et la première offre', '#/gazette')); }
+    else if (g.chiffres) tuiles.push(tuile('Les chiffres du club', num(g.chiffres.biens) + ' biens', 'visibles nulle part ailleurs', '#/gazette'));
+    tuiles.push(tuile('Booster ma vente', 'La réestimation avec votre agent', 'Trois leviers pour vendre plus vite', '#/gazette'));
+    return '<section class="ed-gz-accroche">' +
+      '<div class="ed-gz-accroche-tete"><span class="ed-gz-logo">La Gazette</span><span class="ed-kicker">' + esc(g.numero || '') + '</span><a class="se-btn ghost sm" href="#/gazette">Lire la Gazette</a></div>' +
+      '<div class="ed-gz-tuiles">' + tuiles.join('') + '</div>' +
+    '</section>';
+  }
+  function edViewGazette() {
+    const c = contenuGazette();
+    const g = c.g;
+    const ch = g.chiffres || {};
+    const b = c.bienDuMois;
+    const blocs = [];
+    if (b) {
+      blocs.push('<article class="ed-gz-une">' +
+        '<a class="ed-gz-une-photo" href="#/bien/' + b.id + '">' + (estVerrouille(b) ? '' : cadre(photoOf(b), '')) + '</a>' +
+        '<div class="ed-gz-une-txt"><span class="ed-kicker">Le bien du mois</span>' +
+          '<h2 class="ed-title">' + esc((b.editorial && b.editorial.titre) || b.titre) + '</h2>' +
+          '<p class="ed-gz-meta">' + esc([b.type, b.label].filter(Boolean).join(' · ')) + ' · ' + euro(b.prix) + '</p>' +
+          (popularite(b) ? '<span class="ed-pop">' + esc(popularite(b).texte) + '</span>' : '') +
+          (extrait(b, 320) ? '<p class="ed-gz-chapo">' + esc(extrait(b, 320)) + '</p>' : '') +
+          (b.coupDeCoeur ? '<blockquote class="ed-aime"><span>Ses propriétaires l’aiment pour…</span>« ' + esc(b.coupDeCoeur) + ' »</blockquote>' : '') +
+          '<a class="se-btn" style="margin-top:16px;align-self:flex-start" href="#/bien/' + b.id + '">Découvrir le bien</a>' +
+        '</div></article>');
+    }
+    const colonnes = [];
+    if (g.record) {
+      const d = dureeTxt(g.record.heures);
+      colonnes.push('<article class="ed-gz-col"><span class="ed-kicker">Le record du mois</span><div class="ed-gz-chiffre">' + d.n + '<small>' + d.u + '</small></div>' +
+        '<p>C’est le temps qu’il a fallu à <b>' + esc(g.record.titre) + '</b>' + (g.record.quartier ? ' (' + esc(g.record.quartier) + ')' : '') + ' pour recevoir sa première offre après l’ouverture des visites.</p>' +
+        '<p class="se-hint">Les biens présentés en avant-première arrivent aux visites avec un public déjà conquis.</p></article>');
+    }
+    colonnes.push('<article class="ed-gz-col"><span class="ed-kicker">Les chiffres du club</span><div class="ed-gz-stats">' +
+      '<div><b>' + num(ch.biens || 0) + '</b><span>bien' + ((ch.biens || 0) > 1 ? 's' : '') + ' visible' + ((ch.biens || 0) > 1 ? 's' : '') + ' nulle part ailleurs</span></div>' +
+      '<div><b>' + num(ch.membres || 0) + '</b><span>membres</span></div>' +
+      '<div><b>' + num(ch.visites || 0) + '</b><span>visite' + ((ch.visites || 0) > 1 ? 's organisées' : ' organisée') + '</span></div>' +
+      (ch.ventes ? '<div><b>' + euro(ch.commissionsEvitees || 0) + '</b><span>de commissions vendeur évitées*</span></div>' : '<div><b>0 €</b><span>de commission côté vendeur, toujours</span></div>') +
+      '</div>' + (ch.ventes ? '<p class="se-hint">* Estimation sur ' + num(ch.ventes) + ' vente' + (ch.ventes > 1 ? 's' : '') + ' du club, sur la base d’une commission vendeur classique de ' + ch.commissionReference + ' %.</p>' : '') + '</article>');
+    if (c.quartier) {
+      const q = c.quartier;
+      colonnes.push('<article class="ed-gz-col"><span class="ed-kicker">Le quartier du mois</span><h3 class="ed-gz-h3">' + esc(q.label) + '</h3>' +
+        '<p>' + num(q.n) + ' bien' + (q.n > 1 ? 's' : '') + ' du club' + (q.surface ? ', autour de <b>' + euro(Math.round(q.prix / q.surface)) + ' / m²</b> honoraires inclus' : '') + '.</p>' +
+        '<button type="button" class="se-btn ghost sm" data-act="gazette-quartier" data-id="' + esc(q.id) + '">Voir les biens du quartier</button></article>');
+    }
+    const booster = '<article class="ed-gz-article"><span class="ed-kicker">Booster ma vente</span><h3 class="ed-gz-h3">La réestimation avec votre agent</h3>' +
+      '<p class="ed-gz-chapo">Un bien bien présenté et au juste prix se vend plus vite, et souvent mieux. Trois leviers à activer avec votre agent :</p>' +
+      '<ol class="ed-gz-liste"><li><b>Le juste prix.</b> Votre agent compare votre bien aux ventes réelles de la rue et à l’intérêt mesuré sur Seecret (membres qui le suivent, visites demandées).</li>' +
+      '<li><b>Les photos.</b> Lumière naturelle, angles larges, pièces désencombrées : la première photo décide du clic.</li>' +
+      '<li><b>Le bon moment.</b> L’avant-première crée l’attente ; l’ouverture des visites la transforme en offres.</li></ol>' +
+      '<button type="button" class="se-btn" data-act="gazette-reestimation">Demander une réestimation</button></article>';
+    const portrait = c.portrait ? '<article class="ed-gz-article ed-gz-portrait"><span class="ed-kicker">Portrait</span><h3 class="ed-gz-h3">' + esc(c.portrait.titre) + '</h3>' +
+      '<blockquote class="ed-gz-citation">« ' + esc(c.portrait.coupDeCoeur) + ' »</blockquote><p class="se-hint">Ses propriétaires, à propos de leur bien.</p>' +
+      '<a class="se-btn ghost sm" href="#/bien/' + c.portrait.id + '">Voir le bien</a></article>' : '';
+    const mot = g.mot ? '<article class="ed-gz-article ed-gz-mot"><span class="ed-kicker">Le mot du mois</span>' + (g.mot.titre ? '<h3 class="ed-gz-h3">' + esc(g.mot.titre) + '</h3>' : '') +
+      String(g.mot.texte).split(/\n\s*\n/).map((x) => '<p>' + esc(x.trim()).replace(/\n/g, '<br>') + '</p>').join('') + (g.mot.auteur ? '<p class="se-hint">— ' + esc(g.mot.auteur) + '</p>' : '') + '</article>' : '';
+    const coup = c.coup ? '<article class="ed-gz-article"><span class="ed-kicker">Le coup de cœur de l’agent</span><h3 class="ed-gz-h3">' + esc(c.coup.titre) + '</h3>' +
+      (g.coupDeCoeur.phrase ? '<p class="ed-gz-chapo">« ' + esc(g.coupDeCoeur.phrase) + ' »</p>' : '') + (g.coupDeCoeur.auteur ? '<p class="se-hint">— ' + esc(g.coupDeCoeur.auteur) + '</p>' : '') +
+      '<a class="se-btn ghost sm" href="#/bien/' + c.coup.id + '">Voir le bien</a></article>' : '';
+    return '<header class="ed-gz-tete"><span class="ed-kicker">Le magazine du club · ' + esc(g.numero || '') + '</span><h1 class="ed-gz-titre">La Gazette</h1><p class="ed-sub">Les biens qui font parler le club, les chiffres du mois, et nos conseils pour vendre mieux.</p></header>' +
+      blocs.join('') +
+      '<div class="ed-gz-colonnes">' + colonnes.join('') + '</div>' +
+      '<div class="ed-gz-articles">' + mot + booster + portrait + coup + '</div>';
   }
 
   // ---- Journal de bord (page « Mon bien ») ----
@@ -1357,6 +1458,7 @@
       'recherche': edViewRecherche,
       catalogue: edViewCatalogue,
       favoris: edViewFavoris,
+      gazette: edViewGazette,
       bien: edViewBien,
       visites: viewVisites,
       offres: viewOffres,
@@ -1554,7 +1656,7 @@
       try { const d = await API.get('/api/documents'); state.docs = d.documents || []; } catch (e) { /* pas de docs */ }
       try { const n = await API.get('/api/mes-notifications'); state.mesNotifications = n.notifications || []; } catch (e) { /* pas de notifications */ }
       try { const md = await API.get('/api/mandat?apercu=0'); state.mandatActif = md.mandat || null; } catch (e) { /* pas de mandat */ }
-      await chargerJournal();
+      await Promise.all([chargerJournal(), chargerGazette()]);
       planifierChat();
       // Première connexion après l'acceptation : fenêtre de bienvenue (une fois).
       const ob = me.membre.onboarding || {};
@@ -2314,6 +2416,17 @@
       const ta = document.querySelector('#chat-root textarea'); state.__chatBrouillon = ta ? ta.value : '';
       state.__chatOuvert = false; rendreChat(); planifierChat();
       if (parseRoute().name === 'messages') history.replaceState(null, '', '#/mon-bien');
+    },
+    'gazette-quartier': (el, id) => {
+      state.__filtres = { tri: (state.__filtres || {}).tri, arr: [id] };
+      state.__filtresOuverts = true;
+      save();
+      lastRoute = '';
+      location.hash = '#/catalogue';
+    },
+    'gazette-reestimation': () => {
+      state.__chatBrouillon = 'Bonjour, je souhaiterais faire le point sur le prix de mon bien et organiser une réestimation avec vous.';
+      actions['chat-ouvrir']();
     },
     'menu-toggle': () => { state.__menuOuvert = !state.__menuOuvert; render(); },
     'bienvenue-ok': () => {

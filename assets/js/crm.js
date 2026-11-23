@@ -1205,6 +1205,7 @@
       verifications: viewVerifications,
       taches: viewTaches,
       messages: viewMessages,
+      gazette: viewGazette,
       reglages: viewReglages,
       agents: viewAgents
     };
@@ -1291,6 +1292,7 @@
           nav('demandes', r.name, 'inbox', 'Candidatures', demandesNouvelles() || '') +
           nav('membres', r.name, 'users', 'Membres') +
           nav('biens-club', r.name, 'building', 'Biens') +
+          nav('gazette', r.name, 'chat', 'La Gazette') +
         '</nav>' +
         '<div class="se-nav-label">Intelligence</div>' +
         '<nav class="se-nav se-nav-more">' +
@@ -5179,6 +5181,37 @@
 
   /* --------------------------------- réglages ----------------------------- */
 
+  // ---- La Gazette : le mot du mois et le coup de cœur de l'agent ----
+  function viewGazette() {
+    const e = state.gazetteEdition;
+    if (!e) {
+      fetch('/api/gazette/edition').then((r) => r.json()).then((d) => { state.gazetteEdition = d; render(); }).catch(() => {});
+      return head('Le Club', 'La Gazette', 'Chargement…');
+    }
+    const g = e.gazette || {};
+    const mot = g.mot || {};
+    const coup = g.coupDeCoeur || {};
+    return head('Le Club', 'La Gazette', 'Le magazine du club, sur la page d’accueil des membres. Les chiffres (biens, membres, visites, record, quartier, bien du mois) se calculent seuls ; vous écrivez le mot du mois et choisissez votre coup de cœur.') +
+      '<div class="se-grid cols-2" style="align-items:start">' +
+        '<form class="se-card" data-form="gazette-mot"><h3>Le mot du mois</h3>' +
+          '<p class="se-hint" style="margin:6px 0 12px">Votre regard sur le marché, une tendance, une nouvelle du club. Laisser vide pour ne rien afficher.</p>' +
+          '<div class="se-form-grid">' +
+            '<div class="se-field full"><label>Titre</label><input class="se-input" name="titre" maxlength="120" value="' + esc(mot.titre || '') + '" placeholder="Ex. Paris rive gauche : les acheteurs reviennent"/></div>' +
+            '<div class="se-field full"><label>Texte</label><textarea class="se-textarea" name="texte" maxlength="3000" style="min-height:170px">' + esc(mot.texte || '') + '</textarea></div>' +
+          '</div>' +
+          (mot.date ? '<p class="se-hint" style="margin-top:8px">Publié le ' + dFR(mot.date) + (mot.auteur ? ' par ' + esc(mot.auteur) : '') + '</p>' : '') +
+          '<button class="se-btn" type="submit" style="margin-top:12px">Publier dans la Gazette</button></form>' +
+        '<form class="se-card" data-form="gazette-coup"><h3>Le coup de cœur de l’agent</h3>' +
+          '<p class="se-hint" style="margin:6px 0 12px">Un bien en ligne que vous voulez mettre en avant, avec une phrase.</p>' +
+          '<div class="se-form-grid">' +
+            '<div class="se-field full"><label>Bien</label><select class="se-select" name="bienId"><option value="">— Aucun —</option>' +
+              (e.biens || []).map((b) => '<option value="' + esc(b.id) + '"' + (coup.bienId === b.id ? ' selected' : '') + '>' + esc(b.titre + (b.quartier ? ' · ' + b.quartier : '')) + '</option>').join('') + '</select></div>' +
+            '<div class="se-field full"><label>Pourquoi ce bien</label><textarea class="se-textarea" name="phrase" maxlength="400" style="min-height:90px">' + esc(coup.phrase || '') + '</textarea></div>' +
+          '</div>' +
+          '<button class="se-btn" type="submit" style="margin-top:12px">Publier dans la Gazette</button></form>' +
+      '</div>';
+  }
+
   function viewReglages() {
     const a = state.agent;
     return head('Compte', 'Réglages', 'Votre agent, l’agence, et vos données.') +
@@ -6889,6 +6922,21 @@
       modal = null;
       commit();
       toast('Tâche créée.', 'ok');
+      return;
+    }
+
+    if (kind === 'gazette-mot' || kind === 'gazette-coup') {
+      const corps = kind === 'gazette-mot'
+        ? { mot: { titre: data.get('titre'), texte: data.get('texte') } }
+        : { coupDeCoeur: { bienId: data.get('bienId'), phrase: data.get('phrase') } };
+      try {
+        const r = await fetch('/api/gazette/edition', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(corps) });
+        const res = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(res.error || 'Enregistrement impossible');
+        state.gazetteEdition = Object.assign({}, state.gazetteEdition, { gazette: res.gazette });
+        render();
+        toast('Publié dans la Gazette.', 'ok');
+      } catch (err) { toast(err.message || 'Enregistrement impossible', 'warn'); }
       return;
     }
 
