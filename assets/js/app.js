@@ -1541,6 +1541,7 @@
         '<div class="ed-panel"><p class="se-muted">Votre fiche bien est en cours de préparation. Rechargez la page dans un instant.</p></div>';
     }
     const photos = b.photos || [];
+    const photosVerrouillees = b.validation === 'valide';
     const demande = b.statutDemande;
     const libelleDemande = 'passage en visite ouverte';
     const champ = (label, name, value, opt) => {
@@ -1561,7 +1562,14 @@
           '<div class="ed-gallery"><div class="ed-gallery-main">' +
             (photos[0] ? cadre(photos[0], '') : '<div style="display:grid;place-items:center;height:100%;color:var(--color-taupe);font-size:13px">Aucune photo pour l’instant</div>') +
           '</div></div>' +
-          '<div class="se-row" style="gap:10px;margin-top:12px;flex-wrap:wrap">' +
+          (photosVerrouillees
+            // Bien validé par l'agent : les photos ne se modifient plus ici.
+            ? '<div class="se-row" style="gap:10px;margin-top:12px;flex-wrap:wrap">' +
+                photos.map((p) => '<div style="width:88px;height:66px;border-radius:12px;overflow:hidden;border:1px solid var(--color-stroke)"><img src="' + esc(p) + '" alt="" style="width:100%;height:100%;object-fit:cover"/></div>').join('') +
+              '</div>' +
+              '<div class="se-note" style="margin-top:10px;font-size:12.5px;line-height:1.6">Vos photos ont été validées par votre agent. Pour en ajouter, en retirer ou changer la photo principale, écrivez-lui.' +
+                '<div style="margin-top:8px"><button type="button" class="se-btn sm" data-act="chat-ouvrir">Écrire à mon agent</button></div></div>'
+            :           '<div class="se-row" style="gap:10px;margin-top:12px;flex-wrap:wrap">' +
             photos.map((p, i) => '<div style="position:relative">' +
               '<button type="button" data-act="photo-principale" data-url="' + esc(p) + '" title="Définir comme principale" style="padding:0;border:' + (i === 0 ? '2px solid var(--color-ink)' : '1px solid var(--color-stroke)') + ';border-radius:12px;overflow:hidden;background:none;cursor:pointer;width:88px;height:66px">' +
                 '<img src="' + esc(p) + '" alt="" style="width:100%;height:100%;object-fit:cover"/>' +
@@ -1572,7 +1580,7 @@
               '<input type="file" accept="image/*" multiple hidden data-photos/></label>' +
           '</div>' +
           '<p class="se-hint" style="margin-top:8px">Minimum 3 photos. Cliquez une vignette pour la définir comme principale.</p>' +
-          '<div class="se-note" style="margin-top:10px;font-size:12.5px;line-height:1.6"><b>Conseils photo :</b> tournez le téléphone à l’horizontal, prenez d’angle à angle, enlevez les objets, gardez l’équilibre sol / plafond.</div>' +
+          '<div class="se-note" style="margin-top:10px;font-size:12.5px;line-height:1.6"><b>Conseils photo :</b> tournez le téléphone à l’horizontal, prenez d’angle à angle, enlevez les objets, gardez l’équilibre sol / plafond.</div>') +
           '<div class="ed-panel" style="margin-top:18px">' +
             '<span class="ed-kicker">Estimation</span>' +
             '<div class="ed-price-big" style="font-size:26px;margin-top:6px">' + (b.prix ? euro(b.prix) : '—') + '</div>' +

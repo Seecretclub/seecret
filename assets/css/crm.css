@@ -416,3 +416,21 @@ body.se-maps-open { overflow: hidden; }
 }
 .se-lancer { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--color-stroke-faint, #eeebe6); }
 @media (max-width: 860px) { .se-lancer .se-btn { flex: 1 1 100%; justify-content: center; } }
+
+/* Interrupteur « Sur Seecret » */
+.se-switch { flex: 0 0 auto; width: 46px; height: 26px; border-radius: 999px; border: 0; padding: 3px; background: var(--color-stroke, #d9d4cc); cursor: pointer; transition: background .2s; }
+.se-switch span { display: block; width: 20px; height: 20px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.2); transition: transform .2s; }
+.se-switch.on { background: var(--color-club-violet); }
+.se-switch.on span { transform: translateX(20px); }
+
+/* Photos du bien gérées depuis le CRM (cadre horizontal 4:3) */
+.se-crm-photos { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 10px; }
+.se-crm-photo, .se-crm-photo-add { position: relative; aspect-ratio: 4 / 3; border-radius: 10px; overflow: hidden; border: 1px solid var(--color-stroke, #e5e0d8); }
+.se-crm-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.se-crm-photo.principale { border: 2px solid var(--color-club-violet); }
+.se-crm-photo-tag { position: absolute; left: 6px; top: 6px; font-size: 10.5px; padding: 2px 7px; border-radius: 999px; background: var(--color-club-violet); color: #fff; }
+.se-crm-photo-actions { position: absolute; right: 4px; bottom: 4px; display: flex; gap: 4px; }
+.se-crm-photo-actions button { width: 26px; height: 26px; border-radius: 50%; border: 0; background: rgba(255,255,255,.92); color: #222; font-size: 13px; line-height: 1; cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,.18); }
+.se-crm-photo-add { display: grid; place-items: center; align-content: center; gap: 4px; border-style: dashed; cursor: pointer; font-size: 12.5px; color: var(--color-taupe, #8a8178); }
+@media (hover: hover) { .se-crm-photo-actions { opacity: .0; transition: opacity .15s; } .se-crm-photo:hover .se-crm-photo-actions, .se-crm-photo:focus-within .se-crm-photo-actions { opacity: 1; } }
+.se-crm-photo-add svg { width: 22px; height: 22px; }
