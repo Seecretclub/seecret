@@ -1474,6 +1474,8 @@
     const view = (r.name === 'messages' && r.param) ? viewThread : (views[r.name] || viewTableau);
     app().innerHTML = shell(r, view(r));
     if (r.name === 'robot-radar' && state.robotShowMap) setTimeout(initRobot, 60);
+    if (r.name === 'radar' && radar.vue === 'carte') setTimeout(initRadarCarte, 60);
+    if (r.name === 'radar-fiche') setTimeout(initRadarFicheCarte, 60);
 
     if (modal) {
       const back = document.createElement('div');
@@ -2741,6 +2743,25 @@
         : '<div class="se-card"><h3>Biens détectés' + (state.robotEnrichStats ? ' <span class="se-hint" style="font-weight:400">· ' + state.robotEnrichStats.enrichis + ' enrichi(s) · ' + state.robotEnrichStats.enCours + ' en cours · ' + state.robotEnrichStats.enAttente + ' en attente</span>' : '') + '</h3>' + robotBiensList() + '</div>');
   }
 
+  function initRadarCarte() {
+    const el = document.getElementById('radar-carte');
+    if (!el || typeof L === 'undefined' || el._leaflet_id) return;
+    const pts = ((radar.data && radar.data.vues) || {}).carte || [];
+    const map = L.map(el, { scrollWheelZoom: true }).setView([48.8566, 2.3422], 12);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(map);
+    const coul = { forte: '#2f6b4f', moyenne: '#c07a2c', faible: '#9a9088' };
+    pts.forEach((p) => L.circleMarker([p.lat, p.lon], { radius: p.n === 'forte' ? 8 : 6, color: '#fff', weight: 1.5, fillColor: coul[p.n] || '#9a9088', fillOpacity: 0.9 }).addTo(map)
+      .bindPopup('<b>' + esc(p.t) + '</b><br>' + esc(p.a) + (p.p ? '<br>' + esc(p.p) : '') + '<br>Chances : ' + p.s + '/100<br><a href="#/radar-fiche/' + encodeURIComponent(p.id) + '">Ouvrir la fiche →</a>'));
+    if (pts.length) map.fitBounds(L.latLngBounds(pts.map((p) => [p.lat, p.lon])).pad(0.05));
+  }
+  function initRadarFicheCarte() {
+    const el = document.getElementById('radar-fiche-carte');
+    if (!el || typeof L === 'undefined' || el._leaflet_id) return;
+    const lat = Number(el.getAttribute('data-lat')), lon = Number(el.getAttribute('data-lon'));
+    const map = L.map(el, { scrollWheelZoom: false }).setView([lat, lon], 18);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(map);
+    L.circleMarker([lat, lon], { radius: 9, color: '#fff', weight: 2, fillColor: '#1f3b2f', fillOpacity: 0.95 }).addTo(map);
+  }
   function initRobot() {
     const el = document.getElementById('robot-map');
     if (!el || typeof L === 'undefined') return;
@@ -4669,7 +4690,7 @@
   // Une ligne = un DPE. Tout le reste (propriétaire, gérant, annonces,
   // ventes, contacts, clients intéressés) sert à remplir sa fiche.
   const RD_CRIT = () => ({ periode: 'mois', secteurs: [], type: '', surfaceMin: '', surfaceMax: '', etageMin: '', etageMax: '', dernierEtage: false, prixMin: '', prixMax: '', classes: [], epoque: '', proprio: '', signal: '', niveau: '', client: '', contact: false, statut: '', tri: 'chances' });
-  const radar = Object.assign({ data: null, chargement: false, erreur: '', page: 1, lignes: [], fiches: {}, aide: false }, RD_CRIT());
+  const radar = Object.assign({ data: null, chargement: false, erreur: '', page: 1, lignes: [], fiches: {}, aide: false, vue: 'liste', siren: '', sirenNom: '' }, RD_CRIT());
   const mEuro = (n) => n >= 1e6 ? (Math.round(n / 1e4) / 100).toString().replace('.', ',') + ' M€' : Math.round(n / 1000) + ' k€';
   const etageTxt = (e) => e == null ? '' : e === 0 ? 'RDC' : e === 1 ? '1er étage' : e + 'e étage';
   const rdJours = (iso) => Math.max(0, Math.floor((Date.now() - new Date(iso || 0).getTime()) / 864e5));
@@ -4681,7 +4702,7 @@
     radar.chargement = true; if (!ajout) render();
     const q = new URLSearchParams({ periode: radar.periode, secteurs: radar.secteurs.join(','), type: radar.type, surfaceMin: radar.surfaceMin || '', surfaceMax: radar.surfaceMax || '', etageMin: radar.etageMin, etageMax: radar.etageMax, dernierEtage: radar.dernierEtage ? '1' : '',
       prixMin: radar.prixMin ? String(Number(radar.prixMin) * 1000) : '', prixMax: radar.prixMax ? String(Number(radar.prixMax) * 1000) : '', classes: radar.classes.join(''), epoque: radar.epoque, proprio: radar.proprio, signal: radar.signal, niveau: radar.niveau,
-      client: radar.client, contact: radar.contact ? '1' : '', statut: radar.statut, tri: radar.tri, page: String(radar.page) });
+      client: radar.client, contact: radar.contact ? '1' : '', statut: radar.statut, tri: radar.tri, siren: radar.siren, page: String(radar.page) });
     try {
       const r = await fetch('/api/radar/liste?' + q.toString(), { credentials: 'same-origin' });
       const d = await r.json(); if (!r.ok) throw new Error(d.error || 'erreur');
@@ -4733,7 +4754,8 @@
       '<li><b>Le propriétaire</b> : quand c’est une société (SCI, SAS…), le fichier DGFiP la donne étage par étage ; on ajoute ses gérants (nom, âge), ses annonces légales, ses autres biens. Les particuliers ne sont dans aucun fichier public : on les contacte par courrier, avec la lettre prête à imprimer.</li>' +
       '<li><b>Chances de vendre (sur 100)</b> : DPE récent, classe F ou G (location interdite), immeuble qui bouge, SCI d’un seul bien, gérant âgé, dissolution ou changement de gérant, bien détenu depuis longtemps, clients intéressés… Chaque raison est écrite dans la fiche.</li>' +
       '<li><b>Clients intéressés</b> : membres du club et leads du CRM dont le secteur, le type, la surface, le budget et l’étage correspondent.</li>' +
-      '<li><b>Contacter</b> : téléphone, email et site de la société, LinkedIn du gérant (avec la clé Exa), adresse du siège, lettre au propriétaire, et « Ajouter aux prospects » pour le suivre dans le CRM.</li></ol></div>' : '';
+      '<li><b>Contacter</b> : téléphone, email et site de la société, LinkedIn du gérant (clé Exa), téléphone et email du gérant via les annuaires pro (Dropcontact, Société Info, Datagma, FullEnrich — si une clé est configurée) ou Kaspr depuis son LinkedIn, adresse du siège, lettre au propriétaire, et « Ajouter aux prospects ».</li>' +
+      '<li><b>Toutes les briques d’Immo Data Robot sont dans la fiche</b> : sociétés domiciliées à l’adresse (SIRENE) quand le fichier DGFiP ne trouve pas le propriétaire, autres sociétés du gérant, permis de construire (AuCadastre), parcelle cadastrale et toutes ses ventes, lots de l’immeuble étage par étage, carte. Les onglets Carte, Secteurs et Propriétaires donnent les vues d’ensemble. Seul le robot Python, qui ne tourne que sur votre ordinateur, n’est pas utilisé en ligne.</li></ol></div>' : '';
     const chip = (on, act, id, txt) => '<button type="button" class="rd-chip' + (on ? ' on' : '') + '" data-act="' + act + '" data-id="' + id + '">' + txt + '</button>';
     const periodes = [['aujourdhui', 'Aujourd’hui'], ['semaine', 'Cette semaine'], ['mois', 'Ce mois'], ['3mois', '3 mois']].concat(rdAnnees().map((a) => [a, a]));
     const sel = (k, opts) => '<label class="rd-crit"><span>' + opts[0] + '</span><select class="se-select" data-rdf="' + k + '">' + opts[1].map((o) => '<option value="' + o[0] + '"' + (String(radar[k] || '') === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select></label>';
@@ -4764,7 +4786,14 @@
       (D.plafond ? '<p class="se-hint">Beaucoup de DPE sur cette période : choisissez un arrondissement pour tout voir.</p>' : '') + ((D.erreurs || []).length ? '<p class="se-hint">' + D.erreurs.map(esc).join(' · ') + '</p>' : '');
     const liste = '<div class="rd-liste">' + (radar.lignes.length ? radar.lignes.map(rdLigne).join('') : '<div class="se-card"><p class="se-hint">' + (ch ? 'Les premiers DPE arrivent…' : 'Aucun DPE avec ces filtres.') + '</p></div>') + '</div>' +
       (radar.lignes.length < D.total ? '<button class="se-btn ghost" style="margin-top:12px;width:100%" data-act="radar-plus"' + (radar.chargement ? ' disabled' : '') + '>Afficher les 50 suivants (' + num(D.total - radar.lignes.length) + ' restants)</button>' : '');
-    return intro + une + pm + aide + barre + charg + entete + liste +
+    const V = D.vues || { secteurs: [], portefeuilles: [], carte: [] };
+    const vues = '<div class="rd-onglets">' + [['liste', 'Liste des DPE · ' + num(D.total)], ['carte', 'Carte'], ['secteurs', 'Secteurs'], ['proprietaires', 'Propriétaires · ' + num(V.portefeuilles.length)]].map((o) => '<a href="#" data-act="radar-vue" data-id="' + o[0] + '" class="' + (radar.vue === o[0] ? 'active' : '') + '">' + o[1] + '</a>').join('') + '</div>' +
+      (radar.siren ? '<div class="se-note" style="margin-bottom:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span style="flex:1">DPE de la société <b>' + esc(radar.sirenNom || radar.siren) + '</b> seulement.</span><button class="se-btn ghost sm" data-act="radar-siren" data-id="">Voir tous les DPE</button></div>' : '');
+    let contenu = entete + liste;
+    if (radar.vue === 'carte') contenu = '<div id="radar-carte" class="rd-carte-map"></div><p class="se-hint" style="margin-top:6px">' + num(V.carte.length) + ' DPE placés sur la carte (vert : fortes chances, orange : moyennes, gris : faibles). Cliquez un point pour ouvrir la fiche.</p>';
+    if (radar.vue === 'secteurs') { const mx = Math.max(1, ...V.secteurs.map((x) => x.dpe)); contenu = '<div class="se-card">' + (V.secteurs.length ? V.secteurs.map((x, i) => '<a class="rd-sect" href="#" data-act="radar-vers-secteur" data-id="' + x.quartier + '"><span class="rd-sect-n">' + (i + 1) + '</span><div style="flex:1;min-width:0"><div class="rd-sect-l"><b>' + esc(x.label) + '</b><div class="rd-barre"><i style="width:' + Math.round(x.dpe / mx * 100) + '%"></i></div></div><div class="se-hint">' + num(x.dpe) + ' DPE · ' + num(x.fortes) + ' à fortes chances · ' + num(x.identifies) + ' propriétaires sociétés · ' + num(x.clients) + ' client' + (x.clients > 1 ? 's' : '') + ' y cherche' + (x.clients > 1 ? 'nt' : '') + '</div></div></a>').join('') : '<p class="se-hint">Aucun DPE.</p>') + '</div>'; }
+    if (radar.vue === 'proprietaires') contenu = '<div class="se-card"><p class="se-hint" style="margin-top:0">Les sociétés propriétaires des logements de la sélection, avec leur portefeuille à Paris.</p>' + (V.portefeuilles.length ? '<div class="se-list">' + V.portefeuilles.map((x) => '<div class="se-list-item" style="flex-wrap:wrap;gap:8px;align-items:flex-start"><div style="flex:1;min-width:220px"><b>' + esc(x.nom) + '</b> <span class="se-hint">' + (x.institutionnel ? 'institutionnel · ' : x.estSci ? 'SCI · ' : 'société · ') + num(x.dpe) + ' DPE dans la sélection · ' + num(x.nbBiens) + ' immeuble' + (x.nbBiens > 1 ? 's' : '') + ' à Paris' + (x.dirigeant ? ' · ' + esc(x.dirigeant) : '') + '</span><div class="se-hint" style="margin-top:4px">' + x.fiches.map((f) => '<a href="#/radar-fiche/' + encodeURIComponent(f.id) + '">' + esc(String(f.adresse).replace(/\s\d{5}\s.*$/, '')) + (f.etage != null ? ' (' + etageTxt(f.etage) + ')' : '') + '</a>').join(' · ') + '</div></div><button class="se-btn ghost sm" data-act="radar-siren" data-id="' + esc(x.siren) + '" data-nom="' + esc(x.nom) + '">Voir ses DPE</button></div>').join('') + '</div>' : '<p class="se-hint">Aucune société identifiée dans la sélection.</p>') + '</div>';
+    return intro + une + pm + aide + barre + charg + vues + contenu +
       '';
   }
   async function chargerFicheRadar(id, enrichir) {
@@ -4824,10 +4853,16 @@
         (c.site ? '<li><span class="se-hint">Site</span> <a href="' + esc(c.site.url) + '" target="_blank" rel="noopener">' + esc(c.site.titre || c.site.url) + '</a></li>' : '') +
         (p.societe && p.societe.siege ? '<li><span class="se-hint">Courrier au siège</span> ' + esc(p.societe.siege) + '</li>' : '') +
         '<li><span class="se-hint">Fiches officielles</span> <a href="https://annuaire-entreprises.data.gouv.fr/entreprise/' + esc(p.siren) + '" target="_blank" rel="noopener">Annuaire</a> · <a href="https://www.pappers.fr/entreprise/' + esc(p.siren) + '" target="_blank" rel="noopener">Pappers</a> · <a href="https://www.societe.com/cgi-bin/search?champs=' + esc(p.siren) + '" target="_blank" rel="noopener">Societe.com</a></li></ul>' +
-        (!(c.telephones || []).length && !(c.emails || []).length ? '<p class="se-hint">' + (F.enrichi ? (c.linkedin ? 'Pas de téléphone ni d’email publiés par la société : passez par LinkedIn ou le courrier.' : 'Téléphones, emails et LinkedIn trouvés automatiquement avec la clé Exa (voir « Comment ça marche ? »).') : '') + '</p>' : '');
+        (!(c.telephones || []).length && !(c.emails || []).length ? '<p class="se-hint">' + (F.enrichi ? (c.linkedin ? 'Pas de téléphone ni d’email publiés par la société : passez par LinkedIn ou le courrier.' : 'Téléphones, emails et LinkedIn trouvés automatiquement avec la clé Exa (voir « Comment ça marche ? »).') : '') + '</p>' : '') +
+        (c.sourcePro ? '<p class="se-hint">Coordonnées du gérant trouvées via ' + esc(c.sourcePro) + '.</p>' : '') +
+        (F.enrichi && !F.fournisseursPro ? '<p class="se-hint">Annuaires pro (Dropcontact, Société Info, Datagma, FullEnrich) : aucune clé configurée, ils ne sont pas interrogés.</p>' : '') +
+        (p.coordPro && !p.coordPro.trouve && p.coordPro.tousEpuises ? '<p class="se-hint">Annuaires pro : quotas gratuits épuisés ce mois-ci.</p>' : '') +
+        (F.kaspr && (c.linkedin || [])[0] ? '<button class="se-btn ghost sm" data-act="radar-kaspr" data-id="' + esc(x.id) + '" data-url="' + esc(c.linkedin[0].url) + '">Téléphone et email du gérant via Kaspr (profil LinkedIn ci-dessus)</button>' : '') +
+        ((p.autresMandats || []).length ? '<div style="margin-top:12px"><span class="se-kicker">AUTRES SOCIÉTÉS DU GÉRANT · ' + p.autresMandats.length + '</span><ul class="rd-ul">' + p.autresMandats.slice(0, 10).map((m) => '<li><a href="https://annuaire-entreprises.data.gouv.fr/entreprise/' + esc(m.siren) + '" target="_blank" rel="noopener">' + esc(m.entreprise) + '</a> <span class="se-hint">' + esc([m.role, m.ville].filter(Boolean).join(' · ')) + '</span></li>').join('') + '</ul></div>' : (F.enrichi && p.dirigeant ? '<p class="se-hint">Aucun autre mandat trouvé pour ce gérant.</p>' : ''));
     } else {
       contact = '<div class="rd-proprio" style="margin:8px 0 12px">' + rdProprio(p, true) + '</div>' +
         '<p>Aucune société ne possède ce logement : c’est très probablement un particulier, dont le nom n’est dans aucun fichier public. Le moyen le plus efficace : une lettre adressée « au propriétaire » à ' + ou + ', ou un passage dans l’immeuble.</p>' +
+        ((p.domiciliees || []).length ? '<div style="margin-top:10px"><span class="se-kicker">SOCIÉTÉS DOMICILIÉES À L’ADRESSE (SIRENE)</span><ul class="rd-ul">' + p.domiciliees.map((d) => '<li><a href="https://annuaire-entreprises.data.gouv.fr/entreprise/' + esc(d.siren) + '" target="_blank" rel="noopener">' + esc(d.nom) + '</a> <span class="se-hint">' + esc([d.type === 'sci' ? 'SCI' : 'société', d.etage, d.porte, d.complement].filter(Boolean).join(' · ')) + (d.dirigeants && d.dirigeants[0] ? ' · ' + esc(d.dirigeants[0].nom) : '') + '</span></li>').join('') + '</ul><p class="se-hint">Une SCI domiciliée au même étage est souvent la propriétaire.</p></div>' : '') +
         ((p.societes || []).length ? '<p class="se-hint">Sociétés propriétaires d’autres lots de l’immeuble : ' + p.societes.map((s2) => esc(s2.nom) + ' (' + s2.nbLots + ')').join(', ') + ' — le syndic ou ces sociétés peuvent aussi vous orienter.</p>' : '');
     }
     const contacter = '<div class="se-card"><h3>Contacter le propriétaire</h3>' + contact +
@@ -4844,19 +4879,27 @@
       kv('Porte / bâtiment', esc([x.porte && 'porte ' + x.porte, x.batiment && 'bât. ' + x.batiment, x.escalier && 'esc. ' + x.escalier].filter(Boolean).join(' · '))) + kv('Surface', num(x.surface) + ' m²') +
       kv('DPE', esc(x.dpe || '?') + ' · fait le ' + rdDate(x.dpeDate) + ' (n° ' + esc(x.numeroDpe || '') + ')') + kv('Construction', esc(x.annee || x.periode || '')) +
       kv('Prix estimé', x.prixBas ? mEuro(x.prixBas) + ' – ' + mEuro(x.prixHaut) + ' <span class="se-hint">(' + num(x.prixM2) + ' €/m² médian du quartier, ± 7 %)</span>' : '') + '</div>' +
-      '<div style="margin-top:12px"><span class="se-kicker">VENTES À CETTE ADRESSE</span>' + ventes + '</div>' +
+      (x.lat ? '<div id="radar-fiche-carte" class="rd-mini-carte" data-lat="' + x.lat + '" data-lon="' + x.lon + '"></div>' : '') +
+      (x.parcelle ? '<div style="margin-top:12px"><span class="se-kicker">PARCELLE CADASTRALE</span><p style="margin:4px 0">Section ' + esc(x.parcelle.section) + ' n° ' + esc(String(x.parcelle.numero).replace(/^0+/, '')) + (x.parcelle.contenance ? ' · ' + num(x.parcelle.contenance) + ' m² de terrain' : '') + ' <span class="se-hint">(' + esc(x.parcelle.idu) + ')</span></p>' +
+        ((x.parcelle.ventes || []).length ? '<span class="se-kicker">VENTES DE LA PARCELLE (TOUT L’IMMEUBLE)</span><ul class="rd-ul">' + x.parcelle.ventes.slice(0, 12).map((v) => '<li>' + esc(v.date ? new Date(v.date).toLocaleDateString('fr-FR') : '') + ' · ' + euro(v.valeur) + (v.surface ? ' · ' + num(v.surface) + ' m²' : '') + (v.typeLocal ? ' · ' + esc(v.typeLocal) : '') + '</li>').join('') + '</ul>' : '') + '</div>' : '') +
+      '<div style="margin-top:12px"><span class="se-kicker">VENTES AUTOUR DE L’ADRESSE</span>' + ventes + '</div>' +
+      (x.permis ? '<div style="margin-top:12px"><span class="se-kicker">PERMIS DE CONSTRUIRE / TRAVAUX</span>' + (x.permis.length ? '<ul class="rd-ul">' + x.permis.map((pm) => { const k = Object.keys(pm); const dt = k.filter((z) => /date/i.test(z)).map((z) => pm[z]).sort().reverse()[0]; const ty = k.filter((z) => /type|nature|kind/i.test(z)).map((z) => pm[z])[0]; const de = k.filter((z) => /description|nb_|logement|housing|surface/i.test(z)).map((z) => z.replace(/_/g, ' ') + ' : ' + pm[z]).slice(0, 2).join(' · '); return '<li>' + esc(dt ? new Date(dt).toLocaleDateString('fr-FR') : '') + (ty ? ' · ' + esc(ty) : '') + (pm.applicant_name || pm.applicant ? ' · ' + esc(pm.applicant_name || pm.applicant) : '') + (de ? '<div class="se-hint">' + esc(de) + '</div>' : '') + '</li>'; }).join('') + '</ul>' : '<p class="se-hint">Aucun permis ni déclaration de travaux à cette adresse.</p>') + '</div>' : '') +
       ((F.memeImmeuble || []).length ? '<div style="margin-top:12px"><span class="se-kicker">AUTRES DPE DANS L’IMMEUBLE</span><ul class="rd-ul">' + F.memeImmeuble.map((m) => '<li><a href="#/radar-fiche/' + encodeURIComponent(m.id) + '">' + esc(etageTxt(m.etage) || 'étage ?') + ', ' + m.surface + ' m², DPE ' + esc(m.dpe || '?') + ' du ' + rdDate(m.dpeDate) + '</a></li>').join('') + '</ul></div>' : '') + '</div>';
     // 5. La société
     const societe = p.statut === 'identifie' ? '<div class="se-card"><h3>La société</h3><div class="se-kv" style="margin-top:12px">' + kv('SIREN', esc(p.siren)) + kv('Forme', esc(p.forme || '')) + kv('Créée le', p.societe && p.societe.creation ? esc(new Date(p.societe.creation).toLocaleDateString('fr-FR')) : '') + kv('Dans l’immeuble', num(p.lotsSociete) + ' lot' + (p.lotsSociete > 1 ? 's' : '') + ' sur ' + num(p.lotsImmeuble) + ' détenus par des sociétés') + '</div>' +
       '<div style="margin-top:12px"><span class="se-kicker">ANNONCES LÉGALES (BODACC)</span>' + (p.bodacc ? (p.bodacc.length ? '<ul class="rd-ul">' + p.bodacc.slice(0, 8).map((a) => '<li><b>' + esc(a.date ? new Date(a.date).toLocaleDateString('fr-FR') : '') + '</b> · ' + esc(a.famille || a.type) + (a.detail ? '<div class="se-hint">' + esc(a.detail.slice(0, 180)) + '</div>' : '') + '</li>').join('') + '</ul>' : '<p class="se-hint">Aucune annonce publiée.</p>') : '<p class="se-hint">Recherche…</p>') + '</div>' +
       ((F.biensSociete || []).length ? '<div style="margin-top:12px"><span class="se-kicker">SES BIENS À PARIS · ' + F.biensSociete.length + '</span><ul class="rd-ul">' + F.biensSociete.slice(0, 12).map((b) => '<li>' + esc(b.adresse) + ' <span class="se-hint">· ' + esc(qLib('p' + Number(String(b.insee).slice(3)))) + ' · ' + b.lots + ' lot' + (b.lots > 1 ? 's' : '') + (b.niveaux.length ? ' (' + esc(b.niveaux.slice(0, 4).join(', ')) + ')' : '') + '</span></li>').join('') + '</ul></div>' : '') + '</div>' : '';
+    // 5 bis. L'immeuble, étage par étage (fichier DGFiP : lots détenus par des sociétés)
+    const lots = F.lotsImmeuble || [];
+    const immeuble = lots.length ? '<div class="se-card"><h3>L’immeuble, étage par étage</h3><p class="se-hint" style="margin:4px 0 10px">Lots détenus par des sociétés (les lots des particuliers n’apparaissent pas).</p><div class="rd-lots"><table><thead><tr><th>Étage</th><th>Porte</th><th>Propriétaire</th><th>Droit</th></tr></thead><tbody>' +
+      lots.map((l) => '<tr' + (p.siren && l.siren === p.siren ? ' class="moi"' : '') + '><td>' + esc(l.niveau || '?') + (l.batiment ? ' · bât. ' + esc(l.batiment) : '') + '</td><td>' + esc(l.porte || '') + '</td><td>' + (l.siren ? '<a href="https://annuaire-entreprises.data.gouv.fr/entreprise/' + esc(l.siren) + '" target="_blank" rel="noopener">' + esc(l.nom) + '</a>' : esc(l.nom)) + '</td><td>' + esc(l.droit || '') + '</td></tr>').join('') + '</tbody></table></div></div>' : '';
     // 6. Suivi
     const suivi = '<div class="se-card"><h3>Suivi</h3><div class="se-actions" style="margin-top:10px;flex-wrap:wrap">' + bouton('a_revoir', 'À revoir') + bouton('en_cours', 'En cours') + bouton('contacte', 'Contacté') + bouton('ecarte', 'Écarter') + '</div>' +
       '<form data-form="radar-note" data-id="' + esc(x.id) + '" class="se-form-grid" style="margin-top:12px"><div class="se-field"><label>Rappel le</label><input class="se-input" type="date" name="rappel" value="' + esc(x.rappel || '') + '"/></div>' +
       '<div class="se-field full"><label>Note</label><textarea class="se-textarea" name="note" placeholder="Appel, lettre envoyée, réponse…"></textarea></div><div class="se-field full" style="display:flex;flex-direction:row"><button class="se-btn soft" type="submit">Enregistrer</button></div></form>' +
       ((x.historique || []).length ? '<ul class="rd-ul" style="margin-top:12px">' + x.historique.slice().reverse().map((h) => '<li><span class="se-hint">' + dFR(h.at) + (h.par ? ' · ' + esc(h.par) : '') + '</span> — ' + (h.action === 'statut' ? 'statut : ' + esc({ a_revoir: 'à revoir', en_cours: 'en cours', contacte: 'contacté', ecarte: 'écarté' }[h.valeur] || h.valeur) : esc(h.valeur)) + '</li>').join('') + '</ul>' : '') + '</div>';
     return head('Radar · DPE du ' + rdDate(x.dpeDate), esc(x.type) + ' · ' + num(x.surface) + ' m² · ' + esc(qLib(x.quartier)), '📍 ' + ou + (x.prixBas ? ' · ' + mEuro(x.prixBas) + ' – ' + mEuro(x.prixHaut) : ''), actions) +
-      enCours + '<div class="se-split"><div class="se-grid" style="gap:18px">' + pourquoi + contacter + clients + '</div><div class="se-grid" style="gap:18px">' + suivi + bien + societe + '</div></div>';
+      enCours + '<div class="se-split"><div class="se-grid" style="gap:18px">' + pourquoi + contacter + clients + '</div><div class="se-grid" style="gap:18px">' + suivi + bien + societe + immeuble + '</div></div>';
   }
   const radarNormC = (v) => String(v || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 
@@ -6401,6 +6444,21 @@
     },
     'radar-aide': () => { radar.aide = !radar.aide; render(); },
     'radar-periode': (el, id) => { radar.periode = id; rdRelancer(); },
+    'radar-vue': (el, id) => { radar.vue = id; render(); },
+    'radar-vers-secteur': (el, id) => { radar.secteurs = [id]; radar.vue = 'liste'; rdRelancer(); },
+    'radar-siren': (el, id) => { radar.siren = id || ''; radar.sirenNom = el.getAttribute('data-nom') || ''; radar.vue = 'liste'; rdRelancer(); },
+    'radar-kaspr': async (el, id) => {
+      const url = el.getAttribute('data-url');
+      el.disabled = true; el.textContent = 'Recherche Kaspr…';
+      try {
+        const r = await fetch('/api/robot/enrichir-linkedin', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ linkedinUrl: url }) });
+        const d = await r.json(); if (!r.ok) throw new Error(d.error || 'erreur');
+        const F = radar.fiches[id];
+        if (d.trouve && F && F.fiche) { const c = F.fiche.proprietaire.contacts = F.fiche.proprietaire.contacts || { linkedin: [], telephones: [], emails: [] }; if (d.telephone) c.telephones = [d.telephone].concat(c.telephones || []); if (d.email) c.emails = [d.email].concat(c.emails || []); toast('Coordonnées trouvées par Kaspr.', 'ok'); }
+        else toast(d.epuise ? 'Quota Kaspr épuisé.' : 'Kaspr n’a rien trouvé pour ce profil.', 'warn');
+      } catch (e) { toast(e.message, 'warn'); }
+      render();
+    },
     'radar-secteur': (el, id) => { radar.secteurs = id === 'tout' ? [] : (radar.secteurs.indexOf(id) > -1 ? radar.secteurs.filter((x) => x !== id) : radar.secteurs.concat([id])); rdRelancer(); },
     'radar-classe': (el, id) => { radar.classes = radar.classes.indexOf(id) > -1 ? radar.classes.filter((x) => x !== id) : radar.classes.concat([id]).sort(); rdRelancer(); },
     'radar-reset': () => { const p = radar.periode, t = radar.tri; Object.assign(radar, RD_CRIT(), { periode: p, tri: t }); rdRelancer(); },
