@@ -369,9 +369,8 @@
     '</div>';
   }
   // Écoles de secteur RÉELLES (secteurs officiels de la Ville de Paris),
-  // calculées à l'adresse exacte côté serveur. Réservées au propriétaire et
-  // aux visites confirmées : un secteur d'école couvre quelques rues et
-  // dévoilerait l'adresse. (Remplace l'ancienne liste fixe par
+  // calculées à l'adresse exacte côté serveur. Avant la visite confirmée, le
+  // membre voit le nom des écoles mais pas leurs adresses. (Remplace l'ancienne liste fixe par
   // arrondissement, qui n'était pas une vraie sectorisation.)
   function ecolesBlock(b) {
     state.ecoles = state.ecoles || {};
@@ -386,7 +385,7 @@
         : e.error ? '<p class="se-muted">Secteurs scolaires indisponibles pour le moment.</p>'
         : !e.disponible ? '<p class="se-muted">' + esc(e.raison || 'Sectorisation indisponible.') + '</p>'
         : '<p class="se-muted">Secteurs officiels ' + esc((e.elementaire && e.elementaire.annee) || '') + ', Ville de Paris.</p><div class="se-ecoles">' + ligne('Maternelle', e.maternelle) + ligne('Élémentaire', e.elementaire) + ligne('Collège', e.college) + '</div>' +
-          '<p class="se-hint" style="margin-top:8px">Lycées : affectation par Affelnet, sans secteur à l’adresse.</p>') +
+          '<p class="se-hint" style="margin-top:8px">Lycées : affectation par Affelnet, sans secteur à l’adresse.' + (e.sansAdresse ? ' Adresses des établissements communiquées avec celle du bien, à la confirmation de votre visite.' : '') + '</p>') +
     '</div>';
   }
 

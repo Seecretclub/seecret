@@ -1690,10 +1690,11 @@ function nomEtablissement(lib, adr, type) {
   if (!m) return genre + ' ' + casse(brut.replace(/\b(MAT|ELEM|POLY)\b/gi, ''));
   const nom = m[4] ? ' ' + casse(m[4]) : '';
   if (adr) return genre + nom + ', ' + casse(adr).replace(/ (Bis|Ter)\b/g, (x) => x.toLowerCase());
+  if (adr === null) return genre + (nom || ' ' + casse(m[1])); // sans adresse : ni rue ni numéro
   return genre + (nom || ' ' + casse(m[1])) + ' (' + m[2].replace(/\s*B(IS)?$/i, ' bis').trim() + ')';
 }
-async function sectorisationEcoles(lat, lon) {
-  const cle = Number(lat).toFixed(5) + ',' + Number(lon).toFixed(5);
+async function sectorisationEcoles(lat, lon, sansAdresse) {
+  const cle = Number(lat).toFixed(5) + ',' + Number(lon).toFixed(5) + (sansAdresse ? '|sa' : '');
   if (ECOLES_CACHE[cle] && Date.now() - ECOLES_CACHE[cle].at < 7 * 24 * 3600 * 1000) return ECOLES_CACHE[cle].data;
   const point = "geom'POINT(" + Number(lon) + ' ' + Number(lat) + ")'";
   const out = { source: 'Ville de Paris — secteurs scolaires (open data)' };
@@ -1702,7 +1703,7 @@ async function sectorisationEcoles(lat, lon) {
     const r = await fetchAvecRetry(url, { headers: { Accept: 'application/json' } }, 2);
     if (!r.ok) throw new Error('Open data Paris HTTP ' + r.status);
     const x = ((await r.json()).results || [])[0];
-    out[type] = x ? { etablissements: [[x.lib_etab_1, x.adr_etab_1], [x.lib_etab_2, x.adr_etab_2]].filter((e) => e[0]).map((e) => nomEtablissement(e[0], e[1], type)), annee: x.annee_scol || '' } : null;
+    out[type] = x ? { etablissements: [[x.lib_etab_1, x.adr_etab_1], [x.lib_etab_2, x.adr_etab_2]].filter((e) => e[0]).map((e) => nomEtablissement(e[0], sansAdresse ? null : e[1], type)), annee: x.annee_scol || '' } : null;
   }
   ECOLES_CACHE[cle] = { at: Date.now(), data: out };
   return out;
@@ -1725,14 +1726,14 @@ async function positionBien(b) {
     return true;
   } catch (e) { return false; }
 }
-async function repondreEcoles(res, b) {
+async function repondreEcoles(res, b, sansAdresse) {
   if (!b) return res.status(404).json({ error: 'Bien introuvable.' });
   if (!bienEstParis(b)) return res.json({ ok: true, disponible: false, raison: 'La sectorisation automatique couvre Paris intra-muros.' });
   if (!(await positionBien(b))) return res.json({ ok: true, disponible: false, raison: 'Position du bien inconnue : renseignez son adresse exacte (numéro et rue).' });
   try {
-    const e = await sectorisationEcoles(b.lat, b.lon);
-    if (!e.maternelle && !e.elementaire && !e.college) return res.json({ ok: true, disponible: false, raison: 'Aucun secteur scolaire trouvé à la position enregistrée : vérifiez l’adresse exacte du bien.' });
-    res.json(Object.assign({ ok: true, disponible: true }, e));
+    const e = await sectorisationEcoles(b.lat, b.lon, sansAdresse);
+    if (!e.maternelle && !e.elementaire && !e.college) return res.json({ ok: true, disponible: false, raison: sansAdresse ? 'Écoles de secteur communiquées par votre agent.' : 'Aucun secteur scolaire trouvé à la position enregistrée : vérifiez l’adresse exacte du bien.' });
+    res.json(Object.assign({ ok: true, disponible: true, sansAdresse: !!sansAdresse }, e));
   }
   catch (e) { res.status(502).json({ error: 'Secteurs scolaires indisponibles pour le moment.' }); }
 }
@@ -1746,10 +1747,10 @@ app.get('/api/ecoles/:bienId', requireAuth, async (req, res) => {
   if (!b) return res.status(404).json({ error: 'Bien introuvable.' });
   const proprietaire = b.leadId === req.lead.id;
   const visiteConfirmee = db.demandes.some((d) => d.type === 'visite' && d.leadId === req.lead.id && d.bienId === b.id && d.rdv);
-  if (!proprietaire && !visiteConfirmee && ROLES_STAFF.indexOf(roleOf(req.lead)) === -1) {
-    return res.json({ ok: true, disponible: false, reserve: true, raison: 'Les écoles de secteur vous sont communiquées avec l’adresse, à la confirmation de votre visite.' });
-  }
-  await repondreEcoles(res, b);
+  // Avant la visite : noms des écoles visibles, mais sans leurs adresses
+  // (l'adresse du bien reste réservée aux visites confirmées).
+  const complet = proprietaire || visiteConfirmee || ROLES_STAFF.indexOf(roleOf(req.lead)) > -1;
+  await repondreEcoles(res, b, !complet);
 });
 
 // ---------------- Visite virtuelle (pas à pas + 360°) ----------------
