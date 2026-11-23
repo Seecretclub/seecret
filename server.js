@@ -1587,6 +1587,138 @@ app.post('/api/membre/onboarding', requireAuth, (req, res) => {
   res.json({ ok: true, onboarding: req.lead.onboarding });
 });
 
+// ---------------- Journal de bord du membre ----------------
+// Tout est calculé pour CE membre : ses visites, ses offres, les baisses de
+// prix des biens qu'il suit ou a visités (en prix HAI, jamais le net d'un
+// autre propriétaire), et l'activité anonyme autour de son propre bien.
+function bienSurPlateforme(b) { return b && b.validation === 'valide' && (b.statut === 'avant-premiere' || b.statut === 'ouvert'); }
+function agentDuMembre(db, lead) {
+  const mien = db.biens.find((b) => b.leadId === lead.id);
+  return { nom: (mien && mien.agent) || DEFAULT_AGENT_NOM };
+}
+app.get('/api/mon-journal', requireAuth, (req, res) => {
+  const db = req.db;
+  const lead = req.lead;
+  const reduit = aVenduChezNous(db, lead);
+  const titreDe = (id) => { const b = db.biens.find((x) => x.id === id); return b ? (b.titre || 'Un bien du club') : 'Un bien du club'; };
+  const visites = db.demandes.filter((d) => d.type === 'visite' && d.leadId === lead.id).map((d) => ({
+    id: d.id, bienId: d.bienId, titre: titreDe(d.bienId), cree: d.cree,
+    etat: d.statut === 'traitee' && d.rdv ? 'confirmee' : (d.statut === 'refusee' ? 'refusee' : 'en_attente'),
+    rdv: d.rdv ? { date: d.rdv.date, heure: d.rdv.heure } : null,
+    creneaux: Array.isArray(d.creneaux) ? d.creneaux.map(creneauLisible) : []
+  })).sort((a, b) => String(b.cree).localeCompare(String(a.cree))).slice(0, 20);
+  const offres = (db.offres || []).filter((o) => o.leadId === lead.id).map((o) => ({
+    id: o.id, bienId: o.bienId, titre: titreDe(o.bienId), montant: o.montant, statut: o.statut, contre: o.contre || 0, cree: o.cree
+  })).sort((a, b) => String(b.cree).localeCompare(String(a.cree))).slice(0, 20);
+  const interesses = new Set((lead.suivis || []).concat(visites.map((v) => v.bienId)));
+  const baisses = [];
+  interesses.forEach((id) => {
+    const b = db.biens.find((x) => x.id === id);
+    if (!bienSurPlateforme(b) || b.leadId === lead.id) return;
+    const taux = tauxHonorairesPour(b, lead, reduit);
+    (b.historiquePrix || []).forEach((h) => {
+      if (h.ancien > 0 && h.nouveau > 0 && h.nouveau < h.ancien) {
+        baisses.push({ bienId: b.id, titre: b.titre || 'Un bien du club', at: h.at, ancien: prixHai(h.ancien, taux), nouveau: prixHai(h.nouveau, taux) });
+      }
+    });
+  });
+  baisses.sort((a, b) => String(b.at).localeCompare(String(a.at)));
+  const mien = db.biens.find((b) => b.leadId === lead.id);
+  const monBien = mien ? {
+    suiveurs: Number(mien.suiveurs) || 0,
+    visitesDemandees: db.demandes.filter((d) => d.type === 'visite' && d.bienId === mien.id).length,
+    visitesConfirmees: db.demandes.filter((d) => d.type === 'visite' && d.bienId === mien.id && d.rdv).length,
+    offres: (db.offres || []).filter((o) => o.bienId === mien.id).length
+  } : null;
+  const messages = (db.messages || []).filter((m) => m.leadId === lead.id);
+  res.json({
+    ok: true, agent: agentDuMembre(db, lead), visites: visites, offres: offres, baisses: baisses.slice(0, 12), monBien: monBien,
+    messagesNonLus: messages.filter((m) => m.de === 'agent' && !m.luMembre).length
+  });
+});
+
+// ---------------- Messagerie membre ↔ agent ----------------
+// Fil unique par membre, lu dans l'espace membre (fenêtre de discussion) et
+// dans le CRM (Messages). Chaque message prévient l'autre côté par email.
+const MESSAGE_MAX = 2000;
+function escHtml(x) { return String(x == null ? '' : x).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+function messageSortant(m) { return { id: m.id, de: m.de, auteur: m.auteur || '', texte: m.texte, at: m.at }; }
+function emailsAgence() {
+  const liste = String(process.env.AGENCE_EMAIL_MESSAGES || process.env.ADMIN_EMAILS || '').split(',').map((x) => x.trim()).filter(Boolean);
+  return liste;
+}
+app.get('/api/mes-messages', requireAuth, (req, res) => {
+  const db = req.db;
+  db.messages = Array.isArray(db.messages) ? db.messages : [];
+  const fil = db.messages.filter((m) => m.leadId === req.lead.id);
+  let change = false;
+  fil.forEach((m) => { if (m.de === 'agent' && !m.luMembre) { m.luMembre = true; change = true; } });
+  (db.notifications || []).forEach((n) => { if (n.leadId === req.lead.id && n.type === 'message' && !n.lue) { n.lue = true; change = true; } });
+  if (change) writeDb(db);
+  res.json({ ok: true, agent: agentDuMembre(db, req.lead), messages: fil.map(messageSortant) });
+});
+app.post('/api/mes-messages', requireAuth, (req, res) => {
+  const texte = String((req.body && req.body.texte) || '').trim().slice(0, MESSAGE_MAX);
+  if (!texte) return res.status(400).json({ error: 'Message vide.' });
+  const db = req.db;
+  db.messages = Array.isArray(db.messages) ? db.messages : [];
+  const m = { id: uid('msg'), leadId: req.lead.id, de: 'membre', auteur: nomComplet(req.lead), texte: texte, at: nowISO(), luMembre: true, luAgence: false };
+  db.messages.push(m);
+  logActivite(db, { leadId: req.lead.id, type: 'message_membre', auteur: nomComplet(req.lead) });
+  writeDb(db);
+  const dest = emailsAgence();
+  if (mailer && dest.length) {
+    mailer.sendMail({
+      from: '"Bonjour Seecret" <' + FROM_EMAIL + '>', to: dest.join(','),
+      subject: 'Nouveau message de ' + nomComplet(req.lead),
+      html: emailValidationLegere('', escHtml(nomComplet(req.lead)) + ' vous écrit : « ' + escHtml(texte) + ' ». Répondez depuis le CRM, rubrique Messages : ' + originOf(req) + '/crm.html#/messages')
+    }).catch((err) => console.error('[messages] email agence échoué :', err.message));
+  }
+  res.json({ ok: true, message: messageSortant(m) });
+});
+app.get('/api/messages', requireAdmin, (req, res) => {
+  const db = readDb();
+  const parLead = {};
+  (db.messages || []).forEach((m) => { (parLead[m.leadId] = parLead[m.leadId] || []).push(m); });
+  const conversations = Object.keys(parLead).map((id) => {
+    const l = db.leads.find((x) => x.id === id) || {};
+    const fil = parLead[id];
+    const dernier = fil[fil.length - 1];
+    return { leadId: id, nom: nomComplet(l) || l.email || 'Membre', email: l.email || '', dernier: messageSortant(dernier), nonLus: fil.filter((m) => m.de === 'membre' && !m.luAgence).length };
+  }).sort((a, b) => String(b.dernier.at).localeCompare(String(a.dernier.at)));
+  res.json({ ok: true, conversations: conversations });
+});
+app.get('/api/messages/:leadId', requireAdmin, (req, res) => {
+  const db = readDb();
+  const fil = (db.messages || []).filter((m) => m.leadId === req.params.leadId);
+  let change = false;
+  fil.forEach((m) => { if (m.de === 'membre' && !m.luAgence) { m.luAgence = true; change = true; } });
+  if (change) writeDb(db);
+  res.json({ ok: true, messages: fil.map(messageSortant) });
+});
+app.post('/api/messages/:leadId', requireAdmin, (req, res) => {
+  const texte = String((req.body && req.body.texte) || '').trim().slice(0, MESSAGE_MAX);
+  if (!texte) return res.status(400).json({ error: 'Message vide.' });
+  const db = readDb();
+  const lead = db.leads.find((l) => l.id === req.params.leadId);
+  if (!lead) return res.status(404).json({ error: 'Membre introuvable.' });
+  db.messages = Array.isArray(db.messages) ? db.messages : [];
+  const m = { id: uid('msg'), leadId: lead.id, de: 'agent', auteur: nomComplet(req.lead) || DEFAULT_AGENT_NOM, texte: texte, at: nowISO(), luMembre: false, luAgence: true };
+  db.messages.push(m);
+  // Notification dans l'espace membre (texte brut) + email (texte échappé).
+  const resume = m.auteur + ' vous a répondu : « ' + texte.slice(0, 300) + (texte.length > 300 ? '…' : '') + ' »';
+  db.notifications = Array.isArray(db.notifications) ? db.notifications : [];
+  db.notifications.push({ id: uid('ntf'), leadId: lead.id, email: lead.email || '', titre: 'Nouveau message de votre agent', message: resume, lien: originOf(req) + '/espace.html#/messages', lue: false, type: 'message', cree: nowISO() });
+  if (mailer && lead.email) {
+    mailer.sendMail({
+      from: '"Bonjour Seecret" <' + FROM_EMAIL + '>', to: lead.email, subject: 'Nouveau message de votre agent Seecret',
+      html: emailValidationLegere(escHtml(lead.prenom || ''), escHtml(resume) + '<br><br><a href="' + originOf(req) + '/espace.html#/messages" style="color:#141210">Répondre dans votre espace</a>')
+    }).catch((err) => console.error('[messages] email membre échoué :', err.message));
+  }
+  writeDb(db);
+  res.json({ ok: true, message: messageSortant(m) });
+});
+
 app.get('/api/catalogue', requireAuth, (req, res) => {
   const db = req.db;
   // Même recherche que bienDuMembre(), mais sans créer de brouillon ici —

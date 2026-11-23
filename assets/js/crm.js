@@ -1050,6 +1050,12 @@
         }
       } catch (e) { /* barème par défaut */ }
       state.biensServeur = rb.ok ? ((await rb.json()).biens || []).map(mapBienServeur) : [];
+      try {
+        const rm = await fetch('/api/messages', { headers: { accept: 'application/json' } });
+        if (rm.ok) state.conversations = (await rm.json()).conversations || [];
+        const rr = parseRoute();
+        if (rr.name === 'messages' && rr.param) await chargerFil(leadDuFil(rr.param));
+      } catch (e) { /* messagerie indisponible */ }
       state.recherchesServeur = rr.ok ? ((await rr.json()).recherches || []).map(mapRechercheServeur) : [];
 
       // Les offres réelles n'étaient jusqu'ici jamais synchronisées : la vue
@@ -1137,6 +1143,9 @@
     const celiaAvaitFocus = !!champCelia && document.activeElement === champCelia;
     const celiaValeurVive = champCelia ? champCelia.value : null;
     const celiaSelection = champCelia ? [champCelia.selectionStart, champCelia.selectionEnd] : null;
+    const champMsg = document.querySelector('.se-composer [name="texte"]');
+    const msgFocus = !!champMsg && document.activeElement === champMsg;
+    const msgValeur = champMsg ? champMsg.value : null;
 
     const views = {
       tableau: viewTableau,
@@ -1196,6 +1205,13 @@
         }
       }
     }
+
+    if (msgValeur !== null) {
+      const n = document.querySelector('.se-composer [name="texte"]');
+      if (n) { n.value = msgValeur; if (msgFocus) n.focus(); }
+    }
+    const filMsg = document.querySelector('[data-fil-messages]');
+    if (filMsg) filMsg.scrollTop = filMsg.scrollHeight;
 
     if (r.name !== lastRoute) { window.scrollTo({ top: 0 }); lastRoute = r.name; }
   }
@@ -1261,7 +1277,7 @@
           nav('offres', r.name, 'tag', 'Propositions', offresNouvelles() || '') +
           nav('taches', r.name, 'check', 'Tâches', tachesOuvertes().length || '') +
           nav('verifications', r.name, 'check', 'Vérifications', verifEnAttente() || '') +
-          nav('messages', r.name, 'chat', 'Messages') +
+          nav('messages', r.name, 'chat', 'Messages', messagesNonLus() || '') +
           nav('reglages', r.name, 'tools', 'Réglages') +
           (state.moi && state.moi.role === 'superadmin' ? nav('agents', r.name, 'users', 'Agents') : '') +
         '</nav>' +
@@ -4781,32 +4797,55 @@
 
   /* -------------------------------- messages ------------------------------ */
 
-  function viewMessages() {
-    const ids = Object.keys(state.threads || {});
-    return head('Messagerie', 'Conversations', 'Le fil avec vos clients, au même endroit.') +
-      '<div class="se-grid cols-2" style="align-items:start">' +
-        '<div class="se-card"><h3>Fils</h3><div class="se-list" style="margin-top:8px">' +
-          (ids.length ? ids.map((id) => {
-            const c = client(id);
-            const t = state.threads[id];
-            const last = t[t.length - 1];
-            return '<a class="se-rowlink" href="#/messages/' + id + '"><span class="se-avatar" style="width:30px;height:30px;flex:0 0 30px;font-size:11px">' + esc(c ? (c.prenom.charAt(0) + c.nom.charAt(0)).toUpperCase() : '?') + '</span>' +
-              '<div style="flex:1;min-width:0"><div style="font-size:13.5px">' + esc(nomClient(c)) + '</div><div class="se-sub" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(last ? last.texte : '') + '</div></div>' +
-              '<span class="se-hint">' + (last ? dCourt(last.at) : '') + '</span></a>';
-          }).join('') : '<p class="se-muted">Aucune conversation.</p>') +
-        '</div></div>' +
-        '<div class="se-card"><h3>Astuce</h3><p class="se-muted">Ouvrez une conversation depuis une fiche client, ou cliquez sur un fil.</p></div>' +
-      '</div>';
+  // ---- Messagerie membre ↔ agence (vraie, côté serveur) ----
+  // Le paramètre de route est un id client du CRM (srv-…) ou directement
+  // l'identifiant du membre côté serveur.
+  function leadDuFil(param) {
+    const c = client(param);
+    return (c && c.serverId) || String(param || '').replace(/^srv-/, '');
   }
-
+  function messagesNonLus() { return (state.conversations || []).reduce((n, c) => n + (c.nonLus || 0), 0); }
+  async function chargerFil(leadId) {
+    if (!leadId) return;
+    try {
+      const r = await fetch('/api/messages/' + encodeURIComponent(leadId), { headers: { accept: 'application/json' } });
+      if (!r.ok) return;
+      state.fils = state.fils || {};
+      state.fils[leadId] = (await r.json()).messages || [];
+      const conv = (state.conversations || []).find((c) => c.leadId === leadId);
+      if (conv) conv.nonLus = 0;
+    } catch (e) { /* ignore */ }
+  }
+  function viewMessages() {
+    const convs = state.conversations || [];
+    return head('Messagerie', 'Messages des membres', 'Les questions posées par les membres depuis leur espace. Chaque réponse leur est envoyée par email.') +
+      '<div class="se-card" style="max-width:820px"><div class="se-list">' +
+        (convs.length ? convs.map((c) => {
+          const ini = (c.nom || '?').split(' ').map((x) => x.charAt(0)).join('').slice(0, 2).toUpperCase();
+          return '<a class="se-rowlink" href="#/messages/' + esc(c.leadId) + '"><span class="se-avatar" style="width:34px;height:34px;flex:0 0 34px;font-size:11px">' + esc(ini) + '</span>' +
+            '<div style="flex:1;min-width:0"><div style="font-size:14px;font-weight:' + (c.nonLus ? 600 : 400) + '">' + esc(c.nom) + '</div>' +
+            '<div class="se-sub" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + (c.dernier && c.dernier.de === 'agent' ? 'Vous : ' : '') + esc(c.dernier ? c.dernier.texte : '') + '</div></div>' +
+            (c.nonLus ? '<span class="se-count">' + c.nonLus + '</span>' : '') +
+            '<span class="se-hint">' + (c.dernier ? dCourt(c.dernier.at) : '') + '</span></a>';
+        }).join('') : '<p class="se-muted">Aucun message pour l’instant. Les membres écrivent depuis le bouton « Mon agent » de leur espace.</p>') +
+      '</div></div>';
+  }
   function viewThread(r) {
-    const id = r.param;
-    const c = client(id);
-    const t = (state.threads && state.threads[id]) || [];
-    return head(esc(nomClient(c)), 'Conversation', esc(c ? c.email : '')) +
-      '<div class="se-card" style="max-width:720px">' +
-        '<div class="se-chat">' + t.map((m) => '<div class="se-bubble ' + (m.de === 'agent' ? 'me' : 'agent') + '">' + esc(m.texte) + '<time>' + dCourt(m.at) + ' ' + tFR(m.at) + '</time></div>').join('') + '</div>' +
-        '<form class="se-composer" data-form="msg" data-client="' + id + '"><input class="se-input" name="texte" placeholder="Écrire au client…" autocomplete="off"/><button class="se-btn" type="submit">Envoyer</button></form>' +
+    const leadId = leadDuFil(r.param);
+    const conv = (state.conversations || []).find((c) => c.leadId === leadId);
+    const c = client(r.param) || (state.clients || []).find((x) => x.serverId === leadId);
+    const nom = conv ? conv.nom : nomClient(c);
+    const fil = state.fils && state.fils[leadId];
+    if (!fil) { chargerFil(leadId).then(render); }
+    return '<div style="margin-bottom:14px"><a class="se-btn ghost sm" href="#/messages">← Messages</a></div>' +
+      head(esc(nom || 'Membre'), 'Conversation', esc((conv && conv.email) || (c && c.email) || '')) +
+      '<div class="se-card" style="max-width:760px">' +
+        '<div class="se-chat" data-fil-messages style="max-height:min(60vh,560px);overflow-y:auto">' +
+          (fil ? (fil.length ? fil.map((m) => '<div class="se-bubble ' + (m.de === 'agent' ? 'me' : 'agent') + '">' + esc(m.texte).replace(/\n/g, '<br>') + '<time>' + (m.de === 'agent' && m.auteur ? esc(m.auteur) + ' · ' : '') + dCourt(m.at) + ' ' + tFR(m.at) + '</time></div>').join('')
+            : '<p class="se-muted">Aucun message. Écrivez le premier : le membre le recevra par email et dans son espace.</p>')
+            : '<p class="se-muted">Chargement…</p>') +
+        '</div>' +
+        '<form class="se-composer" data-form="msg" data-lead="' + esc(leadId) + '"><input class="se-input" name="texte" placeholder="Répondre au membre…" autocomplete="off" maxlength="2000"/><button class="se-btn" type="submit">Envoyer</button></form>' +
       '</div>';
   }
 
@@ -6798,19 +6837,22 @@
     }
 
     if (kind === 'msg') {
-      const id = form.getAttribute('data-client');
+      const leadId = form.getAttribute('data-lead');
+      const champ = form.querySelector('[name="texte"]');
       const texte = String(data.get('texte') || '').trim();
-      if (!texte) return;
-      state.threads = state.threads || {};
-      state.threads[id] = state.threads[id] || [];
-      state.threads[id].push({ de: 'agent', texte, at: nowISO() });
-      save();
-      render();
-      setTimeout(() => {
-        state.threads[id].push({ de: 'client', texte: 'Bien reçu, merci. Je reviens vers vous rapidement.', at: nowISO() });
-        save();
+      if (!texte || !leadId) return;
+      const bouton = form.querySelector('button'); bouton.disabled = true;
+      try {
+        const r = await fetch('/api/messages/' + encodeURIComponent(leadId), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ texte: texte }) });
+        const res = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(res.error || 'Envoi impossible');
+        state.fils = state.fils || {};
+        state.fils[leadId] = (state.fils[leadId] || []).concat([res.message]);
+        champ.value = '';
         render();
-      }, 1500);
+        const n = document.querySelector('.se-composer [name="texte"]'); if (n) { n.value = ''; n.focus(); }
+        toast('Message envoyé. Le membre est prévenu par email.', 'ok');
+      } catch (err) { toast(err.message || 'Envoi impossible', 'warn'); bouton.disabled = false; }
       return;
     }
 
