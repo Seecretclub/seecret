@@ -1570,17 +1570,17 @@
               '</div>' +
               '<div class="se-note" style="margin-top:10px;font-size:12.5px;line-height:1.6">Vos photos ont été validées par votre agent. Pour en ajouter, en retirer ou changer la photo principale, écrivez-lui.' +
                 '<div style="margin-top:8px"><button type="button" class="se-btn sm" data-act="chat-ouvrir">Écrire à mon agent</button></div></div>'
-            :           '<div class="se-row" style="gap:10px;margin-top:12px;flex-wrap:wrap">' +
-            photos.map((p, i) => '<div style="position:relative">' +
+            :           '<div class="se-row" style="gap:10px;margin-top:12px;flex-wrap:wrap" data-tri-photos="mon-bien">' +
+            photos.map((p, i) => '<div style="position:relative" data-tri-index="' + i + '">' +
               '<button type="button" data-act="photo-principale" data-url="' + esc(p) + '" title="Définir comme principale" style="padding:0;border:' + (i === 0 ? '2px solid var(--color-ink)' : '1px solid var(--color-stroke)') + ';border-radius:12px;overflow:hidden;background:none;cursor:pointer;width:88px;height:66px">' +
-                '<img src="' + esc(p) + '" alt="" style="width:100%;height:100%;object-fit:cover"/>' +
+                '<img src="' + esc(p) + '" alt="" draggable="false" style="width:100%;height:100%;object-fit:cover"/>' +
               '</button>' +
-              '<button type="button" data-act="photo-suppr" data-url="' + esc(p) + '" title="Supprimer" style="position:absolute;top:-7px;right:-7px;width:22px;height:22px;border-radius:50%;border:1px solid var(--color-stroke);background:var(--color-surface);color:var(--color-graphite);font-size:13px;line-height:1;cursor:pointer">×</button>' +
+              '<button type="button" data-tri-fixe data-act="photo-suppr" data-url="' + esc(p) + '" title="Supprimer" style="position:absolute;top:-7px;right:-7px;width:22px;height:22px;border-radius:50%;border:1px solid var(--color-stroke);background:var(--color-surface);color:var(--color-graphite);font-size:13px;line-height:1;cursor:pointer">×</button>' +
             '</div>').join('') +
             '<label class="se-btn ghost sm" style="margin:0;cursor:pointer">' + ICONS.plus + ' Ajouter des photos' +
               '<input type="file" accept="image/*" multiple hidden data-photos/></label>' +
           '</div>' +
-          '<p class="se-hint" style="margin-top:8px">Minimum 3 photos. Cliquez une vignette pour la définir comme principale.</p>' +
+          '<p class="se-hint" style="margin-top:8px">Minimum 3 photos. Faites glisser une photo pour la déplacer (appui long sur téléphone) ; la première est la photo principale. Un clic sur une vignette la met aussi en principale.</p>' +
           '<div class="se-note" style="margin-top:10px;font-size:12.5px;line-height:1.6"><b>Conseils photo :</b> tournez le téléphone à l’horizontal, prenez d’angle à angle, enlevez les objets, gardez l’équilibre sol / plafond.</div>') +
           '<div class="ed-panel" style="margin-top:18px">' +
             '<span class="ed-kicker">Estimation</span>' +
@@ -3341,6 +3341,16 @@
     }
   });
 
+  // Photos de Mon bien déplacées à la souris ou au doigt (tri-photos.js).
+  document.addEventListener('tri-photos', async (e) => {
+    if (e.detail.cle !== 'mon-bien' || !state.monBien) return;
+    const ordre = window.TriPhotos.reordonner(state.monBien.photos || [], e.detail.de, e.detail.vers);
+    try {
+      const r = await API.send('PATCH', '/api/mon-bien/photos', { ordre: ordre });
+      state.monBien.photos = r.photos;
+    } catch (err) { toast(err.message, 'warn'); }
+    render();
+  });
   document.addEventListener('change', async (e) => {
     const docType = e.target.getAttribute('data-doc');
     if (docType) {
