@@ -194,7 +194,7 @@
       // authentifié ; vide par défaut pour ne jamais montrer de faux biens
       // à un vrai membre avant ou en l'absence de connexion.
       biens: [],
-      suivis: ['b3'],
+      suivis: [],
       visites: [],
       offres: [],
       compare: [],
@@ -486,21 +486,43 @@
 
   /* ================= PLATEFORME ÉDITORIALE (Belle Demeure / Kindred) ================= */
 
+  function estStaff() {
+    const role = state.membre && state.membre.role;
+    return role === 'agent' || role === 'admin' || role === 'superadmin';
+  }
+
+  // En-tête : « Les biens » (accueil + catalogue), « Mes favoris », « Le
+  // concept » ; Mon bien / Ma recherche / Mon profil passent dans le menu
+  // déroulant du nom (survol sur ordinateur, appui sur mobile).
   function edShell(r, content) {
     const p = state.profil;
-    const role = state.membre && state.membre.role;
-    const admin = role === 'admin' || role === 'superadmin';
+    const nom = (p.prenom + ' ' + p.nom).trim() || 'Mon compte';
+    const initiales = ((p.prenom || 'S').charAt(0) + (p.nom || '').charAt(0)).toUpperCase();
+    const nbFavoris = (state.suivis || []).filter((id) => bien(id)).length;
+    const surBiens = r.name === 'accueil' || r.name === 'catalogue' || r.name === 'bien';
     return '<div class="ed-shell">' +
       '<header class="ed-header">' +
-        '<a class="ed-brand" href="#/accueil"><span class="ed-logo">S</span><span><b>Seecret</b><small>Espace membre</small></span></a>' +
+        '<a class="ed-brand" href="#/accueil"><span class="ed-logo">S</span><span><b>Seecret</b><small>Le club off-market</small></span></a>' +
         '<nav class="ed-nav">' +
-          '<a href="#/catalogue" class="' + (r.name === 'catalogue' || r.name === 'bien' ? 'active' : '') + '">Catalogue</a>' +
-          '<a href="#/mon-bien" class="' + (r.name === 'mon-bien' ? 'active' : '') + '">Mon bien</a>' +
-          '<a href="#/recherche" class="' + (r.name === 'recherche' ? 'active' : '') + '">Ma recherche</a>' +
-          '<a href="#/profil" class="' + (r.name === 'profil' ? 'active' : '') + '">Mon profil</a>' +
-          (admin ? '<a href="/crm.html">CRM agence</a>' : '') +
+          '<a href="#/accueil" data-tour="biens" class="' + (surBiens ? 'active' : '') + '">Les biens</a>' +
+          '<a href="#/favoris" data-tour="favoris" class="' + (r.name === 'favoris' ? 'active' : '') + '">Mes favoris' + (nbFavoris ? ' <span class="ed-count">' + nbFavoris + '</span>' : '') + '</a>' +
+          '<a href="/index.html" target="_blank" rel="noopener" data-tour="concept">Le concept</a>' +
         '</nav>' +
-        '<a class="ed-user" href="#/profil">' + esc((p.prenom + ' ' + p.nom).trim() || 'Mon compte') + '</a>' +
+        '<div class="ed-menu" data-tour="menu">' +
+          '<button type="button" class="ed-user" data-act="menu-toggle" aria-haspopup="true" aria-expanded="' + (state.__menuOuvert ? 'true' : 'false') + '">' +
+            '<span class="ed-avatar">' + esc(initiales) + '</span><span class="ed-user-nom">' + esc(nom) + '</span>' +
+            '<svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m5 8 5 5 5-5"/></svg>' +
+          '</button>' +
+          '<div class="ed-menu-list' + (state.__menuOuvert ? ' open' : '') + '" role="menu">' +
+            '<a role="menuitem" href="#/mon-bien" class="' + (r.name === 'mon-bien' ? 'active' : '') + '">Mon bien</a>' +
+            '<a role="menuitem" href="#/recherche" class="' + (r.name === 'recherche' ? 'active' : '') + '">Ma recherche</a>' +
+            '<a role="menuitem" href="#/profil" class="' + (r.name === 'profil' ? 'active' : '') + '">Mon profil</a>' +
+            '<div class="ed-menu-sep"></div>' +
+            '<a role="menuitem" href="#" data-act="bienvenue-revoir">Revoir la présentation</a>' +
+            '<a role="menuitem" href="#" data-act="logout">Se déconnecter</a>' +
+            (estStaff() ? '<div class="ed-menu-sep"></div><a role="menuitem" class="ed-menu-crm" href="/crm.html">Aller sur le CRM →</a>' : '') +
+          '</div>' +
+        '</div>' +
       '</header>' +
       banniereNotifications() +
       banniereAdhesion() +
@@ -613,15 +635,37 @@
     return '<div><div class="ed-kicker" style="margin:0">' + esc(label) + '</div><div style="font-size:14px;font-weight:500">' + value + '</div></div>';
   }
 
+  // Infobulles des statuts (survol) — le badge « Ouvert aux visites » est
+  // cliquable et ouvre directement le choix d'un créneau.
+  const AIDE_STATUT = {
+    'avant-premiere': 'Vous pouvez suivre ce bien et serez notifié dès que les visites sont possibles.',
+    ouvert: 'Cliquez pour choisir un créneau de visite.'
+  };
+  function badgeCarte(b, cliquable) {
+    const s = STATUTS[b.statut] || STATUTS.brouillon;
+    const aide = AIDE_STATUT[b.statut];
+    if (cliquable && b.statut === 'ouvert') {
+      return '<button type="button" class="ed-badge ' + s.cls + '" data-act="visite-open" data-id="' + b.id + '"' + (aide ? ' data-tip="' + esc(aide) + '"' : '') + '>' + s.label + '</button>';
+    }
+    return '<span class="ed-badge ' + s.cls + '"' + (aide ? ' data-tip="' + esc(aide) + '" tabindex="0"' : '') + '>' + s.label + '</span>';
+  }
+  function popularite(b) {
+    const n = Number(b.suiveurs) || 0;
+    if (n >= 15) return { n: n, texte: 'Très forte demande · suivi par ' + num(n) + ' membres' };
+    if (n >= 5) return { n: n, texte: 'Ce bien est suivi par ' + num(n) + ' membres' };
+    return null;
+  }
+  function photosDe(b) {
+    return (b.photos || []).slice(0, 8).map((x, i) => photoOf(b, i)).filter(Boolean);
+  }
+
   function edCard(b) {
     const lock = estVerrouille(b);
-    const img = photoOf(b)
-      ? '<img src="' + photoOf(b) + '" alt="" loading="lazy" style="' + (lock ? 'filter:blur(16px);transform:scale(1.06);' : '') + '"/>'
-      : '';
-    const badges = '<span class="ed-card-badge">' + badge(b.statut) + '</span>';
+    const photos = photosDe(b);
     if (lock) {
+      const img = photos[0] ? '<img src="' + photos[0] + '" alt="" loading="lazy" style="filter:blur(16px);transform:scale(1.06)"/>' : '';
       return '<div class="ed-card" style="cursor:not-allowed">' +
-        '<div class="ed-card-photo">' + img + badges + '</div>' +
+        '<div class="ed-card-photo">' + img + '<span class="ed-card-badge">' + badgeCarte(b, false) + '</span></div>' +
         '<div class="ed-card-body">' +
           '<span class="ed-card-type">' + esc(b.type) + ' · ' + esc(b.label) + '</span>' +
           '<span class="ed-card-title">' + esc(b.titre) + '</span>' +
@@ -629,15 +673,33 @@
         '</div>' +
       '</div>';
     }
+    const suivi = (state.suivis || []).indexOf(b.id) > -1;
+    const pop = popularite(b);
+    const mien = b.mien || (state.monBien && state.monBien.id === b.id);
     return '<a class="ed-card" href="#/bien/' + b.id + '">' +
-      '<div class="ed-card-photo">' + img + badges + '</div>' +
+      '<div class="ed-card-photo" data-slides="' + photos.length + '">' +
+        photos.map((src, i) => '<img class="ed-slide' + (i === 0 ? ' on' : '') + '" src="' + src + '" alt="" loading="lazy"/>').join('') +
+        (photos.length > 1
+          ? '<button type="button" class="ed-slide-nav prev" data-act="slide" data-id="-1" aria-label="Photo précédente"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m12 5-5 5 5 5"/></svg></button>' +
+            '<button type="button" class="ed-slide-nav next" data-act="slide" data-id="1" aria-label="Photo suivante"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m8 5 5 5-5 5"/></svg></button>' +
+            '<span class="ed-slide-dots">' + photos.map((_, i) => '<i class="' + (i === 0 ? 'on' : '') + '"></i>').join('') + '</span>'
+          : '') +
+        '<span class="ed-card-badge">' + badgeCarte(b, !mien) + '</span>' +
+        (mien ? '' : '<button type="button" class="ed-save' + (suivi ? ' on' : '') + '" data-act="suivre" data-id="' + b.id + '" aria-pressed="' + suivi + '" aria-label="' + (suivi ? 'Retirer de mes favoris' : 'Enregistrer ce bien') + '" title="' + (suivi ? 'Enregistré' : 'Enregistrer') + '">' +
+          bookmarkSvg(suivi, 22) + (pop ? '<span class="ed-save-n">' + num(pop.n) + '</span>' : '') + '</button>') +
+      '</div>' +
       '<div class="ed-card-body">' +
         '<span class="ed-card-type">' + esc(b.type) + ' · ' + esc(b.label) + '</span>' +
         '<span class="ed-card-title">' + esc(b.titre) + '</span>' +
         '<span class="ed-card-price">' + euro(b.prix) + '</span>' +
-        '<span class="ed-card-foot">' + num(b.surface) + ' m² · ' + b.pieces + ' pièces · ' + b.chambres + ' ch.</span>' +
+        '<span class="ed-card-foot">' + num(b.surface) + ' m² · ' + b.pieces + ' pièces · ' + b.chambres + ' ch.' + (b.etage !== '' && b.etage != null ? ' · ' + etageTxt(b.etage) : '') + '</span>' +
       '</div>' +
     '</a>';
+  }
+  function etageTxt(e) {
+    const n = Number(e);
+    if (String(e).trim() === '' || isNaN(n)) return String(e);
+    return n === 0 ? 'RDC' : n + (n === 1 ? 'er' : 'e') + ' étage';
   }
 
   function edHero(list) {
@@ -648,9 +710,9 @@
           (photoOf(b) ? '<img src="' + photoOf(b) + '" alt="" style="' + (lock ? 'filter:blur(16px);transform:scale(1.06);' : '') + '"/>' : '') +
           '<div class="ed-hero-grad"></div>' +
           '<div class="ed-hero-txt">' +
-            '<span class="ed-kicker" style="color:rgba(255,255,255,.75)">Le plus suivi du mois</span>' +
+            '<span class="ed-kicker" style="color:rgba(255,255,255,.75)">' + (popularite(b) ? 'Le plus suivi du mois' : 'À la une') + '</span>' +
             '<h2>' + esc(b.titre) + '</h2>' +
-            '<div style="color:rgba(255,255,255,.9);font-size:14px">' + esc(b.label) + (lock ? '' : ' · ' + euro(b.prix)) + ' · ' + num(b.suiveurs || 0) + ' membres</div>' +
+            '<div style="color:rgba(255,255,255,.9);font-size:14px">' + [esc(b.label || ''), lock ? '' : euro(b.prix), popularite(b) ? 'suivi par ' + num(b.suiveurs) + ' membres' : ''].filter(Boolean).join(' · ') + '</div>' +
             (lock
               ? '<button class="se-btn light" style="margin-top:14px" data-act="finaliser-adhesion">Finalisez votre adhésion pour débloquer</button>'
               : '<a class="se-btn light" href="#/bien/' + b.id + '" style="margin-top:14px">Découvrir</a>') +
@@ -671,70 +733,262 @@
     '</div>';
   }
 
+  // ---- Catalogue (fusionné dans l'accueil) : filtres, tri, résultats ----
+  const ARR_ALIAS = {
+    marais: ['p3', 'p4'], 'saint-germain': ['p6', 'p7'], 'saint germain': ['p6', 'p7'], montmartre: ['p18'],
+    'quartier latin': ['p5'], batignolles: ['p17'], trocadero: ['p16'], 'trocadéro': ['p16'], passy: ['p16'],
+    auteuil: ['p16'], 'île saint-louis': ['p4'], 'ile saint-louis': ['p4'], invalides: ['p7'], 'champ de mars': ['p7'],
+    'canal saint-martin': ['p10'], bastille: ['p11', 'p12'], oberkampf: ['p11'], 'butte aux cailles': ['p13'],
+    montparnasse: ['p14', 'p15'], 'plaine monceau': ['p17'], monceau: ['p8', 'p17'], opéra: ['p9'], opera: ['p9'], pigalle: ['p9', 'p18']
+  };
+  function suggestionsArr(texte) {
+    const t = String(texte || '').trim().toLowerCase();
+    if (!t) return [];
+    const pris = (state.__filtres && state.__filtres.arr) || [];
+    const out = [];
+    const ajoute = (id, libelle) => { if (pris.indexOf(id) === -1 && !out.some((o) => o.id === id)) out.push({ id: id, libelle: libelle }); };
+    const chiffre = t.replace(/[^0-9]/g, '');
+    QUARTIERS.forEach((q) => {
+      const n = String(q.arrondissement);
+      if ((chiffre && (n.indexOf(chiffre) === 0 || ('750' + (n.length === 1 ? '0' : '') + n).indexOf(chiffre) === 0)) ||
+          q.label.toLowerCase().indexOf(t) > -1) ajoute(q.id, q.label);
+    });
+    Object.keys(ARR_ALIAS).forEach((k) => {
+      if (k.indexOf(t) === 0 || (t.length > 2 && k.indexOf(t) > -1)) ARR_ALIAS[k].forEach((id) => ajoute(id, nomQuartier(id) + ' · ' + k.charAt(0).toUpperCase() + k.slice(1)));
+    });
+    return out.slice(0, 6);
+  }
+  function filtresActifs(f) {
+    let n = 0;
+    ['statut', 'prixMin', 'prixMax', 'etageMin', 'etageMax', 'epoque'].forEach((k) => { if (f[k] !== undefined && f[k] !== '') n++; });
+    if ((f.types || []).length) n++;
+    if ((f.arr || []).length) n++;
+    if (f.exterieur) n++;
+    if (f.piecesMin) n++;
+    if (f.chambresMin) n++;
+    if (f.maRecherche) n++;
+    return n;
+  }
+  function appliquerFiltres(list, f) {
+    const rec = state.recherche || {};
+    const nb = (v) => (v === '' || v === undefined || v === null ? null : Number(v));
+    const out = list.filter((b) => {
+      if (f.q) { const hay = (b.titre + ' ' + b.label + ' ' + b.type + ' ' + (b.description || '')).toLowerCase(); if (hay.indexOf(f.q.toLowerCase()) === -1) return false; }
+      if ((f.types || []).length && f.types.indexOf(b.type) === -1) return false;
+      if (f.statut && b.statut !== f.statut) return false;
+      if (nb(f.prixMin) != null && b.prix < nb(f.prixMin)) return false;
+      if (nb(f.prixMax) != null && b.prix > nb(f.prixMax)) return false;
+      const etage = String(b.etage).trim() === '' ? null : Number(b.etage);
+      if (nb(f.etageMin) != null && (etage == null || isNaN(etage) || etage < nb(f.etageMin))) return false;
+      if (nb(f.etageMax) != null && (etage == null || isNaN(etage) || etage > nb(f.etageMax))) return false;
+      if ((f.arr || []).length && f.arr.indexOf(b.quartier) === -1) return false;
+      if (f.epoque) {
+        // Ancien = construit avant 1950 (sans année connue, on le considère ancien).
+        const recent = Number(b.anneeConstruction) >= 1950;
+        if (f.epoque === 'recent' ? !recent : recent) return false;
+      }
+      if (f.exterieur && !(b.exterieur || Number(b.surfaceExterieur) > 0 || (b.atouts || []).some((a) => /terrasse|jardin|balcon/i.test(a)))) return false;
+      if (f.piecesMin && b.pieces < f.piecesMin) return false;
+      if (f.chambresMin && b.chambres < f.chambresMin) return false;
+      if (f.maRecherche) {
+        if (rec.quartiers && rec.quartiers.length && rec.quartiers.indexOf(b.quartier) === -1) return false;
+        if (rec.types && rec.types.length && rec.types.indexOf(b.type) === -1) return false;
+        if (rec.prixMax && b.prix > Number(rec.prixMax)) return false;
+        if (rec.piecesMin && b.pieces < Number(rec.piecesMin)) return false;
+        if (rec.surfaceMin && b.surface < Number(rec.surfaceMin)) return false;
+      }
+      return true;
+    });
+    const tri = f.tri || 'recent';
+    const date = (b) => new Date(b.cree || 0).getTime() || 0;
+    const cmp = {
+      recent: (a, b) => date(b) - date(a),
+      'prix-asc': (a, b) => a.prix - b.prix,
+      'prix-desc': (a, b) => b.prix - a.prix,
+      surface: (a, b) => b.surface - a.surface,
+      m2: (a, b) => (a.surface ? a.prix / a.surface : 0) - (b.surface ? b.prix / b.surface : 0),
+      suivis: (a, b) => (b.suiveurs || 0) - (a.suiveurs || 0) || date(b) - date(a)
+    }[tri] || ((a, b) => date(b) - date(a));
+    return out.slice().sort(cmp);
+  }
+  function compteur(k, label, v) {
+    return '<div class="ed-stepper"><span>' + label + '</span>' +
+      '<div><button type="button" data-act="f-pas" data-k="' + k + '" data-id="-1" aria-label="Moins"' + (v ? '' : ' disabled') + '>−</button>' +
+      '<b>' + (v ? v + '+' : 'Tous') + '</b>' +
+      '<button type="button" data-act="f-pas" data-k="' + k + '" data-id="1" aria-label="Plus">+</button></div></div>';
+  }
+  function panneauFiltres(f, estAcheteur, total) {
+    const n = filtresActifs(f);
+    const statuts = estAcheteur ? [['ouvert', 'Ouvert aux visites']] : [['avant-premiere', 'Avant-première'], ['ouvert', 'Ouvert aux visites']];
+    const chipAct = (act, id, label, on) => '<button type="button" class="ed-chip' + (on ? ' on' : '') + '" data-act="' + act + '" data-id="' + esc(id) + '">' + esc(label) + '</button>';
+    const champ = (k, label, ph) => '<label class="ed-f"><span>' + label + '</span><input class="se-input" type="number" inputmode="numeric" min="0" data-filter="' + k + '" placeholder="' + ph + '" value="' + esc(f[k] == null ? '' : f[k]) + '"/></label>';
+    return '<section class="ed-filtres' + (state.__filtresOuverts ? ' ouverts' : '') + '" id="catalogue" data-tour="filtres">' +
+      '<div class="ed-filtres-top">' +
+        '<input class="se-input se-search" data-filter="q" placeholder="Rechercher un bien, un quartier…" value="' + esc(f.q || '') + '"/>' +
+        '<label class="ed-tri"><span>Trier</span><select class="se-select" data-filter="tri">' +
+          [['recent', 'Plus récents'], ['prix-asc', 'Prix croissant'], ['prix-desc', 'Prix décroissant'], ['surface', 'Plus grandes surfaces'], ['m2', 'Prix au m² le plus bas'], ['suivis', 'Plus suivis']]
+            .map((o) => '<option value="' + o[0] + '"' + ((f.tri || 'recent') === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') +
+        '</select></label>' +
+        '<button type="button" class="se-btn ghost sm ed-filtres-btn" data-act="filtres-toggle" aria-expanded="' + !!state.__filtresOuverts + '">Filtres' + (n ? ' · ' + n : '') + '</button>' +
+      '</div>' +
+      '<div class="ed-filtres-corps">' +
+        '<div class="ed-f-ligne"><span class="ed-f-titre">Type</span><div class="ed-chips">' + TYPES.map((t) => chipAct('f-type', t, t, (f.types || []).indexOf(t) > -1)).join('') + '</div></div>' +
+        '<div class="ed-f-ligne"><span class="ed-f-titre">Statut</span><div class="ed-chips">' + chipAct('f-statut', '', 'Tous', !f.statut) + statuts.map((s) => chipAct('f-statut', s[0], s[1], f.statut === s[0])).join('') + '</div></div>' +
+        '<div class="ed-f-grille">' +
+          champ('prixMin', 'Prix min (€)', 'Aucun') + champ('prixMax', 'Prix max (€)', 'Aucun') +
+          champ('etageMin', 'Étage min', 'RDC') + champ('etageMax', 'Étage max', 'Aucun') +
+        '</div>' +
+        '<div class="ed-f-ligne"><span class="ed-f-titre">Arrondissements</span>' +
+          '<div class="ed-arr">' +
+            (f.arr || []).map((id) => '<button type="button" class="ed-chip on" data-act="f-arr-del" data-id="' + id + '">' + esc(nomQuartier(id)) + ' ×</button>').join('') +
+            '<div class="ed-arr-saisie"><input class="se-input" data-arr-input autocomplete="off" placeholder="Tapez 11, 75016, Marais…" aria-label="Ajouter un arrondissement"/><div class="ed-suggest" data-arr-suggest hidden></div></div>' +
+          '</div></div>' +
+        '<div class="ed-f-ligne ed-f-mix">' +
+          '<div><span class="ed-f-titre">Époque</span><div class="ed-chips">' + chipAct('f-epoque', '', 'Toutes', !f.epoque) + chipAct('f-epoque', 'ancien', 'Ancien', f.epoque === 'ancien') + chipAct('f-epoque', 'recent', 'Récent', f.epoque === 'recent') + '</div></div>' +
+          '<div><span class="ed-f-titre">Extérieur</span><div class="ed-chips">' + chipAct('f-ext', '1', 'Avec extérieur', !!f.exterieur) + '</div></div>' +
+          '<div><span class="ed-f-titre">Selon moi</span><div class="ed-chips">' + chipAct('f-ma-recherche', '1', 'Ma recherche', !!f.maRecherche) + '</div></div>' +
+        '</div>' +
+        '<div class="ed-f-ligne ed-f-mix">' + compteur('piecesMin', 'Pièces', f.piecesMin || 0) + compteur('chambresMin', 'Chambres', f.chambresMin || 0) + '</div>' +
+        '<div class="ed-f-pied"><span class="se-hint">' + total + ' bien' + (total > 1 ? 's' : '') + '</span>' + (n || f.q ? '<button type="button" class="se-btn ghost sm" data-act="filtres-reset">Réinitialiser</button>' : '') + '</div>' +
+      '</div>' +
+    '</section>';
+  }
+
   function edViewAccueil() {
     const p = state.profil;
     const mien = maFiche();
-    const plusSuivis = visiblesPourMembre(state.biens).sort((a, b) => (b.suiveurs || 0) - (a.suiveurs || 0)).slice(0, 5);
-    const rec = state.recherche || {};
-    const matchs = visiblesPourMembre(state.biens).filter((b) => {
-      if (rec.quartiers && rec.quartiers.length && rec.quartiers.indexOf(b.quartier) === -1) return false;
-      if (rec.types && rec.types.length && rec.types.indexOf(b.type) === -1) return false;
-      if (rec.prixMax && b.prix > Number(rec.prixMax)) return false;
-      if (rec.piecesMin && b.pieces < Number(rec.piecesMin)) return false;
-      return true;
-    });
-    return edHead('Bonjour ' + (p.prenom || 'vous').toLowerCase(), 'Votre cercle off-market',
-      'Les biens les plus suivis, et ceux qui correspondent à votre recherche.') +
-      edHero(plusSuivis) +
-      (mien
-        ? '<a class="ed-panel ed-mien" href="#/mon-bien" style="display:flex;gap:16px;align-items:center;text-decoration:none;color:inherit;margin-bottom:32px">' +
-            '<img src="' + photoOf(mien) + '" alt="" style="width:84px;height:64px;object-fit:cover;border-radius:12px;flex:0 0 84px"/>' +
-            '<div style="flex:1;min-width:0"><span class="ed-kicker">Mon bien</span>' +
-            '<div class="ed-card-title" style="font-size:19px">' + esc(mien.titre) + '</div>' +
-            '<div style="font-size:13px;color:var(--color-graphite)">' + badge(mien.statut) + ' · ' + euro(mien.prix) + ' net · ' + num(mien.suiveurs || 0) + ' membres le suivent</div></div>' +
-            '<span style="font-family:var(--font-serif)">Gérer →</span>' +
-          '</a>'
-        : '<div class="ed-panel" style="margin-bottom:32px;background:var(--color-button-ink);color:#fff;border:0">' +
-            '<span class="ed-kicker" style="color:rgba(255,255,255,.6)">Adhésion</span>' +
-            '<div class="ed-card-title" style="font-size:24px;color:#fff;margin:8px 0">Pour entrer au club, présentez votre bien.</div>' +
-            '<a class="se-btn light" href="#/mon-bien">Déposer mon bien</a>' +
-          '</div>') +
-      edSection('Biens de ma recherche', 'Selon vos critères', matchs) +
-      edSection('À la une', 'Les plus demandés', visiblesPourMembre(state.biens).slice(0, 4));
-  }
-
-  function edViewCatalogue() {
+    const visibles = visiblesPourMembre(state.biens);
+    const plusSuivis = visibles.slice().sort((a, b) => (b.suiveurs || 0) - (a.suiveurs || 0)).slice(0, 5);
     const f = state.__filtres || {};
     const estAcheteur = state.membre && state.membre.typeMembre === 'membre_acheteur';
-    const biens = tousBiens().filter((b) => {
-      if (!surLaPlateforme(b.statut)) return false;
-      // Un membre sans bien (acheteur simple) ne voit jamais les avant-premières.
-      if (estAcheteur && b.statut !== 'ouvert') return false;
-      if (f.q) { const hay = (b.titre + ' ' + b.label + ' ' + b.type + ' ' + b.description).toLowerCase(); if (hay.indexOf(f.q.toLowerCase()) === -1) return false; }
-      if (f.type && b.type !== f.type) return false;
-      if (f.statut && b.statut !== f.statut) return false;
-      if (f.prix && b.prix > Number(f.prix)) return false;
-      if (f.pieces && b.pieces < Number(f.pieces)) return false;
-      return true;
-    });
-    const statutOptions = estAcheteur
-      ? '<option value="ouvert"' + (f.statut === 'ouvert' ? ' selected' : '') + '>Ouvert aux visites</option>'
-      : '<option value="avant-premiere"' + (f.statut === 'avant-premiere' ? ' selected' : '') + '>Avant-première</option>' +
-        '<option value="ouvert"' + (f.statut === 'ouvert' ? ' selected' : '') + '>Ouvert aux visites</option>' +
-        '<option value="sous-offre"' + (f.statut === 'sous-offre' ? ' selected' : '') + '>Sous offre</option>';
-    return edHead('Catalogue', 'Les biens du club', 'Visibles nulle part ailleurs. ' + biens.length + ' bien(s).') +
-      '<div class="ed-panel" style="margin-bottom:22px"><div class="se-filters">' +
-        '<input class="se-input se-search" data-filter="q" placeholder="Rechercher un bien, un quartier…" value="' + esc(f.q || '') + '"/>' +
-        '<select class="se-select" data-filter="type"><option value="">Tous les types</option>' + TYPES.map((t) => '<option' + (f.type === t ? ' selected' : '') + '>' + t + '</option>').join('') + '</select>' +
-        '<select class="se-select" data-filter="statut"><option value="">Tous les statuts</option>' + statutOptions + '</select>' +
-        '<select class="se-select" data-filter="prix"><option value="">Tous les prix</option>' + [1500000, 2000000, 2500000, 3000000].map((p) => '<option value="' + p + '"' + (String(f.prix) === String(p) ? ' selected' : '') + '>≤ ' + num(p) + ' €</option>').join('') + '</select>' +
-        '<button class="se-btn ghost sm" data-act="filtres-reset">Réinitialiser</button>' +
-      '</div></div>' +
-      (biens.length ? '<div class="ed-grid">' + biens.map(edCard).join('') + '</div>' : '<div class="ed-panel"><div class="ed-card-title">Aucun bien ne correspond</div><p class="ed-sub" style="margin:6px 0 0">Élargissez les critères.</p></div>');
+    const resultats = appliquerFiltres(visibles, f);
+    return edHead('Bonjour ' + (p.prenom || ''), 'Votre cercle off-market',
+      'Les biens du club, visibles nulle part ailleurs.') +
+      (plusSuivis.length ? edHero(plusSuivis) : '') +
+      (mien
+        ? '<a class="ed-panel ed-mien" data-tour="mon-bien" href="#/mon-bien" style="display:flex;gap:16px;align-items:center;text-decoration:none;color:inherit;margin-bottom:28px">' +
+            (photoOf(mien) ? '<img src="' + photoOf(mien) + '" alt="" style="width:84px;height:64px;object-fit:cover;border-radius:12px;flex:0 0 84px"/>' : '') +
+            '<div style="flex:1;min-width:0"><span class="ed-kicker">Mon bien</span>' +
+            '<div class="ed-card-title" style="font-size:19px">' + esc(mien.titre || 'Mon bien') + '</div>' +
+            '<div style="font-size:13px;color:var(--color-graphite);display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:4px">' + badgeCarte(mien, false) + '<span>' + euro(mien.prix) + ' net · ' + ((mien.suiveurs || 0) ? num(mien.suiveurs) + ' membre' + (mien.suiveurs > 1 ? 's le suivent' : ' le suit') : 'pas encore suivi') + '</span></div></div>' +
+            '<span style="font-family:var(--font-serif)">Gérer →</span>' +
+          '</a>'
+        : '<div class="ed-panel" data-tour="mon-bien" style="margin-bottom:28px;background:var(--color-button-ink);color:#fff;border:0">' +
+            '<span class="ed-kicker" style="color:rgba(255,255,255,.6)">Adhésion</span>' +
+            '<div class="ed-card-title" style="font-size:24px;color:#fff;margin:8px 0">Pour voir les biens des autres, montrez le vôtre.</div>' +
+            '<a class="se-btn light" href="#/mon-bien">Déposer mon bien</a>' +
+          '</div>') +
+      '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:14px;flex-wrap:wrap">' +
+        '<div><span class="ed-kicker">Catalogue</span><h2 class="ed-title" style="font-size:28px;margin:4px 0 0">Les biens du club</h2></div>' +
+      '</div>' +
+      panneauFiltres(f, estAcheteur, resultats.length) +
+      (resultats.length
+        ? '<div class="ed-grid">' + resultats.map(edCard).join('') + '</div>'
+        : '<div class="ed-panel"><div class="ed-card-title">Aucun bien ne correspond</div><p class="ed-sub" style="margin:6px 0 0">Élargissez vos critères.</p></div>');
   }
 
-  function bookmarkSvg(filled) {
-    return '<svg viewBox="0 0 20 20" width="16" height="16" ' + (filled ? 'fill="currentColor"' : 'fill="none"') + ' stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M5.5 3h9A1.5 1.5 0 0 1 16 4.5V18l-6-3.5L4 18V4.5A1.5 1.5 0 0 1 5.5 3z"/></svg>';
+  // L'ancienne page « Catalogue » est désormais la page d'accueil.
+  function edViewCatalogue() { return edViewAccueil(); }
+
+  function edViewFavoris() {
+    const list = (state.suivis || []).map(bien).filter(Boolean);
+    return edHead('Mes favoris', 'Les biens que vous suivez', 'Vous êtes prévenu dès qu’un bien suivi ouvre ses visites ou change de prix.') +
+      (list.length ? '<div class="ed-grid">' + list.map(edCard).join('') + '</div>'
+        : '<div class="ed-panel"><div class="ed-card-title">Aucun favori pour l’instant</div><p class="ed-sub" style="margin:6px 0 12px">Touchez l’icône d’enregistrement en haut à droite d’une photo pour suivre un bien.</p><a class="se-btn" href="#/accueil">Voir les biens</a></div>');
+  }
+
+  // ---- Fenêtre de bienvenue + visite guidée ----
+  function bienvenueModal() {
+    const prenom = (state.profil.prenom || '').trim();
+    const img = (f) => '<img src="assets/img/' + f + '" alt=""/>';
+    return '<div class="ed-bienvenue">' +
+      '<div class="ed-bienvenue-visuel">' + img('marais-1.jpg') + img('saintgermain-1.jpg') + img('trocadero-1.jpg') + '<span class="ed-logo">S</span></div>' +
+      '<div class="ed-bienvenue-txt">' +
+        '<span class="ed-kicker">Bienvenue au club' + (prenom ? ', ' + esc(prenom) : '') + '</span>' +
+        '<h2 class="ed-title" style="font-size:clamp(26px,5vw,36px)">Vous avez été accepté sur Seecret.</h2>' +
+        '<p class="ed-sub">La plateforme des biens invisibles ailleurs : ni portails, ni vitrines. Ici, pour voir les biens des autres, il faut montrer le sien.</p>' +
+        '<div class="ed-bienvenue-choix">' +
+          '<div><b>Avant-première</b><span>Votre bien est visible des membres, mais pas encore ouvert aux visites. Vous mesurez l’intérêt, sans engagement.</span></div>' +
+          '<div><b>Visite ouverte</b><span>Votre bien est en vente : les membres choisissent un créneau et peuvent faire une offre.</span></div>' +
+        '</div>' +
+        '<p class="se-hint" style="margin:0">C’est vous qui décidez, et vous pouvez changer à tout moment avec votre agent. Côté vendeur : zéro commission.</p>' +
+        '<button type="button" class="se-btn block" data-act="bienvenue-ok" style="margin-top:18px">J’ai compris la logique Seecret</button>' +
+        '<button type="button" class="se-btn ghost block" data-act="bienvenue-fermer" style="margin-top:8px">Découvrir seul</button>' +
+      '</div>' +
+    '</div>';
+  }
+  const ETAPES_TOUR = [
+    { sel: '[data-tour="biens"]', titre: 'Les biens du club', texte: 'Votre page d’accueil : tous les biens du club, invisibles ailleurs.' },
+    { sel: '[data-tour="filtres"]', titre: 'Filtres et tri', texte: 'Triez les biens, puis ouvrez « Filtres » : prix, étage, arrondissement, pièces… Tapez « 11 » ou « Marais », l’outil complète pour vous.' },
+    { sel: '.ed-card .ed-save', titre: 'Enregistrer en un geste', texte: 'Touchez cette icône pour suivre un bien sans ouvrir sa fiche. Vous serez prévenu de chaque nouveauté.' },
+    { sel: '.ed-card .ed-badge', titre: 'Avant-première ou visite ouverte', texte: 'Avant-première : suivez le bien, vous serez notifié dès que les visites ouvrent. Ouvert aux visites : cliquez pour choisir un créneau.' },
+    { sel: '.ed-card-photo[data-slides]', titre: 'Les photos', texte: 'Faites défiler les photos directement depuis la liste. Sur ordinateur, elles défilent seules au survol.' },
+    { sel: '[data-tour="mon-bien"]', titre: 'Votre bien', texte: 'Complétez votre fiche, choisissez avant-première ou visite ouverte, et suivez son intérêt.' },
+    { sel: '[data-tour="favoris"]', titre: 'Mes favoris', texte: 'Retrouvez ici tous les biens que vous suivez.' },
+    { sel: '[data-tour="menu"]', titre: 'Votre espace', texte: 'Mon bien, Ma recherche et Mon profil sont dans ce menu.' },
+    { sel: '[data-tour="concept"]', titre: 'Le concept', texte: 'Besoin de revoir le principe Seecret ? Il est toujours ici.' }
+  ];
+  function etapesTourDispo() {
+    return ETAPES_TOUR.filter((e) => { const el = document.querySelector(e.sel); return el && el.getClientRects().length; });
+  }
+  function afficherTour() {
+    $$('.ed-tour, .ed-tour-voile').forEach((x) => x.remove());
+    $$('.ed-tour-cible').forEach((x) => x.classList.remove('ed-tour-cible', 'ed-tour-rel'));
+    if (state.__tour == null || modal) return;
+    const etapes = etapesTourDispo();
+    const i = state.__tour;
+    if (i >= etapes.length) { finirTour(); return; }
+    const e = etapes[i];
+    const cible = document.querySelector(e.sel);
+    if (!cible) return;
+    cible.classList.add('ed-tour-cible');
+    if (getComputedStyle(cible).position === 'static') cible.classList.add('ed-tour-rel');
+    const voile = document.createElement('div');
+    voile.className = 'ed-tour-voile';
+    document.body.appendChild(voile);
+    const bulle = document.createElement('div');
+    bulle.className = 'ed-tour';
+    bulle.setAttribute('role', 'dialog');
+    bulle.innerHTML = '<span class="ed-kicker">' + (i + 1) + ' / ' + etapes.length + '</span>' +
+      '<b>' + esc(e.titre) + '</b><p>' + esc(e.texte) + '</p>' +
+      '<div class="ed-tour-pied"><button type="button" class="ed-tour-passer" data-act="tour-passer">Passer</button>' +
+      '<button type="button" class="se-btn sm" data-act="tour-suivant">' + (i === etapes.length - 1 ? 'J’ai compris, c’est parti' : 'J’ai compris') + '</button></div>';
+    document.body.appendChild(bulle);
+    // Placement en coordonnées du document (indépendant d'un défilement doux) :
+    // on amène la cible sous l'en-tête, puis la bulle va dessous, sinon dessus,
+    // sinon en bas de l'écran (cible très haute, ou téléphone).
+    const header = document.querySelector('.ed-header');
+    const marge = (header ? header.offsetHeight : 0) + 16;
+    const r = cible.getBoundingClientRect();
+    const haut = r.top + window.scrollY;
+    const bas = r.bottom + window.scrollY;
+    let vue = window.scrollY;
+    if (r.top < marge || r.bottom > window.innerHeight - 40) {
+      vue = Math.max(0, haut - marge - 24);
+      window.scrollTo({ top: vue, behavior: 'instant' });
+    }
+    if (window.innerWidth < 640) { bulle.classList.add('bas'); return; }
+    const w = bulle.offsetWidth;
+    const h = bulle.offsetHeight;
+    const left = Math.min(Math.max(12, r.left + r.width / 2 - w / 2), window.innerWidth - w - 12);
+    if (bas + 12 + h <= vue + window.innerHeight - 12) {
+      bulle.style.position = 'absolute'; bulle.style.top = (bas + 12) + 'px'; bulle.style.left = left + 'px';
+    } else if (haut - h - 12 >= vue + marge) {
+      bulle.style.position = 'absolute'; bulle.style.top = (haut - h - 12) + 'px'; bulle.style.left = left + 'px';
+    } else {
+      bulle.classList.add('coin');
+    }
+  }
+  function finirTour() {
+    state.__tour = null;
+    afficherTour();
+    API.send('POST', '/api/membre/onboarding', { etape: 'visite' }).catch(() => {});
+    if (state.membre) state.membre.onboarding = Object.assign({}, state.membre.onboarding, { visite: new Date().toISOString() });
+  }
+
+  function bookmarkSvg(filled, taille) {
+    const t = taille || 16;
+    return '<svg viewBox="0 0 20 20" width="' + t + '" height="' + t + '" ' + (filled ? 'fill="currentColor"' : 'fill="none"') + ' stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M5.5 3h9A1.5 1.5 0 0 1 16 4.5V18l-6-3.5L4 18V4.5A1.5 1.5 0 0 1 5.5 3z"/></svg>';
   }
 
   function edViewBien(r) {
@@ -763,6 +1017,7 @@
         '</div>' +
         '<div style="display:flex;flex-direction:column;gap:18px">' +
           '<div class="ed-panel">' +
+            (popularite(b) && !mien ? '<div class="ed-pop">' + esc(popularite(b).texte) + '</div>' : '') +
             '<div class="ed-price-big">' + euro(b.prix) + '</div>' +
             '<div class="ed-kicker" style="margin-top:4px">' + (b.honoraires ? 'Honoraires inclus · ' : '') + euro(prixM2(b)) + ' / m²</div>' +
             mentionHai(b) +
@@ -938,6 +1193,7 @@
       'mon-bien': edViewMonBien,
       'recherche': edViewRecherche,
       catalogue: edViewCatalogue,
+      favoris: edViewFavoris,
       bien: edViewBien,
       visites: viewVisites,
       offres: viewOffres,
@@ -959,9 +1215,13 @@
     }
 
     if (r.name !== lastRoute) {
-      window.scrollTo({ top: 0 });
+      // L'ancien lien « Catalogue » mène à l'accueil, directement sur les filtres.
+      const ancre = r.name === 'catalogue' ? document.getElementById('catalogue') : null;
+      if (ancre) ancre.scrollIntoView();
+      else window.scrollTo({ top: 0 });
       lastRoute = r.name;
     }
+    afficherTour();
   }
 
   function closeModalIfNeeded() {
@@ -1114,12 +1374,19 @@
       state.profil.prenom = me.membre.prenom || state.profil.prenom;
       state.profil.nom = me.membre.nom || state.profil.nom;
       state.profil.email = me.membre.email || '';
+      state.suivis = Array.isArray(me.membre.suivis) ? me.membre.suivis.slice() : [];
+      state.__menuOuvert = false;
+      state.__tour = null;
       try { const b = await API.get('/api/mon-bien'); state.monBien = Object.assign({ mien: true }, b.bien); } catch (e) { /* pas de bien */ }
       try { const c = await API.get('/api/catalogue'); state.biens = c.biens || []; } catch (e) { /* catalogue indisponible */ }
       try { const r = await API.get('/api/mon-recherche'); state.recherche = Object.assign({}, state.recherche, r.recherche); } catch (e) { /* pas de recherche */ }
       try { const d = await API.get('/api/documents'); state.docs = d.documents || []; } catch (e) { /* pas de docs */ }
       try { const n = await API.get('/api/mes-notifications'); state.mesNotifications = n.notifications || []; } catch (e) { /* pas de notifications */ }
       try { const md = await API.get('/api/mandat?apercu=0'); state.mandatActif = md.mandat || null; } catch (e) { /* pas de mandat */ }
+      // Première connexion après l'acceptation : fenêtre de bienvenue (une fois).
+      const ob = me.membre.onboarding || {};
+      if (me.membre.statut === 'accepte' && !ob.bienvenue) modal = bienvenueModal();
+      else if (me.membre.statut === 'accepte' && !ob.visite) state.__tour = 0;
     } catch (e) {
       state.membre = null;
       state.session = null;
@@ -1849,12 +2116,69 @@
       commit();
       toast(versOuvert ? 'Demande envoyée à votre agent : passage en visite possible.' : 'Demande de retour en avant-première envoyée.');
     },
-    'suivre': (el, id) => {
+    'suivre': async (el, id) => {
+      // Mise à jour immédiate à l'écran, puis confirmation par le serveur
+      // (compteur partagé entre tous les membres).
+      const avant = state.suivis.slice();
       const i = state.suivis.indexOf(id);
-      if (i > -1) { state.suivis.splice(i, 1); toast('Bien retiré de vos favoris.'); }
-      else { state.suivis.push(id); toast('Bien ajouté à vos favoris.'); }
+      if (i > -1) state.suivis.splice(i, 1); else state.suivis.push(id);
+      commit();
+      try {
+        const r = await API.send('POST', '/api/suivis/' + encodeURIComponent(id));
+        state.suivis = r.suivis || state.suivis;
+        const b = state.biens.find((x) => x.id === id);
+        if (b) b.suiveurs = r.suiveurs || 0;
+        commit();
+        toast(r.suivi ? 'Bien ajouté à vos favoris.' : 'Bien retiré de vos favoris.', 'ok');
+      } catch (e) {
+        state.suivis = avant;
+        commit();
+        toast((e && e.message) || 'Action impossible pour le moment.', 'warn');
+      }
+    },
+    'menu-toggle': () => { state.__menuOuvert = !state.__menuOuvert; render(); },
+    'bienvenue-ok': () => {
+      modal = null;
+      state.__tour = 0;
+      if (state.membre) state.membre.onboarding = Object.assign({}, state.membre.onboarding, { bienvenue: new Date().toISOString() });
+      API.send('POST', '/api/membre/onboarding', { etape: 'bienvenue' }).catch(() => {});
+      if (parseRoute().name !== 'accueil') location.hash = '#/accueil'; else render();
+    },
+    'bienvenue-fermer': () => {
+      modal = null;
+      if (state.membre) state.membre.onboarding = Object.assign({}, state.membre.onboarding, { bienvenue: new Date().toISOString(), visite: new Date().toISOString() });
+      API.send('POST', '/api/membre/onboarding', { etape: 'bienvenue' }).catch(() => {});
+      API.send('POST', '/api/membre/onboarding', { etape: 'visite' }).catch(() => {});
+      render();
+    },
+    'bienvenue-revoir': () => { state.__menuOuvert = false; modal = bienvenueModal(); render(); },
+    'tour-suivant': () => { state.__tour = (state.__tour || 0) + 1; afficherTour(); },
+    'tour-passer': () => { finirTour(); },
+    'slide': (el, sens) => { defilerPhotos(el.closest('.ed-card-photo'), Number(sens) || 1); },
+    'filtres-toggle': () => { state.__filtresOuverts = !state.__filtresOuverts; render(); },
+    'f-type': (el, t) => {
+      const f = state.__filtres = state.__filtres || {};
+      const l = (f.types || []).slice(); const i = l.indexOf(t);
+      if (i > -1) l.splice(i, 1); else l.push(t);
+      f.types = l; commit();
+    },
+    'f-statut': (el, v) => { (state.__filtres = state.__filtres || {}).statut = v || ''; commit(); },
+    'f-epoque': (el, v) => { (state.__filtres = state.__filtres || {}).epoque = v || ''; commit(); },
+    'f-ext': () => { const f = state.__filtres = state.__filtres || {}; f.exterieur = !f.exterieur; commit(); },
+    'f-ma-recherche': () => { const f = state.__filtres = state.__filtres || {}; f.maRecherche = !f.maRecherche; commit(); },
+    'f-pas': (el, sens) => {
+      const f = state.__filtres = state.__filtres || {};
+      const k = el.getAttribute('data-k');
+      f[k] = Math.max(0, Math.min(12, (Number(f[k]) || 0) + Number(sens)));
       commit();
     },
+    'f-arr-add': (el, id) => {
+      const f = state.__filtres = state.__filtres || {};
+      f.arr = (f.arr || []).filter((x) => x !== id).concat([id]);
+      commit();
+      const inp = document.querySelector('[data-arr-input]'); if (inp) inp.focus();
+    },
+    'f-arr-del': (el, id) => { const f = state.__filtres = state.__filtres || {}; f.arr = (f.arr || []).filter((x) => x !== id); commit(); },
     'comparer': (el, id) => {
       const i = state.compare.indexOf(id);
       if (i > -1) state.compare.splice(i, 1);
@@ -1949,13 +2273,7 @@
       render();
       toast('Démonstration réinitialisée.');
     },
-    'logout': () => {
-      state.session = null;
-      save();
-      location.hash = '#/connexion';
-      render();
-    },
-    'filtres-reset': () => { state.__filtres = {}; commit(); }
+    'filtres-reset': () => { state.__filtres = { tri: (state.__filtres || {}).tri }; commit(); }
   };
 
   function currentPhotos(form) {
@@ -2078,6 +2396,7 @@
     // preventDefault() ci-dessous annulait l'envoi de TOUS les formulaires
     // affichés en modale (demande de visite, offre, mandat…).
     if (e.target.closest('button[type="submit"], input[type="submit"]')) return;
+    if (state.__menuOuvert && !e.target.closest('.ed-menu')) { state.__menuOuvert = false; render(); }
     const el = e.target.closest('[data-act]');
     if (!el) return;
     const zoneProtegee = e.target.closest('[data-stop]');
@@ -2352,6 +2671,38 @@
     }
   });
 
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && state.__tour != null) { finirTour(); return; }
+    if (!e.target.hasAttribute || !e.target.hasAttribute('data-arr-input')) return;
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const premier = e.target.parentNode.querySelector('[data-arr-suggest] button');
+      if (premier) premier.click();
+    }
+  });
+
+  // Photos des cartes : flèches, et défilement lent automatique au survol.
+  function defilerPhotos(box, sens) {
+    if (!box) return;
+    const imgs = box.querySelectorAll('.ed-slide');
+    if (imgs.length < 2) return;
+    let i = Array.prototype.findIndex.call(imgs, (x) => x.classList.contains('on'));
+    i = (i + sens + imgs.length) % imgs.length;
+    imgs.forEach((x, k) => x.classList.toggle('on', k === i));
+    box.querySelectorAll('.ed-slide-dots i').forEach((x, k) => x.classList.toggle('on', k === i));
+  }
+  let survolPhotos = null;
+  document.addEventListener('pointerenter', (e) => {
+    const box = e.target && e.target.classList && e.target.classList.contains('ed-card-photo') ? e.target : null;
+    if (!box || e.pointerType === 'touch' || Number(box.getAttribute('data-slides')) < 2) return;
+    clearInterval(survolPhotos);
+    survolPhotos = setInterval(() => { if (box.isConnected) defilerPhotos(box, 1); else clearInterval(survolPhotos); }, 2200);
+  }, true);
+  document.addEventListener('pointerleave', (e) => {
+    if (e.target && e.target.classList && e.target.classList.contains('ed-card-photo')) clearInterval(survolPhotos);
+  }, true);
+  window.addEventListener('resize', () => { if (state.__tour != null) afficherTour(); });
+
   document.addEventListener('input', (e) => {
     const live = e.target.getAttribute('data-live');
     if (live === 'prix') {
@@ -2369,12 +2720,26 @@
         : 'Renseignez la surface et le quartier.';
     }
 
+    if (e.target.hasAttribute('data-arr-input')) {
+      const boite = e.target.parentNode.querySelector('[data-arr-suggest]');
+      const sugg = suggestionsArr(e.target.value);
+      boite.innerHTML = sugg.map((x, i) => '<button type="button" class="' + (i === 0 ? 'on' : '') + '" data-act="f-arr-add" data-id="' + x.id + '">' + esc(x.libelle) + '</button>').join('') ||
+        (e.target.value.trim() ? '<span class="se-hint">Aucun arrondissement ne correspond.</span>' : '');
+      boite.hidden = !e.target.value.trim();
+      return;
+    }
+
     const filter = e.target.getAttribute('data-filter');
     if (filter) {
       state.__filtres = state.__filtres || {};
       state.__filtres[filter] = e.target.value;
+      const texte = e.target.tagName === 'INPUT';
       clearTimeout(window.__filtreT);
-      window.__filtreT = setTimeout(() => { save(); render(); const el = $('[data-filter="' + filter + '"]'); if (el && filter === 'q') { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }, 220);
+      window.__filtreT = setTimeout(() => {
+        save(); render();
+        const el = $('[data-filter="' + filter + '"]');
+        if (el && texte) { el.focus(); try { el.setSelectionRange(el.value.length, el.value.length); } catch (err) { /* champ numérique */ } }
+      }, texte ? 350 : 0);
     }
   });
 

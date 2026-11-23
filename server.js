@@ -451,7 +451,9 @@ function publicLead(lead) {
     statut: lead.statut, passkeys: (lead.passkeys || []).length,
     role: roleOf(lead),
     derniereConnexion: lead.derniereConnexion || null,
-    connexions: (lead.connexions || []).slice(-10).reverse()
+    connexions: (lead.connexions || []).slice(-10).reverse(),
+    suivis: Array.isArray(lead.suivis) ? lead.suivis : [],
+    onboarding: lead.onboarding || {}
   };
 }
 
@@ -1505,6 +1507,7 @@ function bienPublic(b) {
     historiquePrix: Array.isArray(b.historiquePrix) ? b.historiquePrix : [],
     description: b.description || '', photos: b.photos || [], statut: b.statut || 'brouillon',
     statutDemande: b.statutDemande || null, cree: b.cree || null,
+    suiveurs: Number(b.suiveurs) || 0,
     completion: c.pct, complet: c.complet,
     exclusivite: b.exclusivite || { statut: 'scan_en_cours', liens: [] },
     validation: b.validation || 'en_attente',
@@ -1518,6 +1521,7 @@ function bienPublic(b) {
 // Le prix renvoyé est le prix HAI calculé pour CE membre (taux réduit s'il a
 // vendu son bien chez nous). Ni le net, ni le taux, ni le montant des
 // honoraires ne sont transmis : l'acquéreur ne voit que le prix HAI.
+const SEUIL_POPULARITE = Number(process.env.SEUIL_POPULARITE || 5);
 function bienCatalogue(b, lead, reduit) {
   const p = bienPublic(b);
   delete p.adresse;
@@ -1531,6 +1535,9 @@ function bienCatalogue(b, lead, reduit) {
     p.honoraires.mention = mentionHonoraires(taux);
     p.honoraires.prixHorsHonoraires = b.prix || 0;
   }
+  // Popularité : on ne la montre qu'à partir d'un seuil, pour ne jamais
+  // desservir un bien peu suivi (« suivi par 1 membre »).
+  if (p.suiveurs < SEUIL_POPULARITE) p.suiveurs = 0;
   delete p.prixNet;
   delete p.prixHai;
   delete p.tauxHonoraires;
@@ -1553,6 +1560,33 @@ app.get('/api/mon-bien', requireAuth, (req, res) => {
 // montrait que des données de démonstration codées en dur, sans aucun lien
 // avec les biens réellement saisis et validés dans le CRM : un bien marqué
 // "validé" par un agent ne pouvait jamais apparaître ici.
+// Suivre / ne plus suivre un bien du catalogue. Le compteur bien.suiveurs est
+// partagé (tous les membres) ; la liste des biens suivis reste propre au membre.
+app.post('/api/suivis/:bienId', requireAuth, (req, res) => {
+  const db = req.db;
+  const b = db.biens.find((x) => x.id === req.params.bienId);
+  if (!b || b.validation !== 'valide' || !(b.statut === 'avant-premiere' || b.statut === 'ouvert')) {
+    return res.status(404).json({ error: 'Bien introuvable.' });
+  }
+  if (b.leadId === req.lead.id) return res.status(400).json({ error: 'C’est votre bien.' });
+  const suivis = Array.isArray(req.lead.suivis) ? req.lead.suivis : [];
+  const deja = suivis.indexOf(b.id) > -1;
+  req.lead.suivis = deja ? suivis.filter((x) => x !== b.id) : suivis.concat([b.id]);
+  b.suiveurs = Math.max(0, (Number(b.suiveurs) || 0) + (deja ? -1 : 1));
+  if (!deja) logActivite(db, { leadId: b.leadId, bienId: b.id, type: 'bien_suivi', auteur: nomComplet(req.lead) });
+  writeDb(db);
+  res.json({ ok: true, suivi: !deja, suivis: req.lead.suivis, suiveurs: b.suiveurs >= SEUIL_POPULARITE ? b.suiveurs : 0 });
+});
+
+// Étapes de découverte vues par le membre (fenêtre de bienvenue, visite guidée).
+app.post('/api/membre/onboarding', requireAuth, (req, res) => {
+  const etape = String((req.body && req.body.etape) || '');
+  if (['bienvenue', 'visite'].indexOf(etape) === -1) return res.status(400).json({ error: 'Étape inconnue.' });
+  req.lead.onboarding = Object.assign({}, req.lead.onboarding || {}, { [etape]: nowISO() });
+  writeDb(req.db);
+  res.json({ ok: true, onboarding: req.lead.onboarding });
+});
+
 app.get('/api/catalogue', requireAuth, (req, res) => {
   const db = req.db;
   // Même recherche que bienDuMembre(), mais sans créer de brouillon ici —
