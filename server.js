@@ -5015,6 +5015,11 @@ function radarScore(f, acq) {
   return Math.max(0, Math.min(100, Math.round(s)));
 }
 
+// Lance fn sur chaque élément, n à la fois (au lieu d'un par un).
+async function enParallele(liste, n, fn) {
+  let i = 0;
+  await Promise.all(Array.from({ length: Math.min(n, liste.length) }, async () => { while (i < liste.length) { const k = i++; await fn(liste[k], k); } }));
+}
 async function radarCollecter(raison) {
   if (RADAR_ETAT.enCours) return;
   Object.assign(RADAR_ETAT, { enCours: true, etape: 'Lecture des DPE récents…', erreur: '' });
@@ -5022,10 +5027,11 @@ async function radarCollecter(raison) {
   try {
     const depuis = new Date(Date.now() - 120 * 864e5).toISOString().slice(0, 10);
     const lus = [];
-    for (const arr of RADAR_ARRONDISSEMENTS) {
-      RADAR_ETAT.etape = 'DPE récents · ' + arr.label + '…';
+    let faits = 0;
+    await enParallele(RADAR_ARRONDISSEMENTS, 5, async (arr) => {
       try { (await radarDpeArrondissement(arr, depuis)).forEach((s) => lus.push(radarFicheDepuisDpe(s, arr))); } catch (e) { console.warn('[radar] ADEME ' + arr.label + ' :', e.message); }
-    }
+      RADAR_ETAT.etape = 'DPE récents · ' + (++faits) + '/20 arrondissements…';
+    });
     let db = readDb();
     db.radarFiches = Array.isArray(db.radarFiches) ? db.radarFiches : [];
     const existantes = new Map(db.radarFiches.map((f) => [f.id, f]));
@@ -5065,18 +5071,22 @@ async function radarCollecter(raison) {
     RADAR_ETAT.etape = 'Dirigeants des sociétés…';
     db = readDb();
     const sirens = Array.from(new Set(db.radarFiches.filter((f) => f.proprietaire && f.proprietaire.statut === 'identifie' && /^\d{9}$/.test(f.proprietaire.siren || '')).map((f) => f.proprietaire.siren)));
-    for (const siren of sirens) {
-      if (Date.now() - debut > 20 * 60 * 1000) break;
-      try { await radarDirigeants(db, siren); } catch (e) { if (e.limite) await new Promise((r) => setTimeout(r, 5000)); }
-      await new Promise((r) => setTimeout(r, 350));
-    }
-    RADAR_ETAT.etape = 'Prix des secteurs (DVF)…';
-    for (const arr of RADAR_ARRONDISSEMENTS) {
-      for (const type of ['Appartement', 'Maison']) {
-        if (!db.radarFiches.some((f) => f.insee === arr.insee && f.type === type)) continue;
-        try { await radarPrixM2(db, arr, type); } catch (e) { /* secteur suivant */ }
-      }
-    }
+    // Dirigeants (SIRENE, ~7 requêtes/s autorisées) et prix DVF en même temps.
+    const aFaire = sirens.filter((x) => !(db.radarSocietes && db.radarSocietes[x] && Date.now() - radarAnnee(db.radarSocietes[x].maj) < 30 * 864e5));
+    const prix = [];
+    RADAR_ARRONDISSEMENTS.forEach((arr) => ['Appartement', 'Maison'].forEach((type) => { if (db.radarFiches.some((f) => f.insee === arr.insee && f.type === type)) prix.push([arr, type]); }));
+    let nbDir = 0;
+    await Promise.all([
+      enParallele(aFaire, 3, async (siren) => {
+        if (Date.now() - debut > 15 * 60 * 1000) return;
+        for (let essai = 0; essai < 3; essai++) {
+          try { await radarDirigeants(db, siren); break; } catch (e) { await new Promise((r) => setTimeout(r, e.limite ? 3000 : 500)); }
+        }
+        RADAR_ETAT.etape = 'Dirigeants ' + (++nbDir) + '/' + aFaire.length + ' · prix des secteurs…';
+        await new Promise((r) => setTimeout(r, 400));
+      }),
+      enParallele(prix, 4, async ([arr, type]) => { try { await radarPrixM2(db, arr, type); } catch (e) { /* secteur suivant */ } })
+    ]);
     db.radarFiches.forEach((f) => {
       const soc = f.proprietaire && db.radarSocietes && db.radarSocietes[f.proprietaire.siren];
       if (soc) { const d = soc.dirigeants.find((x) => x.nom); if (d) { f.proprietaire.dirigeant = d; f.proprietaire.dirigeantAge = d.age; } f.proprietaire.dirigeants = soc.dirigeants; }

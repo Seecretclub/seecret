@@ -4755,11 +4755,11 @@
     const rappels = fiches.filter((x) => x.rappel && x.rappel <= today).length;
     const prioritaires = fiches.filter((x) => x.prioritaire && x.statut === 'a_revoir').length;
     const etat = '<div class="rd-etat">' +
-      (D.etat.enCours ? '<div><b>Collecte en cours</b> · ' + esc(D.etat.etape || '') + '</div>' : log ? '<div>Dernière collecte le ' + new Date(log.at).toLocaleString('fr-FR', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' }) + ' · ' + num(log.dpeLus) + ' DPE lus · ' + num(log.nouvelles) + ' nouvelle' + (log.nouvelles > 1 ? 's' : '') + ' fiche' + (log.nouvelles > 1 ? 's' : '') + '.</div>' : '<div>Aucune collecte pour l’instant : cliquez « Collecter maintenant » (2 à 10 minutes).</div>') +
+      (D.etat.enCours ? '<div><b>Collecte en cours</b> · ' + esc(D.etat.etape || '') + '</div>' : log ? '<div>Dernière collecte le ' + new Date(log.at).toLocaleString('fr-FR', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' }) + ' · ' + num(log.dpeLus) + ' DPE lus · ' + num(log.nouvelles) + ' nouvelle' + (log.nouvelles > 1 ? 's' : '') + ' fiche' + (log.nouvelles > 1 ? 's' : '') + '.</div>' : '<div>Aucune collecte pour l’instant : cliquez « Collecter maintenant » (1 à 3 minutes).</div>') +
       (D.etat.erreur ? '<div class="se-hint" style="color:var(--color-warn)">Dernière collecte en échec : ' + esc(D.etat.erreur) + '</div>' : '') +
       (P.disponible ? '<div>Propriétaires : fichier DGFiP ' + esc(P.millesime || '') + ' des locaux des sociétés, Paris (' + num(P.lignes) + ' lots).</div>'
         : '<div class="rd-pm">' + (imp.enCours ? '<span><b>Chargement du fichier des propriétaires</b> · ' + esc(imp.etape || '') + (imp.lignes ? ' (' + num(imp.lignes) + ' lots)' : '') + '</span>'
-          : '<span>Propriétaires : le fichier DGFiP des sociétés propriétaires n’est pas encore chargé' + (imp.erreur ? ' (échec : ' + esc(imp.erreur) + ')' : '') + '.</span><button class="se-btn soft sm" data-act="radar-pm-importer">Charger le fichier (Paris, ~10 min)</button>') + '</div>') +
+          : '<span>Propriétaires : le fichier DGFiP des sociétés propriétaires n’est pas encore chargé' + (imp.erreur ? ' (échec : ' + esc(imp.erreur) + ')' : '') + '.</span><button class="se-btn soft sm" data-act="radar-pm-importer">Charger le fichier (Paris, quelques minutes)</button>') + '</div>') +
       '</div>';
     const stat = (n, t, cls) => '<div class="rd-stat"><b class="' + (cls || '') + '">' + num(n) + '</b><span>' + t + '</span></div>';
     const stats = '<div class="rd-stats">' + stat(compte('a_revoir'), 'fiches à revoir') + stat(prioritaires, 'prioritaires', 'vert') + stat(rappels, 'rappels arrivés', rappels ? 'orange' : '') + stat(contacts30, 'prises de contact sur 30 jours') + '</div>';
@@ -6394,11 +6394,11 @@
     'radar-plus-secteurs': () => { radar.plusSecteurs = !radar.plusSecteurs; render(); },
     'radar-reset': () => { radar.f = {}; render(); },
     'radar-collecter': async () => {
-      try { await fetch('/api/radar/collecter', { method: 'POST', credentials: 'same-origin' }); toast('Collecte lancée : les fiches arrivent au fil de l’eau (2 à 10 minutes).', 'ok'); } catch (e) { toast('Collecte impossible : ' + e.message, 'warn'); }
+      try { await fetch('/api/radar/collecter', { method: 'POST', credentials: 'same-origin' }); toast('Collecte lancée : les premières fiches arrivent en moins d’une minute.', 'ok'); } catch (e) { toast('Collecte impossible : ' + e.message, 'warn'); }
       chargerRadar(true);
     },
     'radar-pm-importer': async () => {
-      try { await fetch('/api/robot/pm/importer', { method: 'POST', credentials: 'same-origin' }); toast('Chargement du fichier des propriétaires lancé (environ 10 minutes). Relancez ensuite une collecte.', 'ok'); } catch (e) { toast(e.message, 'warn'); }
+      try { await fetch('/api/robot/pm/importer', { method: 'POST', credentials: 'same-origin' }); toast('Chargement du fichier des propriétaires lancé (quelques minutes). Relancez ensuite une collecte.', 'ok'); } catch (e) { toast(e.message, 'warn'); }
       chargerRadar(true);
     },
     'radar-statut': async (el, id) => {
