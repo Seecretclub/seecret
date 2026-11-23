@@ -420,7 +420,7 @@
   .ed-musique.replie .ed-musique-btn { display: none; }
   .ed-musique.replie .ed-musique-titre { max-width: 160px; padding-right: 8px; }
   .se-modal:has(.ed-musique-choix) { width: min(560px, 100%); }
-  @media (max-width: 640px) { .ed-musique:not(.youtube) iframe { height: 80px; } .ed-musique { width: calc(100vw - 100px); } }
+  @media (max-width: 640px) { .ed-musique:not(.youtube) iframe { height: 80px; } .ed-musique { width: calc(100vw - 124px); } }
   .ed-tour.coin { right: 24px; bottom: 24px; }
   .ed-tour.bas { left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); width: auto; }
   @media (max-width: 860px) {
@@ -439,6 +439,29 @@
     .ed-bienvenue-visuel { min-height: 0; height: 170px; grid-template-columns: 1.4fr 1fr; }
     .ed-bienvenue-txt { padding: 20px; }
   }
+  /* ---- Navigation : barre d'onglets en bas sur téléphone ---- */
+  .ed-nav-ico { display: none; }
+  @media (max-width: 860px) {
+    :root { --ed-tab: calc(60px + env(safe-area-inset-bottom, 0px)); }
+    /* backdrop-filter rendrait la barre fixe relative à l'en-tête : on le retire ici. */
+    .ed-header { flex-wrap: nowrap; backdrop-filter: none; -webkit-backdrop-filter: none; background: rgba(250,249,247,.98); }
+    .ed-brand { min-width: 0; }
+    .ed-menu { margin-left: auto; flex: 0 0 auto; }
+    .ed-nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 60; flex: none; order: 0; width: auto; display: flex; justify-content: space-around; gap: 0; overflow: visible;
+      padding: 5px max(6px, env(safe-area-inset-right, 0px)) calc(5px + env(safe-area-inset-bottom, 0px)) max(6px, env(safe-area-inset-left, 0px));
+      background: rgba(250,249,247,.96); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-top: 1px solid var(--color-stroke-faint); }
+    .ed-nav a, .ed-nav a:hover, .ed-nav a.active { position: relative; flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 6px 2px; border-radius: 12px; font-size: 10.5px; background: none; color: var(--color-graphite); font-weight: 500; }
+    .ed-nav a.active { color: var(--color-ink); font-weight: 600; }
+    .ed-nav a.active .ed-nav-ico { stroke-width: 2; }
+    .ed-nav a > span:not(.ed-count) { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ed-nav-ico { display: block; width: 23px; height: 23px; }
+    .ed-nav .ed-count { position: absolute; top: 2px; left: calc(50% + 6px); font-size: 10px; line-height: 1.5; padding: 0 5px; }
+    .ed-main { padding-bottom: calc(70px + var(--ed-tab)); }
+    .ed-chat-bouton { bottom: calc(12px + var(--ed-tab)); }
+    .ed-musique, .ed-musique-invite { bottom: calc(12px + var(--ed-tab)); }
+    .ed-tour.bas { bottom: calc(12px + var(--ed-tab)); }
+  }
+  @media (max-width: 400px) { .ed-brand small { display: none; } }
   </style>
 </head>
 <body class="se-body">

@@ -491,10 +491,11 @@
       '<header class="ed-header">' +
         '<a class="ed-brand" href="#/accueil"><span class="ed-logo">S</span><span><b>Seecret</b><small>Le club off-market</small></span></a>' +
         '<nav class="ed-nav">' +
-          '<a href="#/accueil" data-tour="biens" class="' + (surBiens ? 'active' : '') + '">Les biens</a>' +
-          '<a href="#/gazette" class="' + (r.name === 'gazette' ? 'active' : '') + '">La Gazette</a>' +
-          '<a href="#/favoris" data-tour="favoris" class="' + (r.name === 'favoris' ? 'active' : '') + '">Mes favoris' + (nbFavoris ? ' <span class="ed-count">' + nbFavoris + '</span>' : '') + '</a>' +
-          '<a href="/index.html" target="_blank" rel="noopener" data-tour="concept">Le concept</a>' +
+          // Sur téléphone, ces liens deviennent la barre d'onglets en bas d'écran.
+          '<a href="#/accueil" data-tour="biens" class="' + (surBiens ? 'active' : '') + '">' + '<svg class="ed-nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M10 21v-6h4v6"/></svg>' + '<span>Les biens</span></a>' +
+          '<a href="#/gazette" class="' + (r.name === 'gazette' ? 'active' : '') + '">' + '<svg class="ed-nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="15" height="16" rx="2"/><path d="M18 8h3v10a2 2 0 0 1-2 2"/><path d="M7 8h7M7 12h7M7 16h4"/></svg>' + '<span>La Gazette</span></a>' +
+          '<a href="#/favoris" data-tour="favoris" class="' + (r.name === 'favoris' ? 'active' : '') + '">' + '<svg class="ed-nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h12v18l-6-4-6 4z"/></svg>' + '<span>Mes favoris</span>' + (nbFavoris ? ' <span class="ed-count">' + nbFavoris + '</span>' : '') + '</a>' +
+          '<a href="/index.html" target="_blank" rel="noopener" data-tour="concept">' + '<svg class="ed-nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><path d="M12 7.5v.01"/></svg>' + '<span>Le concept</span></a>' +
         '</nav>' +
         '<div class="ed-menu" data-tour="menu">' +
           '<button type="button" class="ed-user" data-act="menu-toggle" aria-haspopup="true" aria-expanded="' + (state.__menuOuvert ? 'true' : 'false') + '">' +
