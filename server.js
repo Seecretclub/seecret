@@ -5423,16 +5423,37 @@ function radarLigne(g) {
 app.get('/api/radar/liste', requireAdmin, (req, res) => {
   if (!RS) return res.status(503).json({ error: 'Base du Radar indisponible sur ce serveur.' });
   const per = radarPeriode(String(req.query.periode || 'mois'));
-  const secteur = RADAR_ARRONDISSEMENTS.some((a) => a.quartier === req.query.secteur) ? String(req.query.secteur) : '';
-  const type = req.query.type === 'Maison' || req.query.type === 'Appartement' ? String(req.query.type) : '';
-  const smin = Math.max(0, Number(req.query.surfaceMin) || 0);
-  const arrs = RADAR_ARRONDISSEMENTS.filter((a) => !secteur || a.quartier === secteur);
+  const Q = req.query;
+  const secteurs = String(Q.secteurs || Q.secteur || '').split(',').filter((q) => RADAR_ARRONDISSEMENTS.some((a) => a.quartier === q));
+  const secteur = secteurs.length === 1 ? secteurs[0] : '';
+  const type = Q.type === 'Maison' || Q.type === 'Appartement' ? String(Q.type) : '';
+  const smin = Math.max(0, Number(Q.surfaceMin) || 0);
+  const arrs = RADAR_ARRONDISSEMENTS.filter((a) => !secteurs.length || secteurs.indexOf(a.quartier) > -1);
   const manquants = arrs.filter((a) => !radarCouvert(a, per));
-  const cleCharg = (secteur || 'paris') + '|' + (per.recent ? 'recent' : per.annee || per.de);
+  const cleCharg = (secteurs.length ? secteurs.join('+') : 'paris') + '|' + (per.recent ? 'recent' : per.annee || per.de);
   if (manquants.length) radarCharger(cleCharg, manquants, per);
   const db = readDb();
   const ctx = radarContexte(db);
-  const rows = RS.liste.all({ de: per.de, a: per.a + 'z', q: secteur, t: type, smin: smin }).map(rsLire).filter(Boolean);
+  let rows = RS.liste.all({ de: per.de, a: per.a + 'z', q: secteur, t: type, smin: smin }).map(rsLire).filter(Boolean);
+  // Critères avancés (appliqués sur les fiches chargées).
+  const nombre = (v) => (v === undefined || v === '' ? null : Number(v));
+  const smax = nombre(Q.surfaceMax), emin = nombre(Q.etageMin), emax = nombre(Q.etageMax), pmin = nombre(Q.prixMin), pmax = nombre(Q.prixMax);
+  const classes = String(Q.classes || '').toUpperCase().replace(/[^A-G]/g, '');
+  const anneeDe = (f) => { const a = Number(f.annee); if (a > 1000) return a; const m = /(\d{4})/.exec(String(f.periode || '')); return m ? Number(m[1]) : null; };
+  const epoques = { avant1948: [0, 1947], '1948-1974': [1948, 1974], '1975-2000': [1975, 2000], apres2000: [2001, 3000] };
+  const prixCache = {};
+  const prixDe = (f) => { const k = f.insee + '|' + f.type; if (!(k in prixCache)) prixCache[k] = cacheLu('prix', k); const px = prixCache[k]; return px && px.m2 && f.surface ? f.surface * px.m2 : null; };
+  rows = rows.filter((f) => {
+    if (secteurs.length > 1 && secteurs.indexOf(f.quartier) === -1) return false;
+    if (smax && f.surface > smax) return false;
+    if (emin !== null && (f.etage == null || f.etage < emin)) return false;
+    if (emax !== null && (f.etage == null || f.etage > emax)) return false;
+    if (Q.dernierEtage === '1' && !(f.etage != null && f.niveauxImmeuble && f.etage >= f.niveauxImmeuble - 1)) return false;
+    if (classes && classes.indexOf(f.dpe) === -1) return false;
+    if (Q.epoque && epoques[Q.epoque]) { const a = anneeDe(f); if (!a || a < epoques[Q.epoque][0] || a > epoques[Q.epoque][1]) return false; }
+    if (pmin !== null || pmax !== null) { const v = prixDe(f); if (!v) return false; if (pmin !== null && v < pmin) return false; if (pmax !== null && v > pmax) return false; }
+    return true;
+  });
   // DPE par immeuble sur un an (« immeuble en mouvement »).
   const parBan = {};
   rows.forEach((f) => { if (f.identifiantBan) parBan[f.identifiantBan] = (parBan[f.identifiantBan] || 0) + 1; });
@@ -5442,13 +5463,26 @@ app.get('/api/radar/liste', requireAdmin, (req, res) => {
   const avecClient = (g) => g.acquereurs.club + g.acquereurs.leads > 0;
   const recents = RS.liste.all({ de: semaine, a: per.a + 'z', q: '', t: '', smin: 0 }).map(rsLire).filter(Boolean).map((f) => radarCalcul(ctx, f, 1));
   const une = { jour: recents.filter((g) => String(g.dpeDate) >= hier && avecClient(g)).length, semaine: recents.filter(avecClient).length, semaineTotal: recents.length };
-  if (req.query.client === '1') liste = liste.filter(avecClient);
-  if (req.query.proprio === 'societe') liste = liste.filter((g) => g.proprietaire && g.proprietaire.statut === 'identifie');
-  if (req.query.proprio === 'particulier') liste = liste.filter((g) => !g.proprietaire || g.proprietaire.statut !== 'identifie');
-  if (req.query.masquerEcartes !== '0') liste = liste.filter((g) => g.statut !== 'ecarte');
+  if (Q.client === '1') liste = liste.filter(avecClient);
+  if (Q.client === 'club') liste = liste.filter((g) => g.acquereurs.club > 0);
+  if (Q.client === 'leads') liste = liste.filter((g) => g.acquereurs.leads > 0);
+  const pr = (g) => g.proprietaire || {};
+  if (Q.proprio === 'societe') liste = liste.filter((g) => pr(g).statut === 'identifie');
+  if (Q.proprio === 'sci') liste = liste.filter((g) => pr(g).statut === 'identifie' && pr(g).estSci);
+  if (Q.proprio === 'hors-institutionnel') liste = liste.filter((g) => pr(g).statut === 'identifie' && !pr(g).institutionnel);
+  if (Q.proprio === 'particulier') liste = liste.filter((g) => pr(g).statut !== 'identifie');
+  if (Q.contact === '1') liste = liste.filter((g) => { const c = pr(g).contacts || {}; return (c.telephones || []).length || (c.emails || []).length || (c.linkedin || []).length; });
+  if (Q.niveau === 'forte') liste = liste.filter((g) => g.chances.niveau === 'forte');
+  if (Q.niveau === 'moyenne') liste = liste.filter((g) => g.chances.niveau !== 'faible');
+  const signaux = { 'sci-un-bien': /ne possède que ce bien/, 'gerant-age': /Gérant de \d+ ans/, passoire: /Classé [FG]/, mouvement: /DPE dans l’immeuble/, gerance: /Changement de gérant/, dissolution: /Dissolution|Procédure collective/, longtemps: /il y a \d+ ans\) : forte plus-value/ };
+  if (signaux[Q.signal]) liste = liste.filter((g) => g.chances.signaux.some((x) => signaux[Q.signal].test(x.txt)));
+  if (Q.statut === 'prospect') liste = liste.filter((g) => g.leadId);
+  else if (['a_revoir', 'en_cours', 'contacte', 'ecarte'].indexOf(Q.statut) > -1) liste = liste.filter((g) => (g.statut || 'a_revoir') === Q.statut);
+  else liste = liste.filter((g) => g.statut !== 'ecarte');
   const tri = String(req.query.tri || 'chances');
   const d = (g) => radarAnnee(g.dpeDate);
-  liste.sort(tri === 'ancien' ? (a, b) => d(a) - d(b) : tri === 'recent' ? (a, b) => d(b) - d(a) : (a, b) => b.chances.score - a.chances.score || d(b) - d(a));
+  const nbCli = (g) => g.acquereurs.club * 2 + g.acquereurs.leads;
+  liste.sort(tri === 'ancien' ? (a, b) => d(a) - d(b) : tri === 'recent' ? (a, b) => d(b) - d(a) : tri === 'surface' ? (a, b) => b.surface - a.surface : tri === 'clients' ? (a, b) => nbCli(b) - nbCli(a) || b.chances.score - a.chances.score : (a, b) => b.chances.score - a.chances.score || d(b) - d(a));
   const page = Math.max(1, Number(req.query.page) || 1);
   const job = RADAR_CHARGEMENTS[cleCharg] || null;
   res.json({ ok: true, periode: per, total: liste.length, page: page, lignes: liste.slice((page - 1) * 50, page * 50).map(radarLigne), une: une,
