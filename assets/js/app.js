@@ -1401,15 +1401,23 @@
     const url = urlLecteur(l);
     const existant = racine.querySelector('iframe');
     const replie = !!state.__musiqueReplie;
+    const majBouton = () => {
+      const b = racine.querySelector('[data-act="musique-replier"]');
+      if (b) { b.innerHTML = replie ? '<span class="ed-musique-ico">▴</span>Ouvrir' : '<span class="ed-musique-ico">▾</span>Réduire'; b.setAttribute('aria-expanded', replie ? 'false' : 'true'); }
+    };
     if (existant && existant.getAttribute('src') === url) {
       racine.querySelector('.ed-musique').classList.toggle('replie', replie);
+      majBouton();
       return;
     }
     const nom = (AMBIANCES.find((a) => m && a.id === m.ambiance) || {}).nom || 'Ma playlist';
+    // Réduire garde la musique en route (le lecteur reste chargé, masqué).
     racine.innerHTML = '<div class="ed-musique' + (replie ? ' replie' : '') + (l.source === 'youtube' ? ' youtube' : '') + '">' +
-      '<div class="ed-musique-barre"><button type="button" class="ed-musique-titre" data-act="musique-replier" aria-label="Afficher ou masquer le lecteur">♪ ' + esc(nom) + '</button>' +
-        '<button type="button" class="ed-musique-btn" data-act="musique-ouvrir">Changer</button></div>' +
+      '<div class="ed-musique-barre"><span class="ed-musique-nom">♪ ' + esc(nom) + '</span>' +
+        '<button type="button" class="ed-musique-btn secondaire" data-act="musique-ouvrir">Changer</button>' +
+        '<button type="button" class="ed-musique-btn" data-act="musique-replier"></button></div>' +
       '<iframe src="' + url + '" title="Musique d’ambiance" allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" loading="lazy"></iframe></div>';
+    majBouton();
   }
   async function enregistrerMusique(corps) {
     const r = await API.send('PUT', '/api/membre/musique', corps);
