@@ -4510,7 +4510,7 @@
     return '<div class="se-fiche-head">' +
       '<div style="flex:1"><div class="kicker" style="color:var(--color-taupe)">' + esc(b.ref) + ' · ' + esc(b.type) + ' · ' + esc(qLabel(b.quartier)) + (prop ? ' · <a href="#/client/' + prop.id + '" style="color:var(--color-club-violet);text-decoration:none">Propriétaire : ' + esc(nomClient(prop)) + '</a>' : '') + '</div>' +
       '<h1 class="display" style="font-size:30px;margin:4px 0 2px">' + esc(b.titre) + '</h1>' +
-      '<div class="se-row" style="gap:8px">' + badgeBien(b.statut) + badgeExclusivite(b) + badgeValidation(b) + badgeDemo(b) + '<span class="se-pill" title="Prix net vendeur">Net <b>' + euro(b.prix) + '</b></span><span class="se-pill" title="Prix affiché aux acquéreurs">HAI <b>' + euro(haiPour(b, null)) + '</b> · ' + tauxTxt(tauxPour(b, null)) + ' %</span><span class="se-pill" title="Prix affiché à un client dont le bien a été vendu par l’agence">Vendeur chez nous ' + euro(haiPour(b, REDUIT)) + '</span><span class="se-pill">' + euro(prixM2(b)) + ' /m² net</span></div></div>' +
+      '<div class="se-row" style="gap:8px">' + badgeBien(b.statut) + badgeExclusivite(b) + badgeValidation(b) + badgeDemo(b) + '<span class="se-pill" title="Prix net vendeur">Net <b>' + euro(b.prix) + '</b></span><span class="se-pill" title="Prix affiché aux acquéreurs">HAI <b>' + euro(haiPour(b, null)) + '</b> · ' + tauxTxt(tauxPour(b, null)) + ' %</span><span class="se-pill" title="Prix affiché à un membre dont le bien a été VENDU par l’agence (statut Vendu)">Si son bien est vendu par nous : ' + euro(haiPour(b, REDUIT)) + '</span><span class="se-pill">' + euro(prixM2(b)) + ' /m² net</span></div></div>' +
       '<div class="se-actions">' +
         '<button class="se-btn ghost" data-act="bien-editer" data-id="' + b.id + '">Modifier</button>' +
         '<button class="se-btn ghost" data-act="bien-statut" data-id="' + b.id + '">Changer le statut</button>' +
@@ -4526,7 +4526,7 @@
             kv('Prix net vendeur', euro(b.prix)) +
             kv('Honoraires acquéreur', tauxTxt(tauxPour(b, null)) + ' % TTC' + ((b.tauxHonoraires === null || b.tauxHonoraires === undefined || b.tauxHonoraires === '') ? ' (barème)' : ' (propre au bien)')) +
             kv('Prix affiché (HAI)', euro(haiPour(b, null))) +
-            kv('Prix affiché à un vendeur chez nous', euro(haiPour(b, REDUIT)) + ' · ' + tauxTxt(tauxPour(b, REDUIT)) + ' %') +
+            kv('Prix affiché à un membre dont le bien a été vendu par nous', euro(haiPour(b, REDUIT)) + ' · ' + tauxTxt(tauxPour(b, REDUIT)) + ' %') +
           '</div>' +
           ((b.historiquePrix || []).length
             ? '<div class="se-list" style="margin-top:12px">' + b.historiquePrix.slice().reverse().map((h) => '<div class="se-list-item"><div style="flex:1;min-width:0"><div style="font-size:13.5px">' + (h.ancien ? euro(h.ancien) + ' → ' : '') + '<b>' + euro(h.nouveau) + '</b> net</div><div class="se-hint">' + dFR(h.at) + (h.auteur ? ' · ' + esc(h.auteur) : '') + (h.source ? ' · ' + esc(h.source) : '') + '</div></div></div>').join('') + '</div>'
