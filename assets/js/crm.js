@@ -335,6 +335,32 @@
     const base = propre != null && !isNaN(propre) ? propre : BAREME.acq;
     return estMixte(c) ? Math.min(base, BAREME.mixte) : base;
   }
+  // ---- Texte éditorial de la fiche (rédigé par Célia, validé par l'agent) ----
+  function carteEditorial(b) {
+    if (!b.serverId) return '';
+    const e = b.editorial || {};
+    const brouillon = state.editorialBrouillon && state.editorialBrouillon[b.serverId];
+    const titre = brouillon ? brouillon.titre : (e.titre || e.brouillonTitre || '');
+    const texte = brouillon ? brouillon.texte : (e.texte || e.brouillonTexte || '');
+    const enCours = state.editorialEnCours === b.serverId;
+    return '<div class="se-card se-editorial" data-editorial="' + esc(b.serverId) + '">' +
+      '<div class="se-row" style="justify-content:space-between;gap:10px;flex-wrap:wrap"><h3>Texte de la fiche</h3>' +
+        (e.publie ? '<span class="se-badge open">Publié' + (e.publieLe ? ' le ' + dFR(e.publieLe) : '') + '</span>' : '<span class="se-badge muted">Non publié</span>') + '</div>' +
+      '<p class="se-hint" style="margin:6px 0 12px">Célia rédige un titre et un texte au ton éditorial à partir des caractéristiques et des photos. Relisez, ajustez, puis publiez : les membres voient ce texte sur la fiche.</p>' +
+      '<form data-form="editorial" data-id="' + esc(b.serverId) + '" class="se-form-grid">' +
+        '<div class="se-field full"><label>Titre</label><input class="se-input" name="titre" maxlength="90" value="' + esc(titre) + '" placeholder="Ex. Un atelier d’artiste sous la verrière"/></div>' +
+        '<div class="se-field full"><label>Texte</label><textarea class="se-textarea" name="texte" style="min-height:190px" placeholder="Cliquez sur « Rédiger avec Célia »…">' + esc(texte) + '</textarea></div>' +
+        '<div class="se-field full"><label>« Ses propriétaires l’aiment pour… »</label><textarea class="se-textarea" name="coupDeCoeur" maxlength="280" style="min-height:70px" placeholder="La phrase du propriétaire (laisser vide pour ne rien afficher)">' + esc(b.coupDeCoeur || '') + '</textarea></div>' +
+        '<div class="se-row full" style="gap:8px;flex-wrap:wrap">' +
+          '<button type="button" class="se-btn ghost" data-act="editorial-generer" data-id="' + esc(b.serverId) + '"' + (enCours ? ' disabled' : '') + '>' + (enCours ? 'Célia rédige…' : (texte ? 'Proposer une autre version' : 'Rédiger avec Célia')) + '</button>' +
+          '<span style="flex:1"></span>' +
+          '<button type="submit" class="se-btn ghost" name="publie" value="0">Enregistrer sans publier</button>' +
+          '<button type="submit" class="se-btn" name="publie" value="1">Publier sur la fiche</button>' +
+        '</div>' +
+      '</form>' +
+    '</div>';
+  }
+
   function haiPour(b, c) {
     const n = Number(b && b.prix) || 0;
     if (!n) return 0;
@@ -1412,6 +1438,7 @@
       delai: b.delai || '', dejaEnVente: b.dejaEnVente || '', motif: b.motif || '',
       statut: b.statut || 'brouillon', etapeProposition: b.etapeProposition || '', proprietaireId: lead ? lead.id : null,
       photos: b.photos || [], description: b.description || '',
+      coupDeCoeur: b.coupDeCoeur || '', editorial: b.editorial || null,
       atouts: b.atouts || b.annexes || [], annexes: b.annexes || [], mandat: { type: 'simple', fin: '' }, cree: b.cree || nowISO(),
       exclusivite: b.exclusivite || { statut: 'scan_en_cours', liens: [] },
       validation: b.validation || 'en_attente',
@@ -4494,6 +4521,7 @@
         '<div class="se-grid" style="gap:18px">' +
           '<div class="se-card" style="padding:0;overflow:hidden"><div class="se-bien-photo" style="aspect-ratio:16/9">' + (photo(b) ? '<img src="' + photo(b) + '" alt=""/>' : '') + '</div>' +
             '<div class="se-photos" style="padding:12px">' + (b.photos || []).map((p) => '<div class="se-photo"><img src="' + (/^(data:|https?:|\/)/.test(p) ? p : 'assets/img/' + p) + '" alt=""/></div>').join('') + '</div></div>' +
+          carteEditorial(b) +
           '<div class="se-card"><h3>Prix et honoraires</h3><div class="se-kv" style="margin-top:10px">' +
             kv('Prix net vendeur', euro(b.prix)) +
             kv('Honoraires acquéreur', tauxTxt(tauxPour(b, null)) + ' % TTC' + ((b.tauxHonoraires === null || b.tauxHonoraires === undefined || b.tauxHonoraires === '') ? ' (barème)' : ' (propre au bien)')) +
@@ -6426,6 +6454,21 @@
       toast('Offre refusée.');
     },
     'message-ouvrir': (el, id) => { location.hash = '#/messages/' + id; },
+    'editorial-generer': async (el, id) => {
+      const form = el.closest('form');
+      state.editorialBrouillon = state.editorialBrouillon || {};
+      state.editorialEnCours = id;
+      render();
+      try {
+        const r = await fetch('/api/biens/' + encodeURIComponent(id) + '/editorial/generer', { method: 'POST', headers: { 'content-type': 'application/json' } });
+        const res = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(res.error || 'Rédaction impossible');
+        state.editorialBrouillon[id] = { titre: res.titre, texte: res.texte };
+        toast('Célia a rédigé une proposition' + (res.photosAnalysees ? ' (' + res.photosAnalysees + ' photo' + (res.photosAnalysees > 1 ? 's' : '') + ' analysée' + (res.photosAnalysees > 1 ? 's' : '') + ')' : '') + '. Relisez avant de publier.', 'ok');
+      } catch (err) { toast(err.message || 'Rédaction impossible', 'warn'); }
+      state.editorialEnCours = null;
+      render();
+    },
     'export-clients': () => {
       download('clients.csv', csv(state.clients.map((c) => Object.assign({}, c, { quartiers: (c.quartiers || []).map(qLabel).join(' / ') })), ['id', 'prenom', 'nom', 'email', 'tel', 'type', 'statut', 'budgetMin', 'budgetMax', 'piecesMin', 'surfaceMin', 'quartiers', 'agent']), 'text/csv');
       toast('Export clients prêt.');
@@ -6836,6 +6879,22 @@
       return;
     }
 
+    if (kind === 'editorial') {
+      const id = form.getAttribute('data-id');
+      const publie = e.submitter ? e.submitter.value === '1' : false;
+      try {
+        const r = await fetch('/api/biens/' + encodeURIComponent(id) + '/editorial', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ titre: data.get('titre'), texte: data.get('texte'), coupDeCoeur: data.get('coupDeCoeur'), publie: publie }) });
+        const res = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(res.error || 'Enregistrement impossible');
+        const b = (state.biensServeur || []).find((x) => x.serverId === id);
+        if (b) { b.editorial = res.editorial; b.coupDeCoeur = res.coupDeCoeur; }
+        if (state.editorialBrouillon) delete state.editorialBrouillon[id];
+        render();
+        toast(publie ? 'Texte publié : les membres le voient sur la fiche.' : 'Texte enregistré (non publié).', 'ok');
+      } catch (err) { toast(err.message || 'Enregistrement impossible', 'warn'); }
+      return;
+    }
+
     if (kind === 'msg') {
       const leadId = form.getAttribute('data-lead');
       const champ = form.querySelector('[name="texte"]');
@@ -6911,6 +6970,14 @@
   });
 
   document.addEventListener('input', (e) => {
+    const fEdito = e.target.closest && e.target.closest('form[data-form="editorial"]');
+    if (fEdito) {
+      const id = fEdito.getAttribute('data-id');
+      state.editorialBrouillon = state.editorialBrouillon || {};
+      state.editorialBrouillon[id] = { titre: fEdito.querySelector('[name="titre"]').value, texte: fEdito.querySelector('[name="texte"]').value };
+      const b = (state.biensServeur || []).find((x) => x.serverId === id);
+      if (b) b.coupDeCoeur = fEdito.querySelector('[name="coupDeCoeur"]').value;
+    }
     if (e.target.matches('[data-rr]')) {
       // Persiste la saisie sans re-render : le champ affiche déjà ce qui
       // vient d'être tapé, un render() ici ne ferait que couper le curseur
@@ -6964,5 +7031,9 @@
   render();
   syncIdentite();
   syncServeur();
-  setInterval(() => { if (!modal) syncServeur(); }, 15000);
+  // Pas de rafraîchissement automatique pendant qu'un agent saisit dans un formulaire.
+  setInterval(() => {
+    const actif = document.activeElement;
+    if (!modal && !(actif && actif.closest && actif.closest('form') && /^(INPUT|TEXTAREA|SELECT)$/.test(actif.tagName))) syncServeur();
+  }, 15000);
 })();

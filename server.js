@@ -202,7 +202,7 @@ function decoupe(dossier) {
 
   const recherche = projet !== 'vendeur' ? { id: uid('r'), clientId: lead.id, leadId: lead.id, titre: titreRecherche(r), types: Array.isArray(r.types) ? r.types : [], type: (Array.isArray(r.types) && r.types[0]) || '', quartiers: Array.isArray(r.quartiers) ? r.quartiers : [], prixMax: Number(r.prixMax) || 0, piecesMin: Number(r.piecesMin) || 0, surfaceMin: Number(r.surfaceMin) || 0, surfaceMax: Number(r.surfaceMax) || 0, delai: r.delai || '', apport: Number(budget.apport) || 0, financement: budget.financement || '', courtier: !!budget.courtier, bienAVendre: !!budget.bienAVendre, etageMin: Number(r.etageMin) || 0, etageMax: Number(r.etageMax) || 0, etat: r.etat || '', dpe: r.dpe || '', annexes: Array.isArray(r.annexes) ? r.annexes : [], prixVenteEstime: Number(budget.prixVenteEstime) || 0, statut: 'active', alertes: true, cree: nowISO() } : null;
 
-  const bien = projet !== 'acheteur' ? { id: uid('mb'), leadId: lead.id, email: email, nom: nom, titre: '', adresse: b.adresse || '', codePostal: b.codePostal || '', ville: b.ville || '', type: b.type || 'Appartement', quartier: b.quartier || '', surface: Number(b.surface) || 0, pieces: Number(b.pieces) || 0, chambres: Number(b.chambres) || 0, sdb: Number(b.sdb) || 0, etage: b.etage || '', dpe: b.dpe || '', etat: b.etat || '', exterieur: b.exterieur || '', surfaceExterieur: Number(b.surfaceExterieur) || 0, prix: Number(vente.prix) || 0, delai: vente.delai || '', dejaEnVente: vente.dejaEnVente || '', mandat: vente.mandat || '', motif: vente.motif || '', description: b.description || '', photos: Array.isArray(b.photos) ? b.photos.slice(0, 12) : [], atouts: Array.isArray(b.atouts) ? b.atouts : [], annexes: Array.isArray(b.annexes) ? b.annexes : [], ges: b.ges || '', charges: Number(b.charges) || 0, ascenseur: !!b.ascenseur, lat: b.lat || null, lon: b.lon || null, exclusivite: { statut: 'scan_en_cours', liens: [] }, validation: 'en_attente', statut: 'brouillon', statutDemande: null, suiveurs: 0, agent: DEFAULT_AGENT_NOM, cree: nowISO() } : null;
+  const bien = projet !== 'acheteur' ? { id: uid('mb'), leadId: lead.id, email: email, nom: nom, titre: '', adresse: b.adresse || '', codePostal: b.codePostal || '', ville: b.ville || '', type: b.type || 'Appartement', quartier: b.quartier || '', surface: Number(b.surface) || 0, pieces: Number(b.pieces) || 0, chambres: Number(b.chambres) || 0, sdb: Number(b.sdb) || 0, etage: b.etage || '', dpe: b.dpe || '', etat: b.etat || '', exterieur: b.exterieur || '', surfaceExterieur: Number(b.surfaceExterieur) || 0, prix: Number(vente.prix) || 0, delai: vente.delai || '', dejaEnVente: vente.dejaEnVente || '', mandat: vente.mandat || '', motif: vente.motif || '', description: b.description || '', coupDeCoeur: String(b.coupDeCoeur || '').trim().slice(0, 280), photos: Array.isArray(b.photos) ? b.photos.slice(0, 12) : [], atouts: Array.isArray(b.atouts) ? b.atouts : [], annexes: Array.isArray(b.annexes) ? b.annexes : [], ges: b.ges || '', charges: Number(b.charges) || 0, ascenseur: !!b.ascenseur, lat: b.lat || null, lon: b.lon || null, exclusivite: { statut: 'scan_en_cours', liens: [] }, validation: 'en_attente', statut: 'brouillon', statutDemande: null, suiveurs: 0, agent: DEFAULT_AGENT_NOM, cree: nowISO() } : null;
 
   const demande = { id: uid('d'), type: 'candidature', nom: nom || 'Candidat', email: email, leadId: lead.id, clientId: lead.id, role: projet, montant: 0, message: resumeDemande(dossier), source: 'Site', statut: 'nouvelle', cree: nowISO() };
 
@@ -1506,6 +1506,8 @@ function bienPublic(b) {
     prixNet: b.prix || 0, prixHai: prixHai(b.prix, tauxStd), tauxHonoraires: tauxStd,
     historiquePrix: Array.isArray(b.historiquePrix) ? b.historiquePrix : [],
     description: b.description || '', photos: b.photos || [], statut: b.statut || 'brouillon',
+    coupDeCoeur: b.coupDeCoeur || '',
+    editorial: b.editorial && b.editorial.publie && b.editorial.texte ? { titre: b.editorial.titre || '', texte: b.editorial.texte } : null,
     statutDemande: b.statutDemande || null, cree: b.cree || null,
     suiveurs: Number(b.suiveurs) || 0,
     completion: c.pct, complet: c.complet,
@@ -1585,6 +1587,100 @@ app.post('/api/membre/onboarding', requireAuth, (req, res) => {
   req.lead.onboarding = Object.assign({}, req.lead.onboarding || {}, { [etape]: nowISO() });
   writeDb(req.db);
   res.json({ ok: true, onboarding: req.lead.onboarding });
+});
+
+// ---------------- Texte éditorial des fiches (Célia) ----------------
+// Célia rédige, à partir des caractéristiques ET des photos du bien, un titre
+// et un texte au ton « magazine de décoration haut de gamme ». L'agent relit,
+// corrige, puis publie : rien n'est montré aux membres sans validation.
+const EDITORIAL_CONSIGNE = [
+  'Tu es la rédactrice de Seecret, club immobilier off-market haut de gamme à Paris.',
+  'Rédige pour une fiche de bien un TITRE (6 à 10 mots, sans point final, sans adresse) et un TEXTE de 110 à 170 mots, en 2 ou 3 courts paragraphes.',
+  'Ton : éditorial, élégant et sobre, comme un magazine de décoration (AD, The World of Interiors). Phrases vivantes, vocabulaire précis : matières, lumière, volumes, circulation, vues.',
+  'Mets en valeur les qualités réelles du bien, puis l’art de vivre du quartier en termes généraux (ambiance, rythme, type de rues), sans citer de commerces, d’écoles ou de lieux précis.',
+  'N’invente AUCUNE caractéristique absente des données ou des photos. Jamais d’adresse, de numéro de rue, de prix, de superlatif creux (« exceptionnel », « rare », « coup de cœur assuré »), ni de point d’exclamation.',
+  'Réponds uniquement en JSON : {"titre": "…", "texte": "…"} — paragraphes séparés par \n\n.'
+].join('\n');
+function donneesEditorial(b) {
+  const lignes = [
+    ['Type', b.type], ['Quartier', labelQuartier(b.quartier) || b.ville], ['Surface', b.surface ? b.surface + ' m²' : ''],
+    ['Pièces', b.pieces], ['Chambres', b.chambres], ['Salles de bain', b.sdb], ['Étage', b.etage], ['Ascenseur', b.ascenseur ? 'oui' : ''],
+    ['Année de construction', b.anneeConstruction], ['État', b.etat], ['Extérieur', b.exterieur && b.exterieur !== 'Aucun' ? b.exterieur + (b.surfaceExterieur ? ' de ' + b.surfaceExterieur + ' m²' : '') : ''],
+    ['Annexes', (b.annexes || []).join(', ')], ['Atouts', (b.atouts || []).join(', ')], ['DPE', b.dpe],
+    ['Description du propriétaire', b.description], ['Ce que le propriétaire aime dans son bien', b.coupDeCoeur]
+  ].filter((x) => x[1] !== undefined && x[1] !== null && String(x[1]).trim() !== '' && String(x[1]) !== '0');
+  return lignes.map((x) => x[0] + ' : ' + x[1]).join('\n');
+}
+// Jusqu'à 4 photos du bien envoyées à l'IA (fichiers locaux uniquement).
+function photosPourIa(b) {
+  const parts = [];
+  (b.photos || []).slice(0, 6).forEach((p) => {
+    if (parts.length >= 4) return;
+    try {
+      let fichier = null;
+      if (/^\/?uploads\//.test(p)) fichier = path.join(UPLOADS_DIR, p.replace(/^\/?uploads\//, ''));
+      else if (/^\/?assets\/img\/[\w.-]+$/.test(p)) fichier = path.join(__dirname, p.replace(/^\//, ''));
+      else if (/^[\w.-]+\.(jpe?g|png|webp)$/i.test(p)) fichier = path.join(__dirname, 'assets', 'img', p);
+      if (fichier && fichier.indexOf(UPLOADS_DIR) !== 0 && fichier.indexOf(path.join(__dirname, 'assets', 'img')) !== 0) fichier = null;
+      if (fichier && fs.existsSync(fichier) && fs.statSync(fichier).size < 3.5 * 1024 * 1024) {
+        const ext = path.extname(fichier).toLowerCase();
+        parts.push({ inline_data: { mime_type: ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg', data: fs.readFileSync(fichier).toString('base64') } });
+      } else {
+        const m = /^data:(image\/(?:jpeg|png|webp));base64,(.+)$/.exec(p || '');
+        if (m && m[2].length < 4.5 * 1024 * 1024) parts.push({ inline_data: { mime_type: m[1], data: m[2] } });
+      }
+    } catch (e) { /* photo ignorée */ }
+  });
+  return parts;
+}
+async function genererEditorial(b) {
+  if (!GEMINI_API_KEY) throw Object.assign(new Error('La rédaction par Célia nécessite la clé Gemini (GEMINI_API_KEY).'), { code: 'NO_KEY' });
+  const photos = photosPourIa(b);
+  const parts = [{ text: 'Données du bien :\n' + donneesEditorial(b) + (photos.length ? '\n\nPhotos du bien ci-jointes : appuie-toi sur ce que tu vois (lumière, matières, style), sans inventer.' : '') }].concat(photos);
+  const resp = await fetchAvecRetry(GEMINI_API_BASE + '/v1beta/models/' + encodeURIComponent(GEMINI_MODEL) + ':generateContent', {
+    method: 'POST',
+    headers: { 'x-goog-api-key': GEMINI_API_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ system_instruction: { parts: [{ text: EDITORIAL_CONSIGNE }] }, contents: [{ role: 'user', parts: parts }], generationConfig: { responseMimeType: 'application/json', temperature: 0.8 } })
+  }, 2);
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw Object.assign(new Error((data && data.error && data.error.message) || ('Gemini ' + resp.status)), { code: 'API_ERROR' });
+  const brut = (((data.candidates || [])[0] || {}).content || {}).parts || [];
+  const texte = brut.map((x) => x.text || '').join('').trim().replace(/^```(?:json)?\s*|\s*```$/g, '');
+  let out = null;
+  try { out = JSON.parse(texte); } catch (e) { /* format inattendu */ }
+  if (!out || !out.texte) throw Object.assign(new Error('Célia n’a pas renvoyé de texte exploitable. Réessayez.'), { code: 'API_ERROR' });
+  return { titre: String(out.titre || '').trim().replace(/\.$/, '').slice(0, 90), texte: String(out.texte).trim().slice(0, 2500), photos: photos.length };
+}
+app.post('/api/biens/:id/editorial/generer', requireAdmin, async (req, res) => {
+  const db = readDb();
+  const b = db.biens.find((x) => x.id === req.params.id);
+  if (!b) return res.status(404).json({ error: 'Bien introuvable.' });
+  try {
+    const g = await genererEditorial(b);
+    const db2 = readDb();
+    const b2 = db2.biens.find((x) => x.id === b.id);
+    b2.editorial = Object.assign({}, b2.editorial || {}, { brouillonTitre: g.titre, brouillonTexte: g.texte, genereLe: nowISO() });
+    writeDb(db2);
+    res.json({ ok: true, titre: g.titre, texte: g.texte, photosAnalysees: g.photos });
+  } catch (e) {
+    res.status(e.code === 'NO_KEY' ? 503 : 502).json({ error: e.message || 'Rédaction impossible.' });
+  }
+});
+app.put('/api/biens/:id/editorial', requireAdmin, (req, res) => {
+  const db = readDb();
+  const b = db.biens.find((x) => x.id === req.params.id);
+  if (!b) return res.status(404).json({ error: 'Bien introuvable.' });
+  const body = req.body || {};
+  const publie = !!body.publie;
+  const texte = String(body.texte || '').trim().slice(0, 2500);
+  if (publie && !texte) return res.status(400).json({ error: 'Le texte est vide.' });
+  b.editorial = Object.assign({}, b.editorial || {}, {
+    titre: String(body.titre || '').trim().slice(0, 90), texte: texte, publie: publie,
+    modifieLe: nowISO(), auteur: nomComplet(req.lead), publieLe: publie ? nowISO() : null
+  });
+  if (body.coupDeCoeur !== undefined) b.coupDeCoeur = String(body.coupDeCoeur || '').trim().slice(0, 280);
+  writeDb(db);
+  res.json({ ok: true, editorial: b.editorial, coupDeCoeur: b.coupDeCoeur || '' });
 });
 
 // ---------------- Journal de bord du membre ----------------
@@ -1767,7 +1863,7 @@ app.patch('/api/mon-bien', requireAuth, (req, res) => {
   if (b.validation === 'valide') {
     return res.status(409).json({ error: 'Votre bien est validé par l’agence : envoyez une demande de modification, votre agent la valide.' });
   }
-  ['titre', 'description', 'adresse', 'codePostal', 'ville', 'type', 'quartier', 'transaction', 'etage', 'dpe', 'ges', 'etat', 'exterieur']
+  ['titre', 'description', 'coupDeCoeur', 'adresse', 'codePostal', 'ville', 'type', 'quartier', 'transaction', 'etage', 'dpe', 'ges', 'etat', 'exterieur']
     .forEach((k) => { if (typeof body[k] === 'string') b[k] = body[k].slice(0, 400); });
   ['surface', 'pieces', 'chambres', 'sdb', 'surfaceExterieur', 'anneeConstruction', 'charges']
     .forEach((k) => { if (body[k] !== undefined) b[k] = Math.max(0, Number(body[k]) || 0); });
@@ -1846,13 +1942,15 @@ app.post('/api/mon-bien/modification', requireAuth, (req, res) => {
   const prix = Number((req.body && req.body.prix) || 0) || 0;
   const nouveauTitre = String((req.body && req.body.titre) || '');
   const nouvelleDescription = String((req.body && req.body.description) || '');
-  if (!message && !prix && !nouveauTitre && !nouvelleDescription) return res.status(400).json({ error: 'Aucune modification précisée' });
+  const nouveauCoupDeCoeur = String((req.body && req.body.coupDeCoeur) || '').trim().slice(0, 280);
+  if (!message && !prix && !nouveauTitre && !nouvelleDescription && !nouveauCoupDeCoeur) return res.status(400).json({ error: 'Aucune modification précisée' });
   const role = (type === 'Prix' || prix > 0) ? 'prix' : (type.indexOf('Statut') > -1 ? 'statut' : 'autre');
   const demande = {
     id: uid('d'), type: 'modification', role: role, leadId: req.lead.id, bienId: b.id,
     email: req.lead.email, nom: nomComplet(req.lead),
     message: type + ' — ' + message,
     prix: prix || null, titre: nouveauTitre || null, description: nouvelleDescription || null,
+    coupDeCoeur: nouveauCoupDeCoeur && nouveauCoupDeCoeur !== (b.coupDeCoeur || '') ? nouveauCoupDeCoeur : null,
     ancienPrix: b.prix || 0, ancienTitre: b.titre || '', ancienDescription: b.description || '',
     montant: 0, statut: 'nouvelle', source: 'Espace membre', cree: nowISO()
   };
@@ -4664,6 +4762,7 @@ app.post('/api/demandes/:id/decision', requireAdmin, async (req, res) => {
         if (d.prix) changerPrixNet(b, d.prix, d.nom || 'Propriétaire', 'demande de modification validée');
         if (d.titre) b.titre = d.titre;
         if (d.description) b.description = d.description;
+        if (d.coupDeCoeur) b.coupDeCoeur = d.coupDeCoeur;
       }
     }
     titreNotif = 'Votre modification est validée';
