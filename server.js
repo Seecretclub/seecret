@@ -1454,7 +1454,7 @@ function tauxValide(v) {
 // vendeur ne suffit pas. Jamais plus que le taux du bien.
 function aVenduChezNous(db, lead) {
   if (!db || !lead) return false;
-  return (db.biens || []).some((b) => b.leadId === lead.id && b.statut === 'vendu');
+  return (db.biens || []).some((b) => b.leadId === lead.id && b.statut === 'vendu' && b.venduParAgence === true);
 }
 function tauxHonorairesPour(bien, lead, reduit) {
   const a = agence();
@@ -2223,6 +2223,16 @@ app.patch('/api/biens/:id', requireAdmin, (req, res) => {
   const bien = db.biens.find((b) => b.id === req.params.id);
   if (!bien) return res.status(404).json({ error: 'Bien introuvable' });
   const body = req.body || {};
+  // « Vendu » : l'agent précise si la vente a été faite par l'agence — seule
+  // une vente par Seecret ouvre au propriétaire le taux réduit sur ses achats.
+  if (body.statut === 'vendu') {
+    if (typeof body.venduParAgence !== 'boolean' && bien.statut !== 'vendu') {
+      return res.status(400).json({ error: 'Précisez si le bien a été vendu par Seecret.' });
+    }
+    if (typeof body.venduParAgence === 'boolean') bien.venduParAgence = body.venduParAgence;
+  } else if (typeof body.statut === 'string' && body.statut !== 'vendu') {
+    delete bien.venduParAgence;
+  }
   ['ref', 'titre', 'adresse', 'ville', 'codePostal', 'type', 'quartier', 'dpe', 'ges', 'etat', 'statut', 'description', 'exterieur'].forEach((k) => { if (typeof body[k] === 'string') bien[k] = body[k]; });
   // L'étage est un nombre comparable (0 = RDC) depuis #62 : un simple "typeof === 'string'"
   // ignorait silencieusement toute mise à jour envoyée par le CRM, y compris le cas RDC.

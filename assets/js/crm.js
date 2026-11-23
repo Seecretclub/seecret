@@ -328,7 +328,7 @@
     const cl = c.clientId ? client(c.clientId) : c;
     if (!cl || !cl.id) return false;
     return ((state.biensServeur || []).concat(state.biens || [])).some((b) =>
-      b.statut === 'vendu' && (b.proprietaireId === cl.id || (cl.serverId && b.leadId === cl.serverId)));
+      b.statut === 'vendu' && b.venduParAgence === true && (b.proprietaireId === cl.id || (cl.serverId && b.leadId === cl.serverId)));
   }
   function tauxPour(b, c) {
     const propre = (b && b.tauxHonoraires !== null && b.tauxHonoraires !== undefined && b.tauxHonoraires !== '') ? Number(b.tauxHonoraires) : null;
@@ -1438,7 +1438,7 @@
       delai: b.delai || '', dejaEnVente: b.dejaEnVente || '', motif: b.motif || '',
       statut: b.statut || 'brouillon', etapeProposition: b.etapeProposition || '', proprietaireId: lead ? lead.id : null,
       photos: b.photos || [], description: b.description || '',
-      coupDeCoeur: b.coupDeCoeur || '', editorial: b.editorial || null,
+      coupDeCoeur: b.coupDeCoeur || '', editorial: b.editorial || null, venduParAgence: b.venduParAgence === true ? true : (b.venduParAgence === false ? false : null),
       atouts: b.atouts || b.annexes || [], annexes: b.annexes || [], mandat: { type: 'simple', fin: '' }, cree: b.cree || nowISO(),
       exclusivite: b.exclusivite || { statut: 'scan_en_cours', liens: [] },
       validation: b.validation || 'en_attente',
@@ -5285,6 +5285,11 @@
         field('Type', 'type', v.type, { type: 'select', options: TYPES.map((t) => ({ value: t, label: t })) }) +
         field('Quartier', 'quartier', v.quartier, { type: 'select', options: QUARTIERS.map((q) => ({ value: q.id, label: q.label })) }) +
         field('Statut', 'statut', v.statut, { type: 'select', options: Object.keys(ST_BIEN).map((k) => ({ value: k, label: ST_BIEN[k].label })) }) +
+        '<div class="se-field" data-si-vendu' + (v.statut === 'vendu' ? '' : ' hidden') + '><label>Vendu par Seecret ?</label>' +
+          '<select class="se-select" name="venduParAgence"><option value="">— Choisir —</option>' +
+          '<option value="oui"' + (v.venduParAgence === true ? ' selected' : '') + '>Oui, vendu par l’agence</option>' +
+          '<option value="non"' + (v.venduParAgence === false ? ' selected' : '') + '>Non, vendu ailleurs / retiré</option></select>' +
+          '<span class="se-hint">Seule une vente par Seecret donne au propriétaire le taux réduit sur ses achats.</span></div>' +
         field('Titre', 'titre', v.titre, { full: true, placeholder: 'Quatre pièces sur la Seine' }) +
         field('Surface (m²)', 'surface', v.surface, { type: 'number' }) +
         field('Pièces', 'pieces', v.pieces, { type: 'number' }) +
@@ -6486,6 +6491,9 @@
     'bien-statut': (el, id) => {
       const b = bien(id);
       if (!b) return;
+      // Bien du serveur : le statut se change dans le formulaire (enregistré
+      // côté serveur), pas par un simple cycle local qui n'était pas sauvegardé.
+      if (b.serverId) { modal = bienModal(b); render(); return; }
       const order = ['brouillon', 'mandat', 'avant-premiere', 'ouvert', 'sous-offre', 'vendu'];
       b.statut = order[(order.indexOf(b.statut) + 1) % order.length];
       commit();
@@ -6514,6 +6522,10 @@
   });
 
   document.addEventListener('change', async (e) => {
+    if (e.target.matches('form[data-form="bien"] [name="statut"]')) {
+      const bloc = e.target.form.querySelector('[data-si-vendu]');
+      if (bloc) bloc.hidden = e.target.value !== 'vendu';
+    }
     if (e.target.matches('[data-act="client-reattribuer"]')) {
       const select = e.target;
       const serverId = select.getAttribute('data-id');
@@ -6723,6 +6735,7 @@
         anneeConstruction: chiffres(data.get('anneeConstruction')) || null, prix: chiffres(data.get('prix')),
         tauxHonoraires: String(data.get('tauxHonoraires') || '').trim() === '' ? null : Number(String(data.get('tauxHonoraires')).replace(',', '.')),
         statut: data.get('statut'), proprietaireId: data.get('proprio') || null,
+        venduParAgence: data.get('statut') === 'vendu' && data.get('venduParAgence') ? data.get('venduParAgence') === 'oui' : undefined,
         exclusivite: { statut: 'scan_en_cours', liens: [] },
         description: String(data.get('description') || ''),
         atouts: existing ? existing.atouts : [],
