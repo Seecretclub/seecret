@@ -1592,7 +1592,16 @@ app.post('/api/membre/onboarding', requireAuth, (req, res) => {
 // prix des biens qu'il suit ou a visités (en prix HAI, jamais le net d'un
 // autre propriétaire), et l'activité anonyme autour de son propre bien.
 function bienSurPlateforme(b) { return b && b.validation === 'valide' && (b.statut === 'avant-premiere' || b.statut === 'ouvert'); }
+// Agent qui suit le membre : l'agent attribué dans le CRM (agentId, ou
+// l'agent qui l'a créé), sinon l'agent par défaut de l'agence.
+function agentAttribue(db, lead) {
+  const id = lead && (lead.agentId || lead.creePar);
+  const a = id ? db.leads.find((l) => l.id === id && ROLES_STAFF.indexOf(roleOf(l)) > -1) : null;
+  return a || null;
+}
 function agentDuMembre(db, lead) {
+  const a = agentAttribue(db, lead);
+  if (a) return { nom: nomComplet(a) || DEFAULT_AGENT_NOM };
   const mien = db.biens.find((b) => b.leadId === lead.id);
   return { nom: (mien && mien.agent) || DEFAULT_AGENT_NOM };
 }
@@ -1643,9 +1652,19 @@ app.get('/api/mon-journal', requireAuth, (req, res) => {
 const MESSAGE_MAX = 2000;
 function escHtml(x) { return String(x == null ? '' : x).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 function messageSortant(m) { return { id: m.id, de: m.de, auteur: m.auteur || '', texte: m.texte, at: m.at }; }
-function emailsAgence() {
-  const liste = String(process.env.AGENCE_EMAIL_MESSAGES || process.env.ADMIN_EMAILS || '').split(',').map((x) => x.trim()).filter(Boolean);
-  return liste;
+// Destinataire de l'email « nouveau message » : l'adresse de connexion au CRM
+// de l'agent attribué au membre ; à défaut (membre pas encore attribué),
+// AGENCE_EMAIL_MESSAGES, sinon les super-admins (ADMIN_EMAILS).
+function emailsAgence(db, lead) {
+  const a = agentAttribue(db, lead);
+  if (a && a.email) return [a.email];
+  return String(process.env.AGENCE_EMAIL_MESSAGES || process.env.ADMIN_EMAILS || '').split(',').map((x) => x.trim()).filter(Boolean);
+}
+// Un agent ne voit que les conversations de ses membres ; le super-admin voit tout.
+function conversationVisible(req, db, leadId) {
+  if (roleOf(req.lead) === 'superadmin') return true;
+  const l = db.leads.find((x) => x.id === leadId);
+  return !!(l && leadVisibleParAgent(l, req.lead.id));
 }
 app.get('/api/mes-messages', requireAuth, (req, res) => {
   const db = req.db;
@@ -1666,7 +1685,7 @@ app.post('/api/mes-messages', requireAuth, (req, res) => {
   db.messages.push(m);
   logActivite(db, { leadId: req.lead.id, type: 'message_membre', auteur: nomComplet(req.lead) });
   writeDb(db);
-  const dest = emailsAgence();
+  const dest = emailsAgence(db, req.lead);
   if (mailer && dest.length) {
     mailer.sendMail({
       from: '"Bonjour Seecret" <' + FROM_EMAIL + '>', to: dest.join(','),
@@ -1680,7 +1699,7 @@ app.get('/api/messages', requireAdmin, (req, res) => {
   const db = readDb();
   const parLead = {};
   (db.messages || []).forEach((m) => { (parLead[m.leadId] = parLead[m.leadId] || []).push(m); });
-  const conversations = Object.keys(parLead).map((id) => {
+  const conversations = Object.keys(parLead).filter((id) => conversationVisible(req, db, id)).map((id) => {
     const l = db.leads.find((x) => x.id === id) || {};
     const fil = parLead[id];
     const dernier = fil[fil.length - 1];
@@ -1690,6 +1709,7 @@ app.get('/api/messages', requireAdmin, (req, res) => {
 });
 app.get('/api/messages/:leadId', requireAdmin, (req, res) => {
   const db = readDb();
+  if (!conversationVisible(req, db, req.params.leadId)) return res.status(404).json({ error: 'Conversation introuvable.' });
   const fil = (db.messages || []).filter((m) => m.leadId === req.params.leadId);
   let change = false;
   fil.forEach((m) => { if (m.de === 'membre' && !m.luAgence) { m.luAgence = true; change = true; } });
@@ -1701,7 +1721,7 @@ app.post('/api/messages/:leadId', requireAdmin, (req, res) => {
   if (!texte) return res.status(400).json({ error: 'Message vide.' });
   const db = readDb();
   const lead = db.leads.find((l) => l.id === req.params.leadId);
-  if (!lead) return res.status(404).json({ error: 'Membre introuvable.' });
+  if (!lead || !conversationVisible(req, db, lead.id)) return res.status(404).json({ error: 'Membre introuvable.' });
   db.messages = Array.isArray(db.messages) ? db.messages : [];
   const m = { id: uid('msg'), leadId: lead.id, de: 'agent', auteur: nomComplet(req.lead) || DEFAULT_AGENT_NOM, texte: texte, at: nowISO(), luMembre: false, luAgence: true };
   db.messages.push(m);
