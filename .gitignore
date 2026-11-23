@@ -22,3 +22,6 @@ uploads/
 *.db-wal
 *.db-shm
 data.json.importe
+radar.db
+radar.db-wal
+radar.db-shm

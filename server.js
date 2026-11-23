@@ -4984,9 +4984,7 @@ function radarCorrespondance(f, c) {
 function radarContexte(db) {
   const clients = db.leads.filter((l) => ROLES_STAFF.indexOf(roleOf(l)) === -1 && l.statut !== 'suspendu' && l.statut !== 'refuse' && l.projet !== 'vendeur')
     .map((l) => ({ l: l, c: radarCriteres(db, l) })).filter((x) => x.c.quartiers.length);
-  const parBan = {};
-  (db.radarFiches || []).forEach((x) => { if (x.identifiantBan && Date.now() - radarAnnee(x.dpeDate) < 365 * 864e5) parBan[x.identifiantBan] = (parBan[x.identifiantBan] || 0) + 1; });
-  return { clients: clients, parBan: parBan };
+  return { clients: clients, parBan: {} };
 }
 function radarAcquereurs(ctx, f) {
   const club = []; const leads = [];
@@ -5239,107 +5237,313 @@ function radarAppliquer(db, fiches) {
     if (px && px.m2 && f.surface) { f.prixM2 = px.m2; f.prixBas = Math.round(f.surface * px.m2 * 0.93 / 10000) * 10000; f.prixHaut = Math.round(f.surface * px.m2 * 1.07 / 10000) * 10000; }
   });
 }
-// Les recherches enregistrées sont relancées chaque jour vers 6 h.
-setInterval(() => {
-  if (new Date().getHours() !== 6) return;
-  const db = readDb();
-  (db.radarRecherches || []).slice(0, 5).forEach((r, i) => setTimeout(() => { if (!(RADAR_JOBS[r.id] || {}).enCours) radarRechercher(r.id, r.criteres); }, i * 10 * 60 * 1000));
-}, 3600e3).unref();
+// ============================================================================
+// RADAR « FUTURS VENDEURS » — une ligne = un DPE ; tout le reste sert à
+// remplir sa fiche (propriétaire, signaux de vente, contacts, clients
+// intéressés) pour repérer les futurs vendeurs et pouvoir les contacter.
+// Les DPE vivent dans leur propre base SQLite (radar.db), indexée par
+// arrondissement et par date, pour ne pas alourdir la base principale.
+// ============================================================================
+const RadarSQL = (() => {
+  try {
+    const Database = require('better-sqlite3');
+    const sql = new Database(path.join(DATA_DIR, 'radar.db'));
+    sql.pragma('journal_mode = WAL');
+    sql.exec('CREATE TABLE IF NOT EXISTS fiches (id TEXT PRIMARY KEY, quartier TEXT, date TEXT, type TEXT, surface REAL, ban TEXT, data TEXT)');
+    sql.exec('CREATE INDEX IF NOT EXISTS i_fiches_qd ON fiches (quartier, date)');
+    sql.exec('CREATE INDEX IF NOT EXISTS i_fiches_d ON fiches (date)');
+    sql.exec('CREATE INDEX IF NOT EXISTS i_fiches_ban ON fiches (ban)');
+    sql.exec('CREATE TABLE IF NOT EXISTS couverture (cle TEXT PRIMARY KEY, maj TEXT)');
+    sql.exec('CREATE TABLE IF NOT EXISTS cache (type TEXT, cle TEXT, maj TEXT, data TEXT, PRIMARY KEY (type, cle))');
+    return sql;
+  } catch (e) { console.error('[radar] base indisponible :', e.message); return null; }
+})();
+const RS = RadarSQL ? {
+  put: RadarSQL.prepare('INSERT INTO fiches (id, quartier, date, type, surface, ban, data) VALUES (@id, @quartier, @date, @type, @surface, @ban, @data) ON CONFLICT(id) DO UPDATE SET date = excluded.date, data = excluded.data, surface = excluded.surface, type = excluded.type'),
+  get: RadarSQL.prepare('SELECT data FROM fiches WHERE id = ?'),
+  parBan: RadarSQL.prepare('SELECT id, data FROM fiches WHERE ban = ?'),
+  liste: RadarSQL.prepare('SELECT data FROM fiches WHERE date >= @de AND date <= @a AND (@q = \'\' OR quartier = @q) AND (@t = \'\' OR type = @t) AND surface >= @smin ORDER BY date DESC LIMIT 20000'),
+  cpt: RadarSQL.prepare('SELECT COUNT(*) AS n FROM fiches'),
+  couvGet: RadarSQL.prepare('SELECT maj FROM couverture WHERE cle = ?'),
+  couvSet: RadarSQL.prepare('INSERT INTO couverture (cle, maj) VALUES (?, ?) ON CONFLICT(cle) DO UPDATE SET maj = excluded.maj'),
+  cacheGet: RadarSQL.prepare('SELECT maj, data FROM cache WHERE type = ? AND cle = ?'),
+  cacheSet: RadarSQL.prepare('INSERT INTO cache (type, cle, maj, data) VALUES (?, ?, ?, ?) ON CONFLICT(type, cle) DO UPDATE SET maj = excluded.maj, data = excluded.data')
+} : null;
+const rsLire = (row) => { try { return JSON.parse(row.data); } catch (e) { return null; } };
+function rsEcrire(f) { RS.put.run({ id: f.id, quartier: f.quartier, date: String(f.dpeDate || '').slice(0, 10), type: f.type, surface: f.surface || 0, ban: f.identifiantBan || '', data: JSON.stringify(f) }); }
+function rsFiche(id) { const r = RS.get.get(id); return r ? rsLire(r) : null; }
+// Petits caches (sociétés, annonces, contacts, prix) : un objet « db-like »
+// rempli pour une clé, pour réutiliser radarDirigeants & co tels quels.
+function avecCache(type, champ, cle, maxJours, fn) {
+  const r = RS.cacheGet.get(type, cle);
+  if (r && Date.now() - radarAnnee(r.maj) < maxJours * 864e5) { try { return Promise.resolve(JSON.parse(r.data)); } catch (e) { /* recalcul */ } }
+  const tmp = {}; tmp[champ] = {};
+  return fn(tmp).then((v) => { const val = v || tmp[champ][cle]; if (val) RS.cacheSet.run(type, cle, nowISO(), JSON.stringify(val)); return val; });
+}
+const cacheLu = (type, cle) => { const r = RS && RS.cacheGet.get(type, cle); try { return r ? JSON.parse(r.data) : null; } catch (e) { return null; } };
 
-function radarAvecCalculs(ctx, f) {
-  const acq = radarAcquereurs(ctx, f);
-  const g = Object.assign({}, f);
-  g.etiquettes = radarEtiquettes(f, f.identifiantBan ? (ctx.parBan[f.identifiantBan] || 1) : 1);
-  g.acquereurs = { club: acq.club.length, leads: acq.leads.length, aReconfirmer: acq.club.concat(acq.leads).filter((x) => x.aReconfirmer).length };
-  g.score = radarScore(g, acq);
-  g.prioritaire = g.score >= 60;
-  // Niveau d'enrichissement : ce que la fiche sait déjà (sur 10).
-  const p = f.proprietaire || {};
-  const points = [
-    ['étage', f.etage != null], ['porte', !!f.porte], ['propriétaire', p.statut === 'identifie'], ['dirigeant', !!p.dirigeant], ['âge', !!(p.dirigeant && p.dirigeant.age)],
-    ['annonces légales', !!p.bodacc], ['autres biens', !!p.nbBiens], ['ventes passées', !!f.ventes], ['prix', !!f.prixBas],
-    ['LinkedIn / site', !!(p.contacts && ((p.contacts.linkedin || []).length || p.contacts.site))]
-  ];
-  g.enrichissement = { n: points.filter((x) => x[1]).length, max: points.length, manque: points.filter((x) => !x[1]).map((x) => x[0]) };
-  return { fiche: g, acq: acq };
+// ---- Périodes de DPE ----
+function radarPeriode(code) {
+  const j = (n) => new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
+  const today = j(0);
+  if (code === 'aujourdhui') return { de: j(1), a: today, recent: true, libelle: 'aujourd’hui' };
+  if (code === 'semaine') return { de: j(7), a: today, recent: true, libelle: 'cette semaine' };
+  if (code === 'mois' || !code) return { de: j(31), a: today, recent: true, libelle: 'ce mois-ci' };
+  if (code === '3mois') return { de: j(92), a: today, recent: false, libelle: 'ces 3 derniers mois' };
+  if (/^\d{4}$/.test(code)) return { de: code + '-01-01', a: code + '-12-31', recent: false, annee: code, libelle: 'en ' + code };
+  return radarPeriode('mois');
+}
+// ---- Chargement des DPE (à la demande, puis gardés) ----
+const RADAR_CHARGEMENTS = {};
+function radarCouvertureCle(arr, per) { return arr.quartier + '|' + (per.recent ? 'recent' : per.annee || per.de); }
+function radarCouvert(arr, per) {
+  const r = RS.couvGet.get(radarCouvertureCle(arr, per));
+  if (!r) return false;
+  const age = Date.now() - radarAnnee(r.maj);
+  return per.recent ? age < 6 * 3600e3 : (per.annee && Number(per.annee) < new Date().getFullYear() ? true : age < 24 * 3600e3);
+}
+async function radarCharger(cle, arrs, per) {
+  if (RADAR_CHARGEMENTS[cle] && RADAR_CHARGEMENTS[cle].enCours) return;
+  const job = RADAR_CHARGEMENTS[cle] = { enCours: true, faits: 0, total: arrs.length, lus: 0, erreurs: [] };
+  const annee = (pmMeta() || {}).annee || null;
+  // Les périodes récentes chargent 31 jours d'un coup (aujourd'hui, semaine et mois en même temps).
+  const crit = per.recent ? { depuis: radarPeriode('mois').de, jusqua: '' } : { depuis: per.de, jusqua: per.a };
+  await enParallele(arrs, 4, async (arr) => {
+    try {
+      const res = await radarDpeArrondissement(arr, crit, 4000);
+      const ecrire = RadarSQL.transaction((liste) => liste.forEach((x) => {
+        const f = radarFicheDepuisDpe(x, arr);
+        const ancien = rsFiche(f.id);
+        if (ancien) { f.statut = ancien.statut; f.historique = ancien.historique; f.leadId = ancien.leadId; f.rappel = ancien.rappel; f.proprietaire = ancien.proprietaire; f.ventes = ancien.ventes; }
+        else { f.statut = 'a_revoir'; f.historique = []; f.cree = nowISO(); }
+        if (!f.proprietaire || f.proprietaire.millesime !== annee || f.proprietaire.statut === 'fichier_absent') {
+          const p = radarProprietaire(f);
+          if (p.statut === 'identifie') p.nbBiens = radarBiensSociete(p.siren).length || 1;
+          p.millesime = annee; f.proprietaire = p;
+        }
+        rsEcrire(f);
+      }));
+      ecrire(res);
+      job.lus += res.length;
+      RS.couvSet.run(radarCouvertureCle(arr, per), nowISO());
+      if (per.recent) RS.couvSet.run(arr.quartier + '|recent', nowISO());
+      PM_CACHE.clear();
+    } catch (e) { job.erreurs.push(arr.label + ' : ' + e.message); }
+    job.faits++;
+  });
+  job.enCours = false;
+  console.log('[radar] chargement ' + cle + ' : ' + job.lus + ' DPE');
+  radarEnrichirFond(arrs, per);
+}
+// En tâche de fond : enrichit d'avance les fiches les plus prometteuses
+// (propriétaire société identifié, DPE le plus récent) pour que la liste
+// montre déjà gérant, annonces et contacts.
+let RADAR_FOND = false;
+async function radarEnrichirFond(arrs, per) {
+  if (RADAR_FOND) return;
+  RADAR_FOND = true;
+  try {
+    const rows = [];
+    arrs.forEach((a) => RS.liste.all({ de: per.de, a: per.a + 'z', q: a.quartier, t: '', smin: 0 }).forEach((r) => { const f = rsLire(r); if (f && !f.enrichiLe && f.proprietaire && f.proprietaire.statut === 'identifie' && !f.proprietaire.institutionnel) rows.push(f); }));
+    rows.sort((a, b) => radarAnnee(b.dpeDate) - radarAnnee(a.dpeDate));
+    await enParallele(rows.slice(0, 80), 2, async (f) => { try { await radarEnrichirFiche(f); } catch (e) { /* suivante */ } });
+  } finally { RADAR_FOND = false; }
+}
+// Les fiches de l'ancienne version (dans la base principale) passent dans radar.db.
+setTimeout(() => {
+  if (!RS) return;
+  const db = readDb();
+  if (!Array.isArray(db.radarFiches) || !db.radarFiches.length) return;
+  RadarSQL.transaction((l) => l.forEach((f) => { if (f && f.id && f.quartier) rsEcrire(f); }))(db.radarFiches);
+  console.log('[radar] ' + db.radarFiches.length + ' anciennes fiches déplacées dans radar.db');
+  db.radarFiches = []; db.radarSocietes = {}; db.radarBodacc = {}; db.radarContacts = {};
+  writeDb(db);
+}, 20 * 1000);
+// Toutes les heures : les DPE du mois pour tout Paris (pour « aujourd'hui »).
+if (RS) {
+  const rafraichir = () => { const per = radarPeriode('mois'); const arrs = RADAR_ARRONDISSEMENTS.filter((a) => !radarCouvert(a, per)); if (arrs.length) radarCharger('auto|recent', arrs, per); };
+  setTimeout(rafraichir, 90 * 1000);
+  setInterval(rafraichir, 3600e3).unref();
 }
 
-app.get('/api/radar', requireAdmin, (req, res) => {
+// ---- Chances de vendre : signaux, chacun expliqué ----
+function radarChances(f, acq, nbDpeAdresse) {
+  const p = f.proprietaire || {}; const sig = [];
+  const add = (pts, txt, type) => sig.push({ pts: pts, txt: txt, type: type || 'plus' });
+  const jours = Math.floor((Date.now() - radarAnnee(f.dpeDate)) / 864e5);
+  if (jours <= 7) add(20, 'DPE fait il y a ' + (jours <= 1 ? 'moins de 2 jours' : jours + ' jours') + ' : il est obligatoire pour vendre ou louer, le logement est sans doute en train de changer de main.');
+  else if (jours <= 31) add(14, 'DPE fait il y a ' + jours + ' jours : obligatoire avant une vente ou une location.');
+  else if (jours <= 92) add(10, 'DPE fait il y a ' + Math.round(jours / 30) + ' mois.');
+  else add(3, 'DPE fait il y a plus de 3 mois.');
+  if (f.dpe === 'G') add(15, 'Classé G : déjà interdit à la location depuis 2025 — beaucoup de propriétaires bailleurs vendent.');
+  else if (f.dpe === 'F') add(12, 'Classé F : interdit à la location en 2028 — le propriétaire doit choisir entre travaux et vente.');
+  if (nbDpeAdresse >= 3) add(8, nbDpeAdresse + ' DPE dans l’immeuble en un an : l’immeuble bouge (succession, vente à la découpe, ravalement…).');
+  else if (nbDpeAdresse === 2) add(4, '2 DPE dans l’immeuble en un an.');
+  const an = new Date().getFullYear();
+  if (p.statut === 'identifie') {
+    if (p.institutionnel) add(-20, 'Propriétaire institutionnel (banque, assureur, bailleur, collectivité) : vend rarement un logement isolé.', 'moins');
+    if (p.nbBiens === 1) add(10, (p.estSci ? 'SCI' : 'Société') + ' qui ne possède que ce bien à Paris : une décision de vente dépend d’une ou deux personnes.');
+    if (p.immeubleEntier) add(4, 'La société possède tout l’immeuble.');
+    if (p.dirigeant && p.dirigeant.age >= 70) add(10, 'Gérant de ' + p.dirigeant.age + ' ans : transmission ou succession à préparer.');
+    (p.bodacc || []).forEach((a) => {
+      const y = Number(String(a.date || '').slice(0, 4)); const t = radarNorm(a.famille + ' ' + a.type + ' ' + a.detail);
+      if (/dissolution|liquidation/.test(t) && y >= an - 2 && !sig.some((x) => x.k === 'diss')) sig.push({ pts: 20, txt: 'Dissolution ou liquidation publiée en ' + y + ' : les biens de la société vont être vendus.', type: 'plus', k: 'diss' });
+      else if (/procedure|redressement|sauvegarde/.test(t) && y >= an - 3 && !sig.some((x) => x.k === 'proc')) sig.push({ pts: 15, txt: 'Procédure collective en ' + y + ' : vente d’actifs probable.', type: 'plus', k: 'proc' });
+      else if (/dirigeant|gerant|gerance|administration/.test(t) && y >= an - 1 && !sig.some((x) => x.k === 'ger')) sig.push({ pts: 8, txt: 'Changement de gérant publié en ' + y + '.', type: 'plus', k: 'ger' });
+    });
+  } else if (p.statut === 'non_identifie' || p.statut === 'plusieurs' || p.statut === 'societes_immeuble') {
+    add(0, 'Propriétaire particulier probable : à contacter par courrier ou au porte-à-porte.', 'info');
+  }
+  const v = f.ventes && f.ventes.memeLogement && f.ventes.memeLogement[0];
+  if (v && v.date) {
+    const ans = an - Number(String(v.date).slice(0, 4));
+    if (ans >= 10) add(8, 'Acheté en ' + String(v.date).slice(0, 4) + ' (il y a ' + ans + ' ans) : forte plus-value possible.');
+    else if (ans <= 2) add(-8, 'Acheté récemment (' + String(v.date).slice(0, 4) + ').', 'moins');
+  }
+  const nbClients = (acq.club || []).length + (acq.leads || []).length;
+  if (nbClients) add(Math.min(12, nbClients * 4), nbClients + ' client' + (nbClients > 1 ? 's' : '') + ' du CRM cherche' + (nbClients > 1 ? 'nt' : '') + ' ce type de bien ici : argument fort pour convaincre le propriétaire.');
+  const score = Math.max(0, Math.min(100, sig.reduce((t, x) => t + x.pts, 10)));
+  return { score: score, niveau: score >= 60 ? 'forte' : score >= 40 ? 'moyenne' : 'faible', signaux: sig.filter((x) => x.pts !== 0 || x.type === 'info') };
+}
+function radarCalcul(ctx, f, nbBan) {
+  const acq = radarAcquereurs(ctx, f);
+  const ch = radarChances(f, acq, nbBan || 1);
+  return Object.assign({}, f, { chances: ch, acquereurs: { club: acq.club.length, leads: acq.leads.length, aReconfirmer: acq.club.concat(acq.leads).filter((x) => x.aReconfirmer).length }, _acq: acq });
+}
+function radarLigne(g) {
+  const p = g.proprietaire || {};
+  return { id: g.id, dpeDate: g.dpeDate, dpe: g.dpe, adresse: g.adresse, quartier: g.quartier, etage: g.etage, porte: g.porte, type: g.type, surface: g.surface, statut: g.statut, leadId: g.leadId || null,
+    proprietaire: { statut: p.statut, nom: p.nom, estSci: p.estSci, institutionnel: p.institutionnel, dirigeant: p.dirigeant ? { prenom: p.dirigeant.prenom, nom: p.dirigeant.nom, age: p.dirigeant.age } : null },
+    contact: !!(p.contacts && ((p.contacts.telephones || []).length || (p.contacts.emails || []).length || (p.contacts.linkedin || []).length)),
+    chances: { score: g.chances.score, niveau: g.chances.niveau, raison: (g.chances.signaux.filter((x) => x.pts > 0).sort((a, b) => b.pts - a.pts)[0] || {}).txt || '' },
+    acquereurs: g.acquereurs };
+}
+
+// Liste : période + filtres ; charge les DPE manquants en tâche de fond.
+app.get('/api/radar/liste', requireAdmin, (req, res) => {
+  if (!RS) return res.status(503).json({ error: 'Base du Radar indisponible sur ce serveur.' });
+  const per = radarPeriode(String(req.query.periode || 'mois'));
+  const secteur = RADAR_ARRONDISSEMENTS.some((a) => a.quartier === req.query.secteur) ? String(req.query.secteur) : '';
+  const type = req.query.type === 'Maison' || req.query.type === 'Appartement' ? String(req.query.type) : '';
+  const smin = Math.max(0, Number(req.query.surfaceMin) || 0);
+  const arrs = RADAR_ARRONDISSEMENTS.filter((a) => !secteur || a.quartier === secteur);
+  const manquants = arrs.filter((a) => !radarCouvert(a, per));
+  const cleCharg = (secteur || 'paris') + '|' + (per.recent ? 'recent' : per.annee || per.de);
+  if (manquants.length) radarCharger(cleCharg, manquants, per);
   const db = readDb();
   const ctx = radarContexte(db);
-  const recherches = db.radarRecherches || [];
-  const rec = recherches.find((r) => r.id === req.query.recherche) || (req.query.recherche === 'tout' ? null : recherches[0]) || null;
-  const ids = rec ? new Set(rec.ficheIds || []) : null;
-  const fiches = (db.radarFiches || []).filter((f) => !ids || ids.has(f.id)).map((f) => radarAvecCalculs(ctx, f).fiche).filter((f) => {
-    const c = rec && rec.criteres; if (!c || !c.proprio) return true;
-    const p = f.proprietaire || {};
-    return c.proprio === 'sci' ? p.estSci : p.statut === 'identifie';
-  }).sort((a, b) => b.enrichissement.n - a.enrichissement.n || b.score - a.score);
-  // Secteurs prioritaires : fiches, propriétaires identifiés, acquéreurs.
-  const secteurs = RADAR_ARRONDISSEMENTS.map((a) => {
-    const fs_ = fiches.filter((f) => f.quartier === a.quartier);
-    const recherches = ctx.clients.filter((x) => x.c.quartiers.indexOf(a.quartier) > -1).length;
-    return { quartier: a.quartier, label: a.label, fiches: fs_.length, identifies: fs_.filter((f) => f.proprietaire && f.proprietaire.statut === 'identifie').length, acquereurs: recherches, poids: fs_.length + 3 * fs_.filter((f) => f.proprietaire && f.proprietaire.statut === 'identifie').length + 10 * recherches };
-  }).sort((a, b) => b.poids - a.poids);
-  const meta = pmMeta();
-  // Liste allégée (le détail complet est servi par GET /api/radar/:id).
-  const legere = (f) => {
-    const p = f.proprietaire || {};
-    const c = p.contacts || {};
-    return Object.assign({}, f, { ventes: undefined, historique: (f.historique || []).filter((h) => h.action === 'statut').slice(-3),
-      proprietaire: { statut: p.statut, nom: p.nom, siren: p.siren, estSci: p.estSci, institutionnel: p.institutionnel, societesImmeuble: p.societesImmeuble, confiance: p.confiance,
-        dirigeant: p.dirigeant ? { prenom: p.dirigeant.prenom, nom: p.dirigeant.nom, age: p.dirigeant.age } : null, bodacc: p.bodacc ? p.bodacc.map(() => 1) : null,
-        contacts: { linkedin: (c.linkedin || []).map(() => 1), site: c.site ? 1 : null, telephones: (c.telephones || []).map(() => 1) } } });
-  };
-  res.json({ ok: true, fiches: fiches.map(legere), secteurs: secteurs, recherche: rec ? Object.assign({}, rec, { ficheIds: undefined, libelle: radarLibelleCriteres(rec.criteres) }) : null,
-    job: rec ? radarJob(rec.id) : null, recherches: recherches.map((r) => ({ id: r.id, libelle: radarLibelleCriteres(r.criteres), majLe: r.majLe, nb: (r.ficheIds || []).length })),
-    exa: !!process.env.EXA_API_KEY, log: (db.radarLog || []).slice(0, 5),
-    proprietaires: { disponible: !!meta, millesime: meta ? meta.annee : null, lignes: meta ? meta.lignes : 0, import: PM_IMPORT } });
+  const rows = RS.liste.all({ de: per.de, a: per.a + 'z', q: secteur, t: type, smin: smin }).map(rsLire).filter(Boolean);
+  // DPE par immeuble sur un an (« immeuble en mouvement »).
+  const parBan = {};
+  rows.forEach((f) => { if (f.identifiantBan) parBan[f.identifiantBan] = (parBan[f.identifiantBan] || 0) + 1; });
+  let liste = rows.map((f) => radarCalcul(ctx, f, parBan[f.identifiantBan]));
+  // Le chiffre du jour : DPE de la semaine qui correspondent à un client.
+  const semaine = radarPeriode('semaine').de; const hier = radarPeriode('aujourdhui').de;
+  const avecClient = (g) => g.acquereurs.club + g.acquereurs.leads > 0;
+  const recents = RS.liste.all({ de: semaine, a: per.a + 'z', q: '', t: '', smin: 0 }).map(rsLire).filter(Boolean).map((f) => radarCalcul(ctx, f, 1));
+  const une = { jour: recents.filter((g) => String(g.dpeDate) >= hier && avecClient(g)).length, semaine: recents.filter(avecClient).length, semaineTotal: recents.length };
+  if (req.query.client === '1') liste = liste.filter(avecClient);
+  if (req.query.proprio === 'societe') liste = liste.filter((g) => g.proprietaire && g.proprietaire.statut === 'identifie');
+  if (req.query.proprio === 'particulier') liste = liste.filter((g) => !g.proprietaire || g.proprietaire.statut !== 'identifie');
+  if (req.query.masquerEcartes !== '0') liste = liste.filter((g) => g.statut !== 'ecarte');
+  const tri = String(req.query.tri || 'chances');
+  const d = (g) => radarAnnee(g.dpeDate);
+  liste.sort(tri === 'ancien' ? (a, b) => d(a) - d(b) : tri === 'recent' ? (a, b) => d(b) - d(a) : (a, b) => b.chances.score - a.chances.score || d(b) - d(a));
+  const page = Math.max(1, Number(req.query.page) || 1);
+  const job = RADAR_CHARGEMENTS[cleCharg] || null;
+  res.json({ ok: true, periode: per, total: liste.length, page: page, lignes: liste.slice((page - 1) * 50, page * 50).map(radarLigne), une: une,
+    chargement: job && job.enCours ? { faits: job.faits, total: job.total, lus: job.lus } : null, erreurs: job ? job.erreurs.slice(0, 3) : [],
+    proprietaires: { disponible: !!pmMeta(), millesime: (pmMeta() || {}).annee || null, import: PM_IMPORT }, exa: !!process.env.EXA_API_KEY,
+    plafond: rows.length >= 20000 });
 });
-app.get('/api/radar/:id', requireAdmin, (req, res) => {
-  const db = readDb();
-  const f = (db.radarFiches || []).find((x) => x.id === req.params.id);
+
+// Fiche complète. ?enrichir=1 : lance (et attend, 25 s max) toutes les recherches.
+async function radarEnrichirFiche(f) {
+  const p = f.proprietaire || {};
+  const fin = Date.now() + 25000;
+  const avant = (pr) => Promise.race([pr, new Promise((r) => setTimeout(r, Math.max(1000, fin - Date.now())))]);
+  const t = [];
+  if (p.statut === 'identifie' && /^\d{9}$/.test(p.siren || '')) {
+    t.push(avant(avecCache('soc', 'radarSocietes', p.siren, 30, (tmp) => radarDirigeants(tmp, p.siren)).catch(() => null)).then(() => avant(process.env.EXA_API_KEY ? avecCache('contacts', 'radarContacts', p.siren, 60, (tmp) => { tmp.radarSocietes = {}; tmp.radarSocietes[p.siren] = cacheLu('soc', p.siren) || {}; return radarContactsSociete(tmp, p.siren); }).catch(() => null) : Promise.resolve(null))));
+    t.push(avant(avecCache('bodacc', 'radarBodacc', p.siren, 30, (tmp) => radarBodacc(tmp, p.siren)).catch(() => null)));
+  }
+  if (!f.ventes && f.lat) t.push(avant(radarVentesAdresse(f).then((v) => { if (v) f.ventes = v; }).catch(() => null)));
+  const arr = RADAR_ARRONDISSEMENTS.find((a) => a.insee === f.insee);
+  if (arr) t.push(avant(avecCache('prix', 'radarPrix', arr.insee + '|' + f.type, 30, (tmp) => radarPrixM2(tmp, arr, f.type)).catch(() => null)));
+  await Promise.all(t);
+  radarAppliquerCache(f);
+  f.enrichiLe = nowISO();
+  rsEcrire(f);
+  return f;
+}
+function radarAppliquerCache(f) {
+  const p = f.proprietaire || {};
+  if (p.siren) {
+    const soc = cacheLu('soc', p.siren);
+    if (soc) { const d = (soc.dirigeants || []).find((x) => x.nom); p.dirigeant = d || null; p.dirigeants = soc.dirigeants; p.societe = { creation: soc.creation, siege: soc.siege, etat: soc.etat, nomComplet: soc.nomComplet }; }
+    const bo = cacheLu('bodacc', p.siren); if (bo) p.bodacc = bo.annonces;
+    const ct = cacheLu('contacts', p.siren); if (ct) p.contacts = { linkedin: ct.linkedin, site: ct.site, telephones: ct.telephones, emails: ct.emails };
+  }
+  const px = cacheLu('prix', f.insee + '|' + f.type);
+  if (px && px.m2 && f.surface) { f.prixM2 = px.m2; f.prixBas = Math.round(f.surface * px.m2 * 0.93 / 10000) * 10000; f.prixHaut = Math.round(f.surface * px.m2 * 1.07 / 10000) * 10000; }
+}
+app.get('/api/radar/fiche/:id', requireAdmin, async (req, res) => {
+  if (!RS) return res.status(503).json({ error: 'Base du Radar indisponible.' });
+  let f = rsFiche(req.params.id);
   if (!f) return res.status(404).json({ error: 'Fiche introuvable.' });
-  const { fiche, acq } = radarAvecCalculs(radarContexte(db), f);
-  const p = fiche.proprietaire || {};
-  res.json({ ok: true, fiche: fiche, acquereurs: acq,
-    biensSociete: p.statut === 'identifie' ? radarBiensSociete(p.siren).slice(0, 40) : [],
-    societe: p.siren && db.radarSocietes ? db.radarSocietes[p.siren] || null : null,
-    memeAdresse: (db.radarFiches || []).filter((x) => x.id !== f.id && x.identifiantBan && x.identifiantBan === f.identifiantBan).map((x) => ({ id: x.id, etage: x.etage, surface: x.surface, dpeDate: x.dpeDate, dpe: x.dpe })) });
-});
-app.post('/api/radar/recherche', requireAdmin, (req, res) => {
+  if (req.query.enrichir === '1' && (!f.enrichiLe || Date.now() - radarAnnee(f.enrichiLe) > 7 * 864e5)) f = await radarEnrichirFiche(f);
+  else radarAppliquerCache(f);
   const db = readDb();
-  const criteres = radarCriteresPropres((req.body && req.body.criteres) || {});
-  const cle = JSON.stringify(criteres);
-  db.radarRecherches = db.radarRecherches || [];
-  let rec = db.radarRecherches.find((r) => JSON.stringify(r.criteres) === cle);
-  if (rec) db.radarRecherches = [rec].concat(db.radarRecherches.filter((r) => r !== rec));
-  else { rec = { id: uid('rr'), criteres: criteres, cree: nowISO(), ficheIds: [] }; db.radarRecherches.unshift(rec); }
-  db.radarRecherches = db.radarRecherches.slice(0, 12);
-  writeDb(db);
-  if (!(RADAR_JOBS[rec.id] || {}).enCours) radarRechercher(rec.id, criteres);
-  res.json({ ok: true, recherche: { id: rec.id, libelle: radarLibelleCriteres(criteres) }, job: RADAR_JOBS[rec.id] });
+  const memes = RS.parBan.all(f.identifiantBan || '-').map(rsLire).filter((x) => x && x.id !== f.id);
+  const nbBan = 1 + memes.filter((x) => Date.now() - radarAnnee(x.dpeDate) < 365 * 864e5).length;
+  const g = radarCalcul(radarContexte(db), f, nbBan);
+  const p = g.proprietaire || {};
+  const agent = [req.lead.prenom, req.lead.nom].filter(Boolean).join(' ');
+  res.json({ ok: true, fiche: Object.assign({}, g, { _acq: undefined }), acquereurs: g._acq,
+    biensSociete: p.statut === 'identifie' ? radarBiensSociete(p.siren).slice(0, 30) : [],
+    memeImmeuble: memes.slice(0, 12).map((x) => ({ id: x.id, etage: x.etage, surface: x.surface, dpeDate: x.dpeDate, dpe: x.dpe })),
+    agent: { nom: agent, email: req.lead.email || '', tel: req.lead.tel || '' }, lead: g.leadId ? (db.leads.find((l) => l.id === g.leadId) ? { id: g.leadId } : null) : null });
 });
-app.delete('/api/radar/recherche/:id', requireAdmin, (req, res) => {
-  const db = readDb();
-  db.radarRecherches = (db.radarRecherches || []).filter((r) => r.id !== req.params.id);
-  writeDb(db);
-  res.json({ ok: true });
-});
-app.patch('/api/radar/:id', requireAdmin, (req, res) => {
-  const db = readDb();
-  const f = (db.radarFiches || []).find((x) => x.id === req.params.id);
+app.patch('/api/radar/fiche/:id', requireAdmin, (req, res) => {
+  const f = RS && rsFiche(req.params.id);
   if (!f) return res.status(404).json({ error: 'Fiche introuvable.' });
   const b = req.body || {};
   const qui = [req.lead.prenom, req.lead.nom].filter(Boolean).join(' ');
   if (['a_revoir', 'en_cours', 'contacte', 'ecarte'].indexOf(b.statut) > -1 && b.statut !== f.statut) {
-    f.historique = (f.historique || []).concat([{ at: nowISO(), par: qui, action: 'statut', valeur: b.statut, motif: String(b.motif || '').slice(0, 200) }]);
+    f.historique = (f.historique || []).concat([{ at: nowISO(), par: qui, action: 'statut', valeur: b.statut }]);
     f.statut = b.statut;
   }
   if (typeof b.note === 'string' && b.note.trim()) f.historique = (f.historique || []).concat([{ at: nowISO(), par: qui, action: 'note', valeur: b.note.trim().slice(0, 1000) }]);
   if (b.rappel !== undefined) f.rappel = b.rappel ? String(b.rappel).slice(0, 10) : null;
+  rsEcrire(f);
+  res.json({ ok: true, statut: f.statut, historique: f.historique, rappel: f.rappel || null });
+});
+// « Ajouter aux prospects » : crée le vendeur dans les leads du CRM.
+app.post('/api/radar/fiche/:id/prospect', requireAdmin, (req, res) => {
+  const f = RS && rsFiche(req.params.id);
+  if (!f) return res.status(404).json({ error: 'Fiche introuvable.' });
+  radarAppliquerCache(f);
+  const db = readDb();
+  if (f.leadId && db.leads.some((l) => l.id === f.leadId)) return res.json({ ok: true, leadId: f.leadId, deja: true });
+  const p = f.proprietaire || {}; const d = p.dirigeant || {};
+  const c = p.contacts || {};
+  const ou = f.adresse + (f.etage != null ? ', ' + (f.etage === 0 ? 'RDC' : f.etage + 'e étage') : '') + (f.porte ? ', porte ' + f.porte : '');
+  const lead = {
+    id: uid('l'), prenom: p.statut === 'identifie' ? (d.prenom || '') : '', nom: p.statut === 'identifie' ? (d.nom ? d.nom : p.nom) : 'Propriétaire ' + ou,
+    email: ((c.emails || [])[0] || '').toLowerCase(), tel: (c.telephones || [])[0] || '', ville: 'Paris', adresse: p.societe ? p.societe.siege || '' : '', adresseBien: ou,
+    projet: 'vendeur', role: 'membre', type: p.statut === 'identifie' ? (p.estSci ? 'sci' : 'societe') : 'personne', natureLead: p.statut === 'identifie' ? 'societe' : 'personne',
+    raisonSociale: p.statut === 'identifie' ? p.nom : '', representant: d.nom ? (d.prenom + ' ' + d.nom) : '', siren: p.siren || '', dirigeants: p.dirigeants || [],
+    source: 'Radar', statut: 'prospect', pipeline: 'a_contacter', bienAVendre: true, typeBien: f.type, surfaceMin: f.surface || 0, quartiers: [f.quartier], dpe: f.dpe || '',
+    notes: 'Repéré par le Radar : DPE ' + (f.dpe || '?') + ' du ' + String(f.dpeDate || '').split('-').reverse().join('/') + ', ' + f.type.toLowerCase() + ' de ' + f.surface + ' m² — ' + ou + '.' + ((c.linkedin || [])[0] ? '\nLinkedIn : ' + c.linkedin[0].url : ''),
+    tags: ['Radar', 'Futur vendeur'], radarFicheId: f.id, budgetMin: 0, budgetMax: 0, creePar: req.lead.id, agentId: estAgentSimple(roleOf(req.lead)) ? req.lead.id : null, cree: nowISO()
+  };
+  db.leads.push(lead);
   writeDb(db);
-  res.json({ ok: true, fiche: radarAvecCalculs(radarContexte(db), f).fiche });
+  f.leadId = lead.id;
+  f.statut = f.statut === 'a_revoir' ? 'en_cours' : f.statut;
+  f.historique = (f.historique || []).concat([{ at: nowISO(), par: [req.lead.prenom, req.lead.nom].filter(Boolean).join(' '), action: 'note', valeur: 'Ajouté aux prospects du CRM' }]);
+  rsEcrire(f);
+  res.json({ ok: true, leadId: lead.id });
 });
 
 // ---- Sociétés domiciliées à une adresse (SIRENE, API publique gratuite) ----
