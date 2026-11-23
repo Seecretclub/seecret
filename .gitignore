@@ -16,3 +16,9 @@ node_modules/
 /tmp/
 *.local
 uploads/
+
+# Base SQLite (vit sur le volume en production)
+*.db
+*.db-wal
+*.db-shm
+data.json.importe

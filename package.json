@@ -11,6 +11,7 @@
     "@sentry/node": "^10.78.0",
     "@simplewebauthn/browser": "^14.0.0",
     "@simplewebauthn/server": "^14.1.0",
+    "better-sqlite3": "^12.11.1",
     "cors": "^2.8.5",
     "dotenv": "^18.0.10",
     "express": "^4.19.2",
@@ -18,5 +19,8 @@
     "multer": "^2.5.0",
     "nodemailer": "^10.5.0",
     "yauzl": "^3.4.0"
+  },
+  "engines": {
+    "node": "22.x"
   }
 }
