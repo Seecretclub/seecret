@@ -4477,7 +4477,7 @@ app.get('/api/robot/aucadastre-owners', requireAdmin, async (req, res) => {
 const PM_DIR = path.join(DATA_DIR, 'pm-locaux');
 const PM_DATASET = 'fichiers-des-locaux-et-des-parcelles-des-personnes-morales';
 const PM_ATTACHMENTS = 'https://data.economie.gouv.fr/api/explore/v2.1/catalog/datasets/' + PM_DATASET + '/attachments';
-const PM_DEPTS = String(process.env.PM_DEPTS || '75,92,94').split(',').map((s) => s.trim()).filter(Boolean);
+const PM_DEPTS = String(process.env.PM_DEPTS || '75').split(',').map((s) => s.trim()).filter(Boolean);
 const PM_IMPORT = { enCours: false, etape: '', erreur: '', lignes: 0, debut: null };
 
 // Colonnes compactes d'une ligne indexée (tableau JSON, pour rester léger sur disque)
@@ -4578,7 +4578,7 @@ function pmLireBucket(sousDossier, nom) {
   if (c && c.mtime === st.mtimeMs) return c.rows;
   const rows = fs.readFileSync(fichier, 'utf8').split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch (e) { return null; } }).filter(Boolean);
   PM_CACHE.set(cle, { mtime: st.mtimeMs, rows });
-  if (PM_CACHE.size > 8) PM_CACHE.delete(PM_CACHE.keys().next().value);
+  if (PM_CACHE.size > 4) PM_CACHE.delete(PM_CACHE.keys().next().value);
   return rows;
 }
 
@@ -4706,8 +4706,11 @@ async function pmImporter(raison) {
       if (!flux[cle]) flux[cle] = fs.createWriteStream(path.join(tmpDir, dossier, nom + '.ndjson'));
       flux[cle].write(ligne);
     };
+    // Le zip national (plusieurs centaines de Mo) va dans le dossier temporaire du
+    // conteneur, pas sur le volume : seul l'index final (Paris) occupe le disque.
+    const tmpZip = fs.mkdtempSync(path.join(require('os').tmpdir(), 'pm-'));
     for (const f of fichiers) {
-      const zipLocal = path.join(tmpDir, 'source.zip');
+      const zipLocal = path.join(tmpZip, 'source.zip');
       PM_IMPORT.etape = 'Téléchargement du fichier DGFiP (' + f.id + ')…';
       await pmTelecharger(f.url, zipLocal);
       PM_IMPORT.etape = 'Indexation des locaux (' + PM_DEPTS.join(', ') + ')…';
@@ -4725,9 +4728,10 @@ async function pmImporter(raison) {
         if (siren) ecrire('siren', (/^\d{2}/.test(siren) ? siren.slice(0, 2) : 'XX'), json);
         communes[insee] = c[3].trim();
         PM_IMPORT.lignes++;
-      }, tmpDir);
+      }, tmpZip);
       try { fs.unlinkSync(zipLocal); } catch (e) {}
     }
+    fs.rmSync(tmpZip, { recursive: true, force: true });
     await fermerTout();
     if (!PM_IMPORT.lignes) throw new Error('aucune ligne retenue pour les départements ' + PM_DEPTS.join(', '));
     fs.writeFileSync(path.join(tmpDir, 'meta.json'), JSON.stringify({ annee, importeLe: nowISO(), lignes: PM_IMPORT.lignes, departements: PM_DEPTS, communes, source: fichiers.map((f) => f.url) }, null, 1));
@@ -4807,6 +4811,344 @@ app.get('/api/robot/pm/siren/:siren', requireAdmin, (req, res) => {
   });
   const biens = Object.values(parAdresse).map((b) => Object.assign(b, { lots: b.lots.sort(pmTriNiveau) })).sort((a, b) => a.insee.localeCompare(b.insee) || a.adresse.localeCompare(b.adresse));
   res.json({ ok: true, disponible: true, millesime: meta.annee, siren, nom: lots[0] ? lots[0].nom : '', type: lots[0] ? lots[0].type : '', nbLots: lots.length, biens, departements: meta.departements });
+});
+
+// ============================================================================
+// RADAR — fiches « bien à prospecter » (inspiré des outils de prospection pro)
+// ----------------------------------------------------------------------------
+// 1. Collecte : les DPE récents (ADEME, gratuit) des 20 arrondissements de
+//    Paris. Un DPE récent = un logement qui bouge (vente, location, travaux).
+//    Le DPE donne l'adresse, la surface, l'étage, souvent la porte.
+// 2. Propriétaire : fichier DGFiP des locaux des personnes morales (sociétés
+//    uniquement — les particuliers sont protégés par le secret fiscal). On
+//    cherche la société qui possède un lot au même étage (et même porte), ou
+//    tout l'immeuble.
+// 3. Dirigeant : nom, prénom et âge du gérant de la SCI (SIRENE, gratuit).
+// 4. Autres biens de la société (même fichier DGFiP), prix estimé (DVF du
+//    secteur), étiquettes, score.
+// 5. Acquéreurs potentiels : membres du club et leads du CRM dont les
+//    critères (secteur, type, surface, budget, étage, DPE) correspondent.
+// ============================================================================
+const RADAR_ARRONDISSEMENTS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+  .map((n) => ({ quartier: 'p' + n, cp: n === 16 ? '75016' : '750' + String(n).padStart(2, '0'), insee: '751' + String(n).padStart(2, '0'), label: 'Paris ' + n + (n === 1 ? 'ᵉʳ' : 'ᵉ') }));
+const RADAR_ETAT = { enCours: false, etape: '', derniere: null, erreur: '' };
+const RADAR_INSTITUTIONNELS = /\b(ASSURANCE|ASSURANCES|MUTUELLE|BANQUE|CAISSE|CREDIT|SCPI|OPCI|FONCIERE|REIT|HABITAT|LOGEMENT|BAILLEUR|PARIS HABITAT|RIVP|ICF|CDC|ALLIANZ|AXA|GENERALI|MACIF|MAIF|COVEA|AVIVA|PREDICA|AMUNDI|GECINA|ICADE|COVIVIO|UNIBAIL|SOCIETE GENERALE|BNP|LCL)\b/;
+const radarAnnee = (d) => { const t = new Date(d || 0).getTime(); return isFinite(t) ? t : 0; };
+
+async function radarDpeArrondissement(arr, depuis) {
+  const params = new URLSearchParams({
+    size: '200', sort: '-date_reception_dpe',
+    qs: 'code_postal_ban:' + arr.cp + ' AND date_reception_dpe:[' + depuis + ' TO *] AND (type_batiment:appartement OR type_batiment:maison) AND surface_habitable_logement:[25 TO *]',
+    select: 'numero_dpe,date_reception_dpe,adresse_ban,adresse_brut,code_postal_ban,identifiant_ban,type_batiment,surface_habitable_logement,numero_etage_appartement,complement_adresse_logement,complement_adresse_batiment,etiquette_dpe,nombre_niveau_immeuble,_geopoint,annee_construction,periode_construction'
+  });
+  const r = await fetch(ADEME_URL + '?' + params.toString(), { headers: { 'User-Agent': 'Seecret/1.0 (radar)', Accept: 'application/json' }, signal: AbortSignal.timeout(45000) });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error('ADEME ' + r.status);
+  return d.results || [];
+}
+
+function radarFicheDepuisDpe(s, arr) {
+  const comp = analyserComplementAdresse([s.complement_adresse_logement, s.complement_adresse_batiment].filter(Boolean).join(' '));
+  let etage = (s.numero_etage_appartement != null && s.numero_etage_appartement !== '') ? parseInt(s.numero_etage_appartement, 10) : null;
+  if (etage == null && comp.etage) etage = comp.etage === 'RDC' ? 0 : parseInt(comp.etage, 10);
+  if (etage == null) { const e = etageDepuisAdresseBrute(s.adresse_brut); if (e) etage = e === 'RDC' ? 0 : parseInt(e, 10); }
+  const geo = String(s._geopoint || '').split(',').map(Number);
+  return {
+    id: 'rd-' + (s.numero_dpe || uid('x')), numeroDpe: s.numero_dpe || '', dpeDate: s.date_reception_dpe || null, dpe: s.etiquette_dpe || '',
+    adresse: s.adresse_ban || s.adresse_brut || '', cp: s.code_postal_ban || arr.cp, insee: arr.insee, quartier: arr.quartier, identifiantBan: s.identifiant_ban || '',
+    type: /maison/i.test(s.type_batiment || '') ? 'Maison' : 'Appartement', surface: Math.round(Number(s.surface_habitable_logement) || 0),
+    etage: isFinite(etage) ? etage : null, porte: comp.position || comp.porte || '', batiment: comp.batiment || '', escalier: comp.escalier || '',
+    niveauxImmeuble: Number(s.nombre_niveau_immeuble) || null, annee: s.annee_construction || null, periode: s.periode_construction || '',
+    lat: isFinite(geo[0]) ? geo[0] : null, lon: isFinite(geo[1]) ? geo[1] : null
+  };
+}
+
+// Société propriétaire (fichier DGFiP) : lot au même étage / même porte, ou immeuble entier.
+function radarProprietaire(f) {
+  if (!pmMeta()) return { statut: 'fichier_absent' };
+  const q = pmParserAdresse(f.adresse + ' ' + f.cp);
+  if (!q.insee || !q.numero) return { statut: 'non_identifie' };
+  const lots = pmLotsImmeuble(q).filter((l) => /^[PUN]$/.test(l.droit || 'P'));
+  if (!lots.length) return { statut: 'non_identifie', societesImmeuble: 0 };
+  const sirens = Array.from(new Set(lots.map((l) => l.siren || l.nom)));
+  const immeubleEntier = sirens.length === 1 && lots.length >= 3;
+  const niv = (l) => (/^-?\d+$/.test(String(l.niveau || '').trim()) ? parseInt(l.niveau, 10) : null);
+  let auNiveau = f.etage != null ? lots.filter((l) => niv(l) === f.etage) : [];
+  if (auNiveau.length && f.porte) {
+    const p = pmNorm(f.porte);
+    const memePorte = auNiveau.filter((l) => l.porte && (pmNorm(l.porte) === p || pmNorm(l.porte).indexOf(p.slice(0, 1)) === 0));
+    if (memePorte.length) auNiveau = memePorte;
+  }
+  const sirensNiveau = Array.from(new Set(auNiveau.map((l) => l.siren || l.nom)));
+  let lot = null; let confiance = '';
+  if (sirensNiveau.length === 1) { lot = auNiveau[0]; confiance = f.porte && auNiveau.some((l) => l.porte) ? 'étage et porte' : 'étage'; }
+  else if (immeubleEntier) { lot = lots[0]; confiance = 'immeuble entier'; }
+  else if (f.type === 'Maison' && sirens.length === 1) { lot = lots[0]; confiance = 'maison'; }
+  const societes = sirens.slice(0, 8).map((k) => { const l = lots.find((x) => (x.siren || x.nom) === k); return { siren: l.siren, nom: l.nom, type: l.type, nbLots: lots.filter((x) => (x.siren || x.nom) === k).length }; });
+  if (!lot) return { statut: auNiveau.length ? 'plusieurs' : 'societes_immeuble', societesImmeuble: sirens.length, societes: societes, lotsSocietes: lots.length };
+  return {
+    statut: 'identifie', confiance: confiance, siren: lot.siren, nom: lot.nom, forme: lot.forme, estSci: lot.type === 'sci',
+    droit: lot.droitLibelle, niveau: lot.niveauLibelle, porte: lot.porte, immeubleEntier: immeubleEntier,
+    lotsImmeuble: lots.length, lotsSociete: lots.filter((x) => x.siren === lot.siren).length, societesImmeuble: sirens.length, societes: societes,
+    institutionnel: RADAR_INSTITUTIONNELS.test(pmNorm(lot.nom))
+  };
+}
+
+// Autres biens de la société dans le fichier (Paris) : adresses distinctes.
+function radarBiensSociete(siren) {
+  if (!siren || !/^\d{9}$/.test(siren)) return [];
+  const lots = pmLireBucket('siren', siren.slice(0, 2)).filter((r) => r[PMC.siren] === siren).map(pmLotDepuisLigne);
+  const par = {};
+  lots.forEach((l) => { const k = l.insee + '|' + l.adresse; par[k] = par[k] || { adresse: l.adresse, insee: l.insee, lots: 0, niveaux: [] }; par[k].lots++; if (l.niveauLibelle && par[k].niveaux.indexOf(l.niveauLibelle) === -1) par[k].niveaux.push(l.niveauLibelle); });
+  return Object.values(par).sort((a, b) => b.lots - a.lots);
+}
+
+// Dirigeants d'une société (SIRENE), mis en cache 30 jours.
+async function radarDirigeants(db, siren) {
+  db.radarSocietes = db.radarSocietes || {};
+  const c = db.radarSocietes[siren];
+  if (c && Date.now() - radarAnnee(c.maj) < 30 * 864e5) return c;
+  const r = await fetch('https://recherche-entreprises.api.gouv.fr/search?q=' + siren + '&per_page=1', { headers: { Accept: 'application/json', 'User-Agent': 'Seecret/1.0 (contact@seecret.fr)' }, signal: AbortSignal.timeout(15000) });
+  if (r.status === 429) throw Object.assign(new Error('SIRENE 429'), { limite: true });
+  const d = await r.json().catch(() => ({}));
+  const e = (d.results || []).find((x) => String(x.siren) === siren) || null;
+  const an = new Date().getFullYear();
+  const out = {
+    maj: nowISO(), trouve: !!e, nomComplet: e ? (e.nom_complet || '') : '', creation: e ? (e.date_creation || '') : '', etat: e ? (e.etat_administratif || '') : '',
+    siege: e && e.siege ? (e.siege.adresse || '') : '',
+    dirigeants: e ? (e.dirigeants || []).slice(0, 4).map((x) => x.type_dirigeant === 'personne morale'
+      ? { societe: x.denomination || '', siren: x.siren || '', qualite: x.qualite || '' }
+      : { prenom: String(x.prenoms || '').split(' ')[0], prenoms: x.prenoms || '', nom: x.nom || '', qualite: x.qualite || '', age: x.annee_de_naissance ? an - Number(String(x.annee_de_naissance).slice(0, 4)) : null }) : []
+  };
+  db.radarSocietes[siren] = out;
+  return out;
+}
+
+// Prix au m² médian de l'arrondissement (DVF, 3 dernières années), cache 30 jours.
+async function radarPrixM2(db, arr, type) {
+  db.radarPrix = db.radarPrix || {};
+  const cle = arr.insee + '|' + type;
+  const c = db.radarPrix[cle];
+  if (c && Date.now() - radarAnnee(c.maj) < 30 * 864e5) return c;
+  const brut = await dvfCerema({ code_insee: arr.insee, anneemut_min: String(new Date().getFullYear() - 3), codtypbien: type === 'Maison' ? '111' : '121' }, 2, { budgetMs: 20000 });
+  const comp = brut.filter((x) => /^vente$/i.test(x.libnatmut || '') && Number(x.nblocmut || 0) <= 2 && Number(x.valeurfonc) > 0 && Number(x.sbati) > 0).map(mutationDvf);
+  const st = statsPrixM2(comp);
+  const out = { maj: nowISO(), m2: st && st.prixM2Median ? Math.round(st.prixM2Median) : null, n: comp.length };
+  db.radarPrix[cle] = out;
+  return out;
+}
+
+// Critères d'un client : sa recherche active (CRM) sinon sa fiche.
+function radarCriteres(db, l) {
+  const r = (db.recherches || []).filter((x) => x.clientId === l.id && x.statut !== 'archivee').sort((a, b) => radarAnnee(b.cree) - radarAnnee(a.cree))[0];
+  const src = r || l;
+  const types = [].concat(r && r.types && r.types.length ? r.types : [], r && r.type ? [r.type] : [], l.typeBien ? [l.typeBien] : []).join(' ').toLowerCase();
+  return {
+    quartiers: (src.quartiers && src.quartiers.length ? src.quartiers : (l.quartiers || [])).map(String),
+    budgetMax: Number((r && r.prixMax) || l.budgetMax || 0), surfaceMin: Number(src.surfaceMin || 0), surfaceMax: Number(src.surfaceMax || 0),
+    maison: /maison/.test(types), appart: /appart/.test(types),
+    etageMin: r ? Number(r.etageMin || 0) : 0, etageMax: r ? Number(r.etageMax || 0) : 0, dpe: r ? String(r.dpe || '') : '',
+    maj: (r && (r.majLe || r.cree)) || l.majCriteres || l.cree || null, source: r ? 'recherche' : 'fiche'
+  };
+}
+// Critère par critère, pour que l'agent voie POURQUOI un client correspond.
+function radarCorrespondance(f, c) {
+  const crit = [];
+  if (!c.quartiers.length || c.quartiers.indexOf(f.quartier) === -1) return null; // secteur obligatoire
+  crit.push({ c: 'Secteur', ok: true, d: labelQuartier(f.quartier) });
+  if (c.maison || c.appart) { const ok = f.type === 'Maison' ? c.maison : c.appart; if (!ok) return null; crit.push({ c: 'Type', ok: true, d: f.type }); }
+  if (c.surfaceMin) { if (f.surface < c.surfaceMin * 0.9) return null; crit.push({ c: 'Surface', ok: true, d: f.surface + ' m² ≥ ' + c.surfaceMin + ' m²' }); }
+  if (c.surfaceMax && f.surface > c.surfaceMax * 1.15) return null;
+  if (c.budgetMax && f.prixBas) { if (f.prixBas > c.budgetMax * 1.1) return null; crit.push({ c: 'Budget', ok: true, d: 'jusqu’à ' + (c.budgetMax >= 1e6 ? String(Math.round(c.budgetMax / 1e4) / 100).replace('.', ',') + ' M€' : Math.round(c.budgetMax / 1000) + ' k€') }); }
+  if (c.etageMin && f.etage != null) { if (f.etage < c.etageMin) return null; crit.push({ c: 'Étage', ok: true, d: (f.etage === 0 ? 'RDC' : f.etage + 'e') + ' ≥ ' + c.etageMin + 'e' }); }
+  if (c.dpe && f.dpe && DPE_ORDER_SERVEUR.indexOf(f.dpe) > DPE_ORDER_SERVEUR.indexOf(c.dpe)) crit.push({ c: 'DPE', ok: false, d: f.dpe + ' (souhaité ' + c.dpe + ' ou mieux) — travaux à prévoir' });
+  const aReconfirmer = !c.maj || Date.now() - radarAnnee(c.maj) > 180 * 864e5;
+  return { criteres: crit, aReconfirmer: aReconfirmer };
+}
+// Contexte calculé une fois par requête (critères de chaque client, DPE par adresse).
+function radarContexte(db) {
+  const clients = db.leads.filter((l) => ROLES_STAFF.indexOf(roleOf(l)) === -1 && l.statut !== 'suspendu' && l.statut !== 'refuse' && l.projet !== 'vendeur')
+    .map((l) => ({ l: l, c: radarCriteres(db, l) })).filter((x) => x.c.quartiers.length);
+  const parBan = {};
+  (db.radarFiches || []).forEach((x) => { if (x.identifiantBan && Date.now() - radarAnnee(x.dpeDate) < 365 * 864e5) parBan[x.identifiantBan] = (parBan[x.identifiantBan] || 0) + 1; });
+  return { clients: clients, parBan: parBan };
+}
+function radarAcquereurs(ctx, f) {
+  const club = []; const leads = [];
+  ctx.clients.forEach(({ l, c }) => {
+    const m = radarCorrespondance(f, c);
+    if (!m) return;
+    const x = { id: l.id, nom: [l.prenom, l.nom].filter(Boolean).join(' '), criteres: m.criteres, aReconfirmer: m.aReconfirmer };
+    (l.statut === 'accepte' ? club : leads).push(x);
+  });
+  return { club: club, leads: leads };
+}
+
+// Étiquettes et score (0-100) : plus c'est haut, plus la fiche mérite un appel.
+function radarEtiquettes(f, nbDpeAdresse) {
+  const t = []; const p = f.proprietaire || {};
+  const jours = Math.floor((Date.now() - radarAnnee(f.dpeDate)) / 864e5);
+  if (p.statut === 'identifie') {
+    if (p.institutionnel) t.push({ id: 'institutionnel', l: 'Investisseur institutionnel' });
+    if (p.immeubleEntier) t.push({ id: 'immeuble-entier', l: 'Immeuble entier à une société' });
+    if (p.nbBiens === 1) t.push({ id: 'sci-un-bien', l: (p.estSci ? 'SCI' : 'Société') + ' d’un seul bien' });
+    else if (p.nbBiens > 1) t.push({ id: 'multi-biens', l: p.nbBiens + ' immeubles à Paris' });
+    if (p.dirigeantAge >= 70) t.push({ id: 'dirigeant-age', l: 'Gérant de ' + p.dirigeantAge + ' ans' });
+  }
+  if (nbDpeAdresse >= 2) t.push({ id: 'immeuble-mouvement', l: 'Immeuble en mouvement · ' + nbDpeAdresse + ' DPE' });
+  if (jours <= 15) t.push({ id: 'dpe-recent', l: 'DPE de moins de 15 jours' });
+  if (f.dpe === 'F' || f.dpe === 'G') t.push({ id: 'passoire', l: 'Passoire thermique (' + f.dpe + ') : location bientôt interdite' });
+  return t;
+}
+function radarScore(f, acq) {
+  const p = f.proprietaire || {}; const tags = (f.etiquettes || []).map((x) => x.id);
+  let s = 20;
+  if (p.statut === 'identifie') s += 20 + (p.confiance === 'étage et porte' ? 5 : 0);
+  if (tags.indexOf('sci-un-bien') > -1) s += 10;
+  if (tags.indexOf('immeuble-entier') > -1) s += 5;
+  if (tags.indexOf('dirigeant-age') > -1) s += 5;
+  if (tags.indexOf('immeuble-mouvement') > -1) s += 8;
+  if (tags.indexOf('dpe-recent') > -1) s += 8;
+  if (tags.indexOf('passoire') > -1) s += 6;
+  if (tags.indexOf('institutionnel') > -1) s -= 25;
+  s += Math.min(18, acq.club.length * 9) + Math.min(12, acq.leads.length * 3);
+  return Math.max(0, Math.min(100, Math.round(s)));
+}
+
+async function radarCollecter(raison) {
+  if (RADAR_ETAT.enCours) return;
+  Object.assign(RADAR_ETAT, { enCours: true, etape: 'Lecture des DPE récents…', erreur: '' });
+  const debut = Date.now();
+  try {
+    const depuis = new Date(Date.now() - 120 * 864e5).toISOString().slice(0, 10);
+    const lus = [];
+    for (const arr of RADAR_ARRONDISSEMENTS) {
+      RADAR_ETAT.etape = 'DPE récents · ' + arr.label + '…';
+      try { (await radarDpeArrondissement(arr, depuis)).forEach((s) => lus.push(radarFicheDepuisDpe(s, arr))); } catch (e) { console.warn('[radar] ADEME ' + arr.label + ' :', e.message); }
+    }
+    let db = readDb();
+    db.radarFiches = Array.isArray(db.radarFiches) ? db.radarFiches : [];
+    const existantes = new Map(db.radarFiches.map((f) => [f.id, f]));
+    // Un logement = une adresse + un étage + une surface : on garde le DPE le plus récent.
+    const cleLogement = (f) => [f.identifiantBan || pmNorm(f.adresse), f.etage, Math.round(f.surface / 3)].join('|');
+    const parLogement = new Map();
+    db.radarFiches.forEach((f) => parLogement.set(cleLogement(f), f));
+    let nouvelles = 0;
+    lus.forEach((f) => {
+      if (existantes.has(f.id)) return;
+      const k = cleLogement(f);
+      const deja = parLogement.get(k);
+      if (deja && radarAnnee(deja.dpeDate) >= radarAnnee(f.dpeDate)) return;
+      if (deja) { Object.assign(deja, f, { id: deja.id, statut: deja.statut, historique: deja.historique }); return; }
+      f.statut = 'a_revoir'; f.cree = nowISO(); f.historique = [];
+      db.radarFiches.push(f); parLogement.set(k, f); nouvelles++;
+    });
+    // Nettoyage : fiches « à revoir » dont le DPE a plus d'un an.
+    db.radarFiches = db.radarFiches.filter((f) => f.statut !== 'a_revoir' || Date.now() - radarAnnee(f.dpeDate) < 365 * 864e5);
+    writeDb(db);
+    // Enrichissement : propriétaire, autres biens, dirigeant, prix.
+    RADAR_ETAT.etape = 'Identification des propriétaires…';
+    db = readDb();
+    const parInsee = {};
+    db.radarFiches.forEach((f) => { (parInsee[f.insee] = parInsee[f.insee] || []).push(f); });
+    for (const insee of Object.keys(parInsee)) {
+      for (const f of parInsee[insee]) {
+        if (f.proprietaire && f.proprietaire.statut !== 'fichier_absent' && f.proprietaire.millesime === (pmMeta() || {}).annee) continue;
+        const p = radarProprietaire(f);
+        if (p.statut === 'identifie') { const biens = radarBiensSociete(p.siren); p.nbBiens = biens.length || 1; }
+        p.millesime = (pmMeta() || {}).annee || null;
+        f.proprietaire = p;
+      }
+      PM_CACHE.clear();
+    }
+    writeDb(db);
+    RADAR_ETAT.etape = 'Dirigeants des sociétés…';
+    db = readDb();
+    const sirens = Array.from(new Set(db.radarFiches.filter((f) => f.proprietaire && f.proprietaire.statut === 'identifie' && /^\d{9}$/.test(f.proprietaire.siren || '')).map((f) => f.proprietaire.siren)));
+    for (const siren of sirens) {
+      if (Date.now() - debut > 20 * 60 * 1000) break;
+      try { await radarDirigeants(db, siren); } catch (e) { if (e.limite) await new Promise((r) => setTimeout(r, 5000)); }
+      await new Promise((r) => setTimeout(r, 350));
+    }
+    RADAR_ETAT.etape = 'Prix des secteurs (DVF)…';
+    for (const arr of RADAR_ARRONDISSEMENTS) {
+      for (const type of ['Appartement', 'Maison']) {
+        if (!db.radarFiches.some((f) => f.insee === arr.insee && f.type === type)) continue;
+        try { await radarPrixM2(db, arr, type); } catch (e) { /* secteur suivant */ }
+      }
+    }
+    db.radarFiches.forEach((f) => {
+      const soc = f.proprietaire && db.radarSocietes && db.radarSocietes[f.proprietaire.siren];
+      if (soc) { const d = soc.dirigeants.find((x) => x.nom); if (d) { f.proprietaire.dirigeant = d; f.proprietaire.dirigeantAge = d.age; } f.proprietaire.dirigeants = soc.dirigeants; }
+      const px = db.radarPrix && db.radarPrix[f.insee + '|' + f.type];
+      if (px && px.m2 && f.surface) { f.prixM2 = px.m2; f.prixBas = Math.round(f.surface * px.m2 * 0.93 / 10000) * 10000; f.prixHaut = Math.round(f.surface * px.m2 * 1.07 / 10000) * 10000; }
+    });
+    db.radarLog = [{ at: nowISO(), raison: raison, dpeLus: lus.length, nouvelles: nouvelles, fiches: db.radarFiches.length, fichierProprietaires: pmMeta() ? pmMeta().annee : null }].concat(db.radarLog || []).slice(0, 30);
+    writeDb(db);
+    Object.assign(RADAR_ETAT, { enCours: false, etape: '', derniere: db.radarLog[0] });
+    console.log('[radar] collecte : ' + lus.length + ' DPE lus, ' + nouvelles + ' nouvelles fiches');
+  } catch (e) {
+    Object.assign(RADAR_ETAT, { enCours: false, etape: '', erreur: String(e.message || e) });
+    console.error('[radar] échec :', e);
+  }
+}
+// Collecte chaque jour vers 6 h (heure du serveur), et au démarrage si rien depuis 24 h.
+setTimeout(() => { const db = readDb(); const d = (db.radarLog || [])[0]; if (!d || Date.now() - radarAnnee(d.at) > 24 * 3600e3) radarCollecter('auto'); }, 3 * 60 * 1000);
+setInterval(() => { if (new Date().getHours() === 6) radarCollecter('quotidien'); }, 3600e3).unref();
+
+function radarAvecCalculs(ctx, f) {
+  const acq = radarAcquereurs(ctx, f);
+  const g = Object.assign({}, f);
+  g.etiquettes = radarEtiquettes(f, f.identifiantBan ? (ctx.parBan[f.identifiantBan] || 1) : 1);
+  g.acquereurs = { club: acq.club.length, leads: acq.leads.length, aReconfirmer: acq.club.concat(acq.leads).filter((x) => x.aReconfirmer).length };
+  g.score = radarScore(g, acq);
+  g.prioritaire = g.score >= 60;
+  return { fiche: g, acq: acq };
+}
+
+app.get('/api/radar', requireAdmin, (req, res) => {
+  const db = readDb();
+  const ctx = radarContexte(db);
+  const fiches = (db.radarFiches || []).map((f) => radarAvecCalculs(ctx, f).fiche).sort((a, b) => b.score - a.score || radarAnnee(b.dpeDate) - radarAnnee(a.dpeDate));
+  // Secteurs prioritaires : fiches, propriétaires identifiés, acquéreurs.
+  const secteurs = RADAR_ARRONDISSEMENTS.map((a) => {
+    const fs_ = fiches.filter((f) => f.quartier === a.quartier);
+    const recherches = ctx.clients.filter((x) => x.c.quartiers.indexOf(a.quartier) > -1).length;
+    return { quartier: a.quartier, label: a.label, fiches: fs_.length, identifies: fs_.filter((f) => f.proprietaire && f.proprietaire.statut === 'identifie').length, acquereurs: recherches, poids: fs_.length + 3 * fs_.filter((f) => f.proprietaire && f.proprietaire.statut === 'identifie').length + 10 * recherches };
+  }).sort((a, b) => b.poids - a.poids);
+  const meta = pmMeta();
+  res.json({ ok: true, fiches: fiches, secteurs: secteurs, etat: RADAR_ETAT, log: (db.radarLog || []).slice(0, 5),
+    proprietaires: { disponible: !!meta, millesime: meta ? meta.annee : null, lignes: meta ? meta.lignes : 0, import: PM_IMPORT } });
+});
+app.get('/api/radar/:id', requireAdmin, (req, res) => {
+  const db = readDb();
+  const f = (db.radarFiches || []).find((x) => x.id === req.params.id);
+  if (!f) return res.status(404).json({ error: 'Fiche introuvable.' });
+  const { fiche, acq } = radarAvecCalculs(radarContexte(db), f);
+  const p = fiche.proprietaire || {};
+  res.json({ ok: true, fiche: fiche, acquereurs: acq,
+    biensSociete: p.statut === 'identifie' ? radarBiensSociete(p.siren).slice(0, 40) : [],
+    societe: p.siren && db.radarSocietes ? db.radarSocietes[p.siren] || null : null,
+    memeAdresse: (db.radarFiches || []).filter((x) => x.id !== f.id && x.identifiantBan && x.identifiantBan === f.identifiantBan).map((x) => ({ id: x.id, etage: x.etage, surface: x.surface, dpeDate: x.dpeDate, dpe: x.dpe })) });
+});
+app.post('/api/radar/collecter', requireAdmin, (req, res) => {
+  if (!RADAR_ETAT.enCours) radarCollecter('manuel');
+  res.json({ ok: true, etat: RADAR_ETAT });
+});
+app.patch('/api/radar/:id', requireAdmin, (req, res) => {
+  const db = readDb();
+  const f = (db.radarFiches || []).find((x) => x.id === req.params.id);
+  if (!f) return res.status(404).json({ error: 'Fiche introuvable.' });
+  const b = req.body || {};
+  const qui = [req.lead.prenom, req.lead.nom].filter(Boolean).join(' ');
+  if (['a_revoir', 'en_cours', 'contacte', 'ecarte'].indexOf(b.statut) > -1 && b.statut !== f.statut) {
+    f.historique = (f.historique || []).concat([{ at: nowISO(), par: qui, action: 'statut', valeur: b.statut, motif: String(b.motif || '').slice(0, 200) }]);
+    f.statut = b.statut;
+  }
+  if (typeof b.note === 'string' && b.note.trim()) f.historique = (f.historique || []).concat([{ at: nowISO(), par: qui, action: 'note', valeur: b.note.trim().slice(0, 1000) }]);
+  if (b.rappel !== undefined) f.rappel = b.rappel ? String(b.rappel).slice(0, 10) : null;
+  writeDb(db);
+  res.json({ ok: true, fiche: radarAvecCalculs(radarContexte(db), f).fiche });
 });
 
 // ---- Sociétés domiciliées à une adresse (SIRENE, API publique gratuite) ----
