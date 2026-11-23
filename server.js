@@ -1729,7 +1729,11 @@ async function repondreEcoles(res, b) {
   if (!b) return res.status(404).json({ error: 'Bien introuvable.' });
   if (!bienEstParis(b)) return res.json({ ok: true, disponible: false, raison: 'La sectorisation automatique couvre Paris intra-muros.' });
   if (!(await positionBien(b))) return res.json({ ok: true, disponible: false, raison: 'Position du bien inconnue : renseignez son adresse exacte (numéro et rue).' });
-  try { res.json(Object.assign({ ok: true, disponible: true }, await sectorisationEcoles(b.lat, b.lon))); }
+  try {
+    const e = await sectorisationEcoles(b.lat, b.lon);
+    if (!e.maternelle && !e.elementaire && !e.college) return res.json({ ok: true, disponible: false, raison: 'Aucun secteur scolaire trouvé à la position enregistrée : vérifiez l’adresse exacte du bien.' });
+    res.json(Object.assign({ ok: true, disponible: true }, e));
+  }
   catch (e) { res.status(502).json({ error: 'Secteurs scolaires indisponibles pour le moment.' }); }
 }
 app.get('/api/biens/:id/ecoles', requireAdmin, async (req, res) => {
