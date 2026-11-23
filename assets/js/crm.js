@@ -1412,10 +1412,6 @@
   }
 
   function render() {
-    // Un seul outil de prospection : l'ancien « Immo Data Robot » (tableau et
-    // onglet Radar) renvoie vers le Radar. Ses autres onglets restent
-    // accessibles par « Anciens outils » en bas du Radar.
-    if (location.hash === '#/robot-radar' || location.hash === '#/robot') { location.replace('#/radar'); return; }
     const r = parseRoute();
     $$('.se-modal-back').forEach((m) => m.remove());
 
@@ -1550,6 +1546,7 @@
           nav('biens', r.name, 'building', 'Produits') +
           nav('recherches', r.name, 'search', 'Recherches') +
           nav('radar', r.name, 'search', 'Radar') +
+          nav('robot', r.name, 'robot', 'Immo Data Robot', (matchings().filter((m) => m.statut === 'nouveau').length) || '') +
           nav('notifications', r.name, 'inbox', 'À prévenir', (notifications().length) || '') +
         '</nav>' +
         '<div class="se-nav-label">Le Club</div>' +
@@ -4671,7 +4668,8 @@
   // ===================== RADAR — futurs vendeurs =====================
   // Une ligne = un DPE. Tout le reste (propriétaire, gérant, annonces,
   // ventes, contacts, clients intéressés) sert à remplir sa fiche.
-  const radar = { data: null, chargement: false, erreur: '', periode: 'mois', secteur: '', type: '', surfaceMin: '', proprio: '', client: false, tri: 'chances', page: 1, lignes: [], fiches: {}, aide: false };
+  const RD_CRIT = () => ({ periode: 'mois', secteurs: [], type: '', surfaceMin: '', surfaceMax: '', etageMin: '', etageMax: '', dernierEtage: false, prixMin: '', prixMax: '', classes: [], epoque: '', proprio: '', signal: '', niveau: '', client: '', contact: false, statut: '', tri: 'chances' });
+  const radar = Object.assign({ data: null, chargement: false, erreur: '', page: 1, lignes: [], fiches: {}, aide: false }, RD_CRIT());
   const mEuro = (n) => n >= 1e6 ? (Math.round(n / 1e4) / 100).toString().replace('.', ',') + ' M€' : Math.round(n / 1000) + ' k€';
   const etageTxt = (e) => e == null ? '' : e === 0 ? 'RDC' : e === 1 ? '1er étage' : e + 'e étage';
   const rdJours = (iso) => Math.max(0, Math.floor((Date.now() - new Date(iso || 0).getTime()) / 864e5));
@@ -4681,7 +4679,9 @@
   async function chargerRadar(ajout) {
     if (radar.chargement) return;
     radar.chargement = true; if (!ajout) render();
-    const q = new URLSearchParams({ periode: radar.periode, secteur: radar.secteur, type: radar.type, surfaceMin: radar.surfaceMin || '', proprio: radar.proprio, client: radar.client ? '1' : '', tri: radar.tri, page: String(radar.page) });
+    const q = new URLSearchParams({ periode: radar.periode, secteurs: radar.secteurs.join(','), type: radar.type, surfaceMin: radar.surfaceMin || '', surfaceMax: radar.surfaceMax || '', etageMin: radar.etageMin, etageMax: radar.etageMax, dernierEtage: radar.dernierEtage ? '1' : '',
+      prixMin: radar.prixMin ? String(Number(radar.prixMin) * 1000) : '', prixMax: radar.prixMax ? String(Number(radar.prixMax) * 1000) : '', classes: radar.classes.join(''), epoque: radar.epoque, proprio: radar.proprio, signal: radar.signal, niveau: radar.niveau,
+      client: radar.client, contact: radar.contact ? '1' : '', statut: radar.statut, tri: radar.tri, page: String(radar.page) });
     try {
       const r = await fetch('/api/radar/liste?' + q.toString(), { credentials: 'same-origin' });
       const d = await r.json(); if (!r.ok) throw new Error(d.error || 'erreur');
@@ -4736,24 +4736,36 @@
       '<li><b>Contacter</b> : téléphone, email et site de la société, LinkedIn du gérant (avec la clé Exa), adresse du siège, lettre au propriétaire, et « Ajouter aux prospects » pour le suivre dans le CRM.</li></ol></div>' : '';
     const chip = (on, act, id, txt) => '<button type="button" class="rd-chip' + (on ? ' on' : '') + '" data-act="' + act + '" data-id="' + id + '">' + txt + '</button>';
     const periodes = [['aujourdhui', 'Aujourd’hui'], ['semaine', 'Cette semaine'], ['mois', 'Ce mois'], ['3mois', '3 mois']].concat(rdAnnees().map((a) => [a, a]));
+    const sel = (k, opts) => '<label class="rd-crit"><span>' + opts[0] + '</span><select class="se-select" data-rdf="' + k + '">' + opts[1].map((o) => '<option value="' + o[0] + '"' + (String(radar[k] || '') === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select></label>';
+    const duo = (titre, k1, k2, ph) => '<label class="rd-crit"><span>' + titre + '</span><div class="rd-duo"><input class="se-input" type="number" inputmode="numeric" placeholder="' + (ph || 'min') + '" data-rdf="' + k1 + '" value="' + esc(radar[k1] || '') + '"/><input class="se-input" type="number" inputmode="numeric" placeholder="max" data-rdf="' + k2 + '" value="' + esc(radar[k2] || '') + '"/></div></label>';
+    const modifie = Object.keys(RD_CRIT()).some((k) => k !== 'periode' && k !== 'tri' && JSON.stringify(radar[k]) !== JSON.stringify(RD_CRIT()[k]));
     const barre = '<div class="se-card rd-barre-filtres">' +
       '<div class="rd-form-ligne"><span class="rd-form-l">DPE fait</span><div class="rd-chips">' + periodes.map((x) => chip(radar.periode === x[0], 'radar-periode', x[0], x[1])).join('') + '</div></div>' +
-      '<div class="rd-filtres">' +
-        '<select class="se-select" data-rdf="secteur"><option value="">Tout Paris</option>' + QUARTIERS.filter((q) => /^p\d+$/.test(q.id)).map((q) => '<option value="' + q.id + '"' + (radar.secteur === q.id ? ' selected' : '') + '>' + q.label + '</option>').join('') + '</select>' +
-        '<select class="se-select" data-rdf="type"><option value="">Appartements et maisons</option><option value="Appartement"' + (radar.type === 'Appartement' ? ' selected' : '') + '>Appartements</option><option value="Maison"' + (radar.type === 'Maison' ? ' selected' : '') + '>Maisons</option></select>' +
-        '<div class="rd-surface"><span>Surface ≥</span><input class="se-input" type="number" inputmode="numeric" placeholder="0" data-rdf="surfaceMin" value="' + esc(radar.surfaceMin || '') + '"/><span>m²</span></div>' +
-        '<select class="se-select" data-rdf="proprio"><option value="">Tous les propriétaires</option><option value="societe"' + (radar.proprio === 'societe' ? ' selected' : '') + '>Sociétés / SCI identifiées</option><option value="particulier"' + (radar.proprio === 'particulier' ? ' selected' : '') + '>Particuliers</option></select>' +
-        '<select class="se-select" data-rdf="tri"><option value="chances"' + (radar.tri === 'chances' ? ' selected' : '') + '>Tri : plus de chances de vendre</option><option value="recent"' + (radar.tri === 'recent' ? ' selected' : '') + '>Tri : DPE le plus récent</option><option value="ancien"' + (radar.tri === 'ancien' ? ' selected' : '') + '>Tri : DPE le plus ancien</option></select>' +
-        '<label class="rd-toggle"><input type="checkbox" data-rdf="client"' + (radar.client ? ' checked' : '') + '/> Seulement ceux qui intéressent un client</label>' +
-      '</div></div>';
+      '<div class="rd-form-ligne"><span class="rd-form-l">Secteurs</span><div class="rd-chips">' + chip(!radar.secteurs.length, 'radar-secteur', 'tout', 'Tout Paris') + QUARTIERS.filter((q) => /^p\d+$/.test(q.id)).map((q) => chip(radar.secteurs.indexOf(q.id) > -1, 'radar-secteur', q.id, q.label.replace('Paris ', ''))).join('') + '</div></div>' +
+      '<div class="rd-form-ligne"><span class="rd-form-l">Classe DPE</span><div class="rd-chips">' + ['A', 'B', 'C', 'D', 'E', 'F', 'G'].map((k) => chip(radar.classes.indexOf(k) > -1, 'radar-classe', k, k)).join('') + '<span class="se-hint">' + (radar.classes.length ? '' : 'toutes') + '</span></div></div>' +
+      '<div class="rd-criteres-grille">' +
+        sel('type', ['Type de bien', [['', 'Appartements et maisons'], ['Appartement', 'Appartements'], ['Maison', 'Maisons']]]) +
+        duo('Surface (m²)', 'surfaceMin', 'surfaceMax') +
+        duo('Étage', 'etageMin', 'etageMax', 'min (0 = RDC)') +
+        duo('Prix estimé (k€)', 'prixMin', 'prixMax') +
+        sel('epoque', ['Construction', [['', 'Toutes les époques'], ['avant1948', 'Avant 1948 (ancien)'], ['1948-1974', '1948 – 1974'], ['1975-2000', '1975 – 2000'], ['apres2000', 'Après 2000']]]) +
+        sel('proprio', ['Propriétaire', [['', 'Tous'], ['societe', 'Sociétés identifiées'], ['sci', 'SCI seulement'], ['hors-institutionnel', 'Sociétés hors institutionnels'], ['particulier', 'Particuliers']]]) +
+        sel('signal', ['Signal de vente', [['', 'Tous'], ['sci-un-bien', 'SCI / société d’un seul bien'], ['gerant-age', 'Gérant de 70 ans et plus'], ['gerance', 'Changement de gérant récent'], ['dissolution', 'Dissolution / procédure'], ['passoire', 'Passoire F ou G'], ['mouvement', 'Immeuble qui bouge'], ['longtemps', 'Détenu depuis 10 ans et plus']]]) +
+        sel('niveau', ['Chances de vendre', [['', 'Toutes'], ['moyenne', 'Moyennes et fortes'], ['forte', 'Fortes seulement']]]) +
+        sel('client', ['Clients intéressés', [['', 'Peu importe'], ['1', 'Au moins un client'], ['club', 'Un membre du club'], ['leads', 'Un lead du CRM']]]) +
+        sel('statut', ['Suivi', [['', 'À traiter (hors écartés)'], ['a_revoir', 'À revoir'], ['en_cours', 'En cours'], ['contacte', 'Contactés'], ['prospect', 'Dans mes prospects'], ['ecarte', 'Écartés']]]) +
+        sel('tri', ['Tri', [['chances', 'Plus de chances de vendre'], ['recent', 'DPE le plus récent'], ['ancien', 'DPE le plus ancien'], ['clients', 'Plus de clients intéressés'], ['surface', 'Plus grande surface']]]) +
+      '</div>' +
+      '<div class="rd-form-actions"><label class="rd-toggle"><input type="checkbox" data-rdf="dernierEtage"' + (radar.dernierEtage ? ' checked' : '') + '/> Dernier étage</label><label class="rd-toggle"><input type="checkbox" data-rdf="contact"' + (radar.contact ? ' checked' : '') + '/> Contact trouvé (tél., email ou LinkedIn)</label>' +
+        (modifie ? '<button class="se-btn ghost sm" data-act="radar-reset">Effacer les critères</button>' : '') + '</div></div>';
     const ch = D.chargement;
     const charg = ch ? '<div class="se-card rd-job"><b>Chargement des DPE ' + esc(D.periode.libelle) + '…</b><div class="rd-barre" style="margin-top:8px"><i style="width:' + Math.round(ch.faits / Math.max(1, ch.total) * 100) + '%"></i></div><div class="se-hint" style="margin-top:6px">' + ch.faits + '/' + ch.total + ' arrondissement' + (ch.total > 1 ? 's' : '') + ' · ' + num(ch.lus) + ' DPE lus. La liste se complète toute seule.</div></div>' : '';
-    const entete = '<div class="rd-resultats"><b>' + num(D.total) + ' DPE ' + esc(D.periode.libelle) + '</b><span class="se-hint">' + esc(radar.secteur ? qLib(radar.secteur) : 'tout Paris') + (radar.client ? ' · qui intéressent un client' : '') + '</span></div>' +
+    const entete = '<div class="rd-resultats"><b>' + num(D.total) + ' DPE ' + esc(D.periode.libelle) + '</b><span class="se-hint">' + esc(radar.secteurs.length ? radar.secteurs.map((q) => qLib(q).replace('Paris ', '')).join(', ') : 'tout Paris') + (radar.client ? ' · qui intéressent un client' : '') + '</span></div>' +
       (D.plafond ? '<p class="se-hint">Beaucoup de DPE sur cette période : choisissez un arrondissement pour tout voir.</p>' : '') + ((D.erreurs || []).length ? '<p class="se-hint">' + D.erreurs.map(esc).join(' · ') + '</p>' : '');
     const liste = '<div class="rd-liste">' + (radar.lignes.length ? radar.lignes.map(rdLigne).join('') : '<div class="se-card"><p class="se-hint">' + (ch ? 'Les premiers DPE arrivent…' : 'Aucun DPE avec ces filtres.') + '</p></div>') + '</div>' +
       (radar.lignes.length < D.total ? '<button class="se-btn ghost" style="margin-top:12px;width:100%" data-act="radar-plus"' + (radar.chargement ? ' disabled' : '') + '>Afficher les 50 suivants (' + num(D.total - radar.lignes.length) + ' restants)</button>' : '');
     return intro + une + pm + aide + barre + charg + entete + liste +
-      '<p class="se-hint" style="margin-top:24px">Anciens outils (propriétaires, signaux, portefeuille foncier, BODACC) : <a href="#/robot-proprietaires">ouvrir</a>.</p>';
+      '';
   }
   async function chargerFicheRadar(id, enrichir) {
     if (!radar.fiches[id] || !radar.fiches[id].fiche) radar.fiches[id] = { chargement: true };
@@ -6389,7 +6401,10 @@
     },
     'radar-aide': () => { radar.aide = !radar.aide; render(); },
     'radar-periode': (el, id) => { radar.periode = id; rdRelancer(); },
-    'radar-une': () => { radar.periode = 'semaine'; radar.client = true; radar.tri = 'recent'; rdRelancer(); },
+    'radar-secteur': (el, id) => { radar.secteurs = id === 'tout' ? [] : (radar.secteurs.indexOf(id) > -1 ? radar.secteurs.filter((x) => x !== id) : radar.secteurs.concat([id])); rdRelancer(); },
+    'radar-classe': (el, id) => { radar.classes = radar.classes.indexOf(id) > -1 ? radar.classes.filter((x) => x !== id) : radar.classes.concat([id]).sort(); rdRelancer(); },
+    'radar-reset': () => { const p = radar.periode, t = radar.tri; Object.assign(radar, RD_CRIT(), { periode: p, tri: t }); rdRelancer(); },
+    'radar-une': () => { radar.periode = 'semaine'; radar.client = '1'; radar.tri = 'recent'; rdRelancer(); },
     'radar-plus': () => { radar.page += 1; chargerRadar(true); },
     'radar-pm-importer': async () => {
       try { await fetch('/api/robot/pm/importer', { method: 'POST', credentials: 'same-origin' }); toast('Chargement du fichier des propriétaires lancé (quelques minutes).', 'ok'); } catch (e) { toast(e.message, 'warn'); }
