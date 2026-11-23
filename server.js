@@ -44,6 +44,30 @@ const PORT = process.env.PORT || 3000;
 const DATA_DIR = process.env.DATA_DIR || __dirname;
 fs.mkdirSync(DATA_DIR, { recursive: true });
 const DATA_FILE = path.join(DATA_DIR, 'data.json');
+// Base de données : SQLite (seecret.db sur le volume), voir stockage.js.
+// Au premier démarrage, data.json est importé puis renommé data.json.importe.
+// Filet de sécurité : si SQLite ne peut pas démarrer (module natif absent,
+// disque en lecture seule…), le site continue sur data.json comme avant au
+// lieu de tomber, et l'erreur est journalisée.
+let stockage = null;
+try {
+  const { Stockage } = require('./stockage');
+  stockage = new Stockage(DATA_DIR);
+} catch (e) {
+  console.error('[base] SQLite indisponible, repli sur data.json :', e.message);
+  stockage = null;
+}
+if (stockage && stockage.estVide() && fs.existsSync(DATA_FILE)) {
+  try {
+    const ancien = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+    const n = stockage.importer(ancien);
+    fs.renameSync(DATA_FILE, DATA_FILE + '.importe');
+    console.log('[base] data.json importé dans SQLite (' + n + ' enregistrements) ; fichier renommé data.json.importe');
+  } catch (e) {
+    console.error('[base] import de data.json impossible :', e.message);
+    throw e;
+  }
+}
 // data-comparables.json est une donnée de référence livrée avec le code
 // (pas générée par les utilisateurs), elle reste dans le dépôt / __dirname.
 const COMPARABLES_FILE = path.join(__dirname, 'data-comparables.json');
@@ -74,8 +98,9 @@ const LIBELLE = { acheteur: 'Acquéreur', vendeur: 'Vendeur', mixte: 'Acquéreur
 const DEFAULT_AGENT_NOM = process.env.DEFAULT_AGENT_NOM || 'Gabriel Taieb';
 
 function readDb() {
-  let db = {};
-  try { db = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); } catch (e) { db = {}; }
+  let db;
+  if (stockage) db = stockage.lire();
+  else { try { db = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); } catch (e) { db = {}; } }
   db.leads = Array.isArray(db.leads) ? db.leads : [];
   db.recherches = Array.isArray(db.recherches) ? db.recherches : [];
   db.biens = Array.isArray(db.biens) ? db.biens : [];
@@ -105,10 +130,9 @@ function readDb() {
   return db;
 }
 
-// Écriture atomique : on écrit dans un fichier temporaire puis on le renomme.
-// Un arrêt du serveur (ou un disque plein) au milieu d'une écriture ne peut
-// donc plus laisser un data.json tronqué : on garde l'ancienne version entière.
-// Une copie datée est faite une fois par jour (14 jours conservés).
+// Écriture : transaction SQLite qui n'enregistre que les enregistrements
+// modifiés (voir stockage.js). Une sauvegarde complète et cohérente de la
+// base est faite une fois par jour dans backups/ (14 jours conservés).
 const BACKUP_DIR = path.join(DATA_DIR, 'backups');
 let derniereSauvegarde = '';
 function sauvegardeQuotidienne() {
@@ -116,17 +140,23 @@ function sauvegardeQuotidienne() {
   if (derniereSauvegarde === jour) return;
   try {
     fs.mkdirSync(BACKUP_DIR, { recursive: true });
-    const cible = path.join(BACKUP_DIR, 'data-' + jour + '.json');
-    if (!fs.existsSync(cible)) fs.copyFileSync(DATA_FILE, cible);
-    fs.readdirSync(BACKUP_DIR).filter((f) => /^data-\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort().reverse().slice(14)
-      .forEach((f) => { try { fs.unlinkSync(path.join(BACKUP_DIR, f)); } catch (e) {} });
+    const cible = path.join(BACKUP_DIR, 'seecret-' + jour + '.db');
     derniereSauvegarde = jour;
+    if (!fs.existsSync(cible)) {
+      if (stockage) stockage.sauvegarder(cible).catch((e) => console.error('[sauvegarde] échec :', e.message));
+      else if (fs.existsSync(DATA_FILE)) fs.copyFileSync(DATA_FILE, cible.replace(/\.db$/, '.json'));
+    }
+    fs.readdirSync(BACKUP_DIR).filter((f) => /^(data|seecret)-\d{4}-\d{2}-\d{2}\.(json|db)$/.test(f)).sort().reverse().slice(14)
+      .forEach((f) => { try { fs.unlinkSync(path.join(BACKUP_DIR, f)); } catch (e) {} });
   } catch (e) { console.error('[sauvegarde] échec :', e.message); }
 }
 function writeDb(db) {
-  const tmp = DATA_FILE + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(db, null, 2));
-  fs.renameSync(tmp, DATA_FILE);
+  if (stockage) stockage.ecrire(db);
+  else {
+    const tmp = DATA_FILE + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(db, null, 2));
+    fs.renameSync(tmp, DATA_FILE);
+  }
   sauvegardeQuotidienne();
 }
 
@@ -1699,7 +1729,11 @@ async function repondreEcoles(res, b) {
   if (!b) return res.status(404).json({ error: 'Bien introuvable.' });
   if (!bienEstParis(b)) return res.json({ ok: true, disponible: false, raison: 'La sectorisation automatique couvre Paris intra-muros.' });
   if (!(await positionBien(b))) return res.json({ ok: true, disponible: false, raison: 'Position du bien inconnue : renseignez son adresse exacte (numéro et rue).' });
-  try { res.json(Object.assign({ ok: true, disponible: true }, await sectorisationEcoles(b.lat, b.lon))); }
+  try {
+    const e = await sectorisationEcoles(b.lat, b.lon);
+    if (!e.maternelle && !e.elementaire && !e.college) return res.json({ ok: true, disponible: false, raison: 'Aucun secteur scolaire trouvé à la position enregistrée : vérifiez l’adresse exacte du bien.' });
+    res.json(Object.assign({ ok: true, disponible: true }, e));
+  }
   catch (e) { res.status(502).json({ error: 'Secteurs scolaires indisponibles pour le moment.' }); }
 }
 app.get('/api/biens/:id/ecoles', requireAdmin, async (req, res) => {
@@ -1903,6 +1937,15 @@ app.put('/api/biens/:id/editorial', requireAdmin, (req, res) => {
   if (body.coupDeCoeur !== undefined) b.coupDeCoeur = String(body.coupDeCoeur || '').trim().slice(0, 280);
   writeDb(db);
   res.json({ ok: true, editorial: b.editorial, coupDeCoeur: b.coupDeCoeur || '' });
+});
+
+// État de la base (agence) : moteur utilisé et volume, pour vérifier un déploiement.
+app.get('/api/admin/base', requireAdmin, (req, res) => {
+  const fichier = stockage ? stockage.fichier : DATA_FILE;
+  let taille = 0; try { taille = fs.statSync(fichier).size + (stockage && fs.existsSync(fichier + '-wal') ? fs.statSync(fichier + '-wal').size : 0); } catch (e) { /* ignore */ }
+  const db = readDb();
+  res.json({ ok: true, moteur: stockage ? 'sqlite' : 'json', tailleOctets: taille, ancienFichierImporte: fs.existsSync(DATA_FILE + '.importe'),
+    collections: Object.keys(db).filter((k) => Array.isArray(db[k])).reduce((o, k) => { o[k] = db[k].length; return o; }, {}) });
 });
 
 // ---------------- Journal de bord du membre ----------------
