@@ -4831,20 +4831,35 @@ app.get('/api/robot/pm/siren/:siren', requireAdmin, (req, res) => {
 // ============================================================================
 const RADAR_ARRONDISSEMENTS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
   .map((n) => ({ quartier: 'p' + n, cp: n === 16 ? '75016' : '750' + String(n).padStart(2, '0'), insee: '751' + String(n).padStart(2, '0'), label: 'Paris ' + n + (n === 1 ? 'ᵉʳ' : 'ᵉ') }));
-const RADAR_ETAT = { enCours: false, etape: '', derniere: null, erreur: '' };
 const RADAR_INSTITUTIONNELS = /\b(ASSURANCE|ASSURANCES|MUTUELLE|BANQUE|CAISSE|CREDIT|SCPI|OPCI|FONCIERE|REIT|HABITAT|LOGEMENT|BAILLEUR|PARIS HABITAT|RIVP|ICF|CDC|ALLIANZ|AXA|GENERALI|MACIF|MAIF|COVEA|AVIVA|PREDICA|AMUNDI|GECINA|ICADE|COVIVIO|UNIBAIL|SOCIETE GENERALE|BNP|LCL)\b/;
 const radarAnnee = (d) => { const t = new Date(d || 0).getTime(); return isFinite(t) ? t : 0; };
 
-async function radarDpeArrondissement(arr, depuis) {
-  const params = new URLSearchParams({
-    size: '200', sort: '-date_reception_dpe',
-    qs: 'code_postal_ban:' + arr.cp + ' AND date_reception_dpe:[' + depuis + ' TO *] AND (type_batiment:appartement OR type_batiment:maison) AND surface_habitable_logement:[25 TO *]',
-    select: 'numero_dpe,date_reception_dpe,adresse_ban,adresse_brut,code_postal_ban,identifiant_ban,type_batiment,surface_habitable_logement,numero_etage_appartement,complement_adresse_logement,complement_adresse_batiment,etiquette_dpe,nombre_niveau_immeuble,_geopoint,annee_construction,periode_construction'
-  });
-  const r = await fetch(ADEME_URL + '?' + params.toString(), { headers: { 'User-Agent': 'Seecret/1.0 (radar)', Accept: 'application/json' }, signal: AbortSignal.timeout(45000) });
-  const d = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error('ADEME ' + r.status);
-  return d.results || [];
+// Tous les DPE d'un arrondissement qui répondent aux critères (toutes les pages).
+const RADAR_SELECT = 'numero_dpe,date_reception_dpe,adresse_ban,adresse_brut,code_postal_ban,identifiant_ban,type_batiment,surface_habitable_logement,numero_etage_appartement,complement_adresse_logement,complement_adresse_batiment,etiquette_dpe,nombre_niveau_immeuble,_geopoint,annee_construction,periode_construction';
+function radarQsAdeme(arr, c) {
+  const q = ['code_postal_ban:' + arr.cp];
+  q.push('date_reception_dpe:[' + (c.depuis || '*') + ' TO ' + (c.jusqua || '*') + ']');
+  if (c.type === 'appartement' || c.type === 'maison') q.push('type_batiment:' + c.type); else q.push('(type_batiment:appartement OR type_batiment:maison)');
+  q.push('surface_habitable_logement:[' + (c.surfaceMin || 9) + ' TO ' + (c.surfaceMax || '*') + ']');
+  if (c.etageMin || c.etageMax) q.push('numero_etage_appartement:[' + (c.etageMin || 0) + ' TO ' + (c.etageMax || '*') + ']');
+  const cl = (c.classes || []).filter((x) => /^[A-G]$/.test(x));
+  if (cl.length && cl.length < 7) q.push('(' + cl.map((x) => 'etiquette_dpe:' + x).join(' OR ') + ')');
+  return q.join(' AND ');
+}
+async function radarDpeArrondissement(arr, c, max) {
+  const out = [];
+  let url = ADEME_URL + '?' + new URLSearchParams({ size: '1000', sort: c.tri === 'ancien' ? 'date_reception_dpe' : '-date_reception_dpe', qs: radarQsAdeme(arr, c), select: RADAR_SELECT }).toString();
+  let total = 0;
+  while (url && out.length < max) {
+    const r = await fetch(url, { headers: { 'User-Agent': 'Seecret/1.0 (radar)', Accept: 'application/json' }, signal: AbortSignal.timeout(60000) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error('ADEME ' + r.status + (d.detail ? ' : ' + d.detail : ''));
+    total = d.total || total;
+    (d.results || []).forEach((x) => out.push(x));
+    url = d.next || null;
+  }
+  out.total = total;
+  return out;
 }
 
 function radarFicheDepuisDpe(s, arr) {
@@ -4995,6 +5010,15 @@ function radarEtiquettes(f, nbDpeAdresse) {
     else if (p.nbBiens > 1) t.push({ id: 'multi-biens', l: p.nbBiens + ' immeubles à Paris' });
     if (p.dirigeantAge >= 70) t.push({ id: 'dirigeant-age', l: 'Gérant de ' + p.dirigeantAge + ' ans' });
   }
+  const an = new Date().getFullYear();
+  (p.bodacc || []).forEach((a) => {
+    const y = Number(String(a.date || '').slice(0, 4)); const txt = radarNorm(a.famille + ' ' + a.type + ' ' + a.detail);
+    if (y >= an - 1 && /dirigeant|gerant|gerance|administration/.test(txt) && !t.some((x) => x.id === 'gerance')) t.push({ id: 'gerance', l: 'Gérance changée en ' + y });
+    if (/dissolution|liquidation/.test(txt) && y >= an - 2 && !t.some((x) => x.id === 'dissolution')) t.push({ id: 'dissolution', l: 'Dissolution / liquidation (' + y + ')' });
+    if (/procedure(s)? collective|redressement|sauvegarde/.test(txt) && y >= an - 3 && !t.some((x) => x.id === 'procedure')) t.push({ id: 'procedure', l: 'Procédure collective (' + y + ')' });
+  });
+  const vente = f.ventes && f.ventes.memeLogement && f.ventes.memeLogement[0];
+  if (vente && vente.date) t.push({ id: 'acquis', l: 'Acquis en ' + String(vente.date).slice(0, 4) });
   if (nbDpeAdresse >= 2) t.push({ id: 'immeuble-mouvement', l: 'Immeuble en mouvement · ' + nbDpeAdresse + ' DPE' });
   if (jours <= 15) t.push({ id: 'dpe-recent', l: 'DPE de moins de 15 jours' });
   if (f.dpe === 'F' || f.dpe === 'G') t.push({ id: 'passoire', l: 'Passoire thermique (' + f.dpe + ') : location bientôt interdite' });
@@ -5010,6 +5034,9 @@ function radarScore(f, acq) {
   if (tags.indexOf('immeuble-mouvement') > -1) s += 8;
   if (tags.indexOf('dpe-recent') > -1) s += 8;
   if (tags.indexOf('passoire') > -1) s += 6;
+  if (tags.indexOf('gerance') > -1) s += 8;
+  if (tags.indexOf('dissolution') > -1) s += 10;
+  if (tags.indexOf('procedure') > -1) s += 6;
   if (tags.indexOf('institutionnel') > -1) s -= 25;
   s += Math.min(18, acq.club.length * 9) + Math.min(12, acq.leads.length * 3);
   return Math.max(0, Math.min(100, Math.round(s)));
@@ -5020,91 +5047,204 @@ async function enParallele(liste, n, fn) {
   let i = 0;
   await Promise.all(Array.from({ length: Math.min(n, liste.length) }, async () => { while (i < liste.length) { const k = i++; await fn(liste[k], k); } }));
 }
-async function radarCollecter(raison) {
-  if (RADAR_ETAT.enCours) return;
-  Object.assign(RADAR_ETAT, { enCours: true, etape: 'Lecture des DPE récents…', erreur: '' });
-  const debut = Date.now();
+// Critères par défaut : tout Paris, DPE des 4 derniers mois.
+function radarCriteresDefaut() { return { secteurs: RADAR_ARRONDISSEMENTS.map((a) => a.quartier), type: '', surfaceMin: 25, surfaceMax: 0, etageMin: 0, etageMax: 0, classes: [], depuis: new Date(Date.now() - 120 * 864e5).toISOString().slice(0, 10), jusqua: '', proprio: '' }; }
+function radarCriteresPropres(b) {
+  const d = radarCriteresDefaut();
+  const n = (v) => Math.max(0, Math.round(Number(v) || 0));
+  const date = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : '';
+  const secteurs = Array.isArray(b.secteurs) ? b.secteurs.filter((q) => RADAR_ARRONDISSEMENTS.some((a) => a.quartier === q)) : [];
+  return {
+    secteurs: secteurs.length ? secteurs : d.secteurs, type: ['appartement', 'maison'].indexOf(b.type) > -1 ? b.type : '',
+    surfaceMin: n(b.surfaceMin), surfaceMax: n(b.surfaceMax), etageMin: n(b.etageMin), etageMax: n(b.etageMax),
+    classes: Array.isArray(b.classes) ? b.classes.filter((x) => /^[A-G]$/.test(x)) : [],
+    depuis: date(b.depuis) || (b.depuis === '' ? '' : d.depuis), jusqua: date(b.jusqua), proprio: ['societe', 'sci', 'identifie'].indexOf(b.proprio) > -1 ? b.proprio : ''
+  };
+}
+function radarLibelleCriteres(c) {
+  const sect = c.secteurs.length === 20 ? 'Tout Paris' : c.secteurs.map((q) => labelQuartier(q).replace('Paris ', '')).join(', ');
+  return [sect, c.type === 'maison' ? 'maisons' : c.type === 'appartement' ? 'appartements' : '', c.surfaceMin || c.surfaceMax ? (c.surfaceMin || 0) + '–' + (c.surfaceMax || '…') + ' m²' : '',
+    c.etageMin || c.etageMax ? 'étage ' + (c.etageMin || 0) + '–' + (c.etageMax || '…') : '', c.classes.length ? 'DPE ' + c.classes.join('') : '',
+    c.depuis ? 'DPE depuis le ' + c.depuis.split('-').reverse().join('/') : '', c.proprio === 'sci' ? 'SCI' : c.proprio === 'societe' ? 'sociétés' : ''].filter(Boolean).join(' · ');
+}
+
+// Enrichissement en ricochet, en tâche de fond : chaque étape s'appuie sur la
+// précédente (adresse → société → dirigeants → annonces légales → autres
+// biens → ventes passées → LinkedIn / site).
+async function enParallele(liste, n, fn) {
+  let i = 0;
+  await Promise.all(Array.from({ length: Math.min(n, liste.length) }, async () => { while (i < liste.length) { const k = i++; await fn(liste[k], k); } }));
+}
+async function radarBodacc(db, siren) {
+  db.radarBodacc = db.radarBodacc || {};
+  const c = db.radarBodacc[siren];
+  if (c && Date.now() - radarAnnee(c.maj) < 30 * 864e5) return c;
+  const p = new URLSearchParams({ dataset: 'annonces-commerciales', q: siren, rows: '20', sort: '-dateparution' });
+  const r = await fetch(BODACC_URL + '?' + p.toString(), { signal: AbortSignal.timeout(15000) });
+  if (!r.ok) throw new Error('BODACC ' + r.status);
+  const d = await r.json().catch(() => ({}));
+  const annonces = (d.records || []).map((x) => x.fields || {}).filter((f) => (Array.isArray(f.registre) ? f.registre : [f.registre]).some((x) => String(x || '').replace(/\s/g, '').indexOf(siren) > -1))
+    .map((f) => ({ date: f.dateparution || null, famille: f.familleavis_lib || f.familleavis || '', type: f.typeavis_lib || '', detail: String(f.modificationsgenerales ? JSON.stringify(f.modificationsgenerales) : (f.acte ? JSON.stringify(f.acte) : (f.jugement ? JSON.stringify(f.jugement) : ''))).replace(/[{}"\[\]]/g, ' ').replace(/\s+/g, ' ').slice(0, 300), tribunal: f.tribunal || '' }));
+  const out = { maj: nowISO(), annonces: annonces };
+  db.radarBodacc[siren] = out;
+  return out;
+}
+// Ventes passées à l'adresse (DVF autour du point GPS, même surface ± 15 %).
+async function radarVentesAdresse(f) {
+  if (!f.lat || !f.lon) return null;
+  const d = 0.00025;
+  const bbox = [f.lon - d, f.lat - d, f.lon + d, f.lat + d].map((v) => v.toFixed(6)).join(',');
+  const brut = await dvfCerema({ code_insee: f.insee, in_bbox: bbox }, 2, { geo: true, budgetMs: 15000 });
+  const ventes = brut.filter((x) => /^vente/i.test(x.libnatmut || '') && Number(x.valeurfonc) > 0).map(mutationDvf).sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  const memeLogement = ventes.filter((v) => v.surface && f.surface && Math.abs(Number(v.surface) - f.surface) <= f.surface * 0.15);
+  return { maj: nowISO(), ventes: ventes.slice(0, 15), memeLogement: memeLogement.slice(0, 5) };
+}
+// LinkedIn du dirigeant et site de la société (Exa, si EXA_API_KEY est configurée).
+async function radarExa(query, categorie) {
+  const key = process.env.EXA_API_KEY;
+  if (!key) return null;
+  const r = await fetch('https://api.exa.ai/search', { method: 'POST', headers: { 'x-api-key': key, 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(20000),
+    body: JSON.stringify(Object.assign({ query: query, numResults: 5, contents: { text: { maxCharacters: 1500 } } }, categorie ? { category: categorie } : {})) });
+  if (r.status === 429 || r.status === 402) throw Object.assign(new Error('quota Exa'), { quota: true });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error('Exa ' + r.status);
+  return d.results || [];
+}
+const radarNorm = (x) => String(x || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+async function radarContactsSociete(db, siren) {
+  db.radarContacts = db.radarContacts || {};
+  const c = db.radarContacts[siren];
+  if (c && Date.now() - radarAnnee(c.maj) < 60 * 864e5) return c;
+  const soc = (db.radarSocietes || {})[siren] || {};
+  const out = { maj: nowISO(), linkedin: [], site: null, telephones: [], emails: [], source: 'Exa' };
+  for (const d of (soc.dirigeants || []).filter((x) => x.nom).slice(0, 2)) {
+    const res = await radarExa(d.prenom + ' ' + d.nom + ' ' + (soc.nomComplet || ''), 'linkedin profile');
+    (res || []).forEach((x) => {
+      const t = radarNorm(x.title + ' ' + x.url);
+      if (/linkedin\.com\/in\//.test(x.url) && t.indexOf(radarNorm(d.nom).split(' ')[0]) > -1 && t.indexOf(radarNorm(d.prenom)) > -1 && !out.linkedin.some((l) => l.url === x.url))
+        out.linkedin.push({ nom: d.prenom + ' ' + d.nom, url: x.url, titre: String(x.title || '').slice(0, 140) });
+    });
+  }
+  if (soc.nomComplet && !/^SCI\b/i.test(soc.nomComplet)) {
+    const res = await radarExa(soc.nomComplet + ' Paris site officiel', 'company');
+    const mots = radarNorm(soc.nomComplet).split(/\s+/).filter((m) => m.length > 3);
+    const site = (res || []).find((x) => mots.some((m) => radarNorm(x.title + ' ' + x.url).indexOf(m) > -1) && !/linkedin|societe\.com|pappers|annuaire|verif\.com|infogreffe|manageo/.test(x.url));
+    if (site) {
+      out.site = { url: site.url, titre: String(site.title || '').slice(0, 140) };
+      const txt = String(site.text || '');
+      out.telephones = Array.from(new Set((txt.match(/(?:\+33\s?|0)[1-9](?:[\s.-]?\d{2}){4}/g) || []).map((t) => t.replace(/[^\d+]/g, '')))).slice(0, 3);
+      out.emails = Array.from(new Set(txt.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi) || [])).slice(0, 3);
+    }
+  }
+  db.radarContacts[siren] = out;
+  return out;
+}
+
+const RADAR_JOBS = {};
+function radarJob(id) { return RADAR_JOBS[id] || null; }
+async function radarRechercher(rechercheId, criteres) {
+  const job = RADAR_JOBS[rechercheId] = { enCours: true, etape: 'Lecture des DPE…', trouves: 0, total: 0, enrichis: 0, aEnrichir: 0, debut: Date.now(), erreurs: [] };
   try {
-    const depuis = new Date(Date.now() - 120 * 864e5).toISOString().slice(0, 10);
+    const arrs = RADAR_ARRONDISSEMENTS.filter((a) => criteres.secteurs.indexOf(a.quartier) > -1);
     const lus = [];
     let faits = 0;
-    await enParallele(RADAR_ARRONDISSEMENTS, 5, async (arr) => {
-      try { (await radarDpeArrondissement(arr, depuis)).forEach((s) => lus.push(radarFicheDepuisDpe(s, arr))); } catch (e) { console.warn('[radar] ADEME ' + arr.label + ' :', e.message); }
-      RADAR_ETAT.etape = 'DPE récents · ' + (++faits) + '/20 arrondissements…';
+    const max = Math.floor(6000 / Math.max(1, arrs.length)) + 200;
+    await enParallele(arrs, 5, async (arr) => {
+      try { const res = await radarDpeArrondissement(arr, criteres, max); job.total += res.total || res.length; res.forEach((x) => lus.push(radarFicheDepuisDpe(x, arr))); }
+      catch (e) { job.erreurs.push(arr.label + ' : ' + e.message); }
+      job.etape = 'Lecture des DPE · ' + (++faits) + '/' + arrs.length + ' secteurs · ' + lus.length + ' trouvés…';
     });
+    // Fusion avec les fiches connues (un logement = adresse + étage + surface).
     let db = readDb();
     db.radarFiches = Array.isArray(db.radarFiches) ? db.radarFiches : [];
-    const existantes = new Map(db.radarFiches.map((f) => [f.id, f]));
-    // Un logement = une adresse + un étage + une surface : on garde le DPE le plus récent.
     const cleLogement = (f) => [f.identifiantBan || pmNorm(f.adresse), f.etage, Math.round(f.surface / 3)].join('|');
-    const parLogement = new Map();
-    db.radarFiches.forEach((f) => parLogement.set(cleLogement(f), f));
-    let nouvelles = 0;
+    const parId = new Map(db.radarFiches.map((f) => [f.id, f]));
+    const parLogement = new Map(db.radarFiches.map((f) => [cleLogement(f), f]));
+    const ids = [];
     lus.forEach((f) => {
-      if (existantes.has(f.id)) return;
-      const k = cleLogement(f);
-      const deja = parLogement.get(k);
-      if (deja && radarAnnee(deja.dpeDate) >= radarAnnee(f.dpeDate)) return;
-      if (deja) { Object.assign(deja, f, { id: deja.id, statut: deja.statut, historique: deja.historique }); return; }
-      f.statut = 'a_revoir'; f.cree = nowISO(); f.historique = [];
-      db.radarFiches.push(f); parLogement.set(k, f); nouvelles++;
+      let g = parId.get(f.id) || parLogement.get(cleLogement(f));
+      if (g) { if (radarAnnee(f.dpeDate) > radarAnnee(g.dpeDate)) Object.assign(g, f, { id: g.id, statut: g.statut, historique: g.historique, proprietaire: g.proprietaire }); }
+      else { g = Object.assign(f, { statut: 'a_revoir', cree: nowISO(), historique: [] }); db.radarFiches.push(g); parId.set(g.id, g); parLogement.set(cleLogement(g), g); }
+      if (ids.indexOf(g.id) === -1) ids.push(g.id);
     });
-    // Nettoyage : fiches « à revoir » dont le DPE a plus d'un an.
-    db.radarFiches = db.radarFiches.filter((f) => f.statut !== 'a_revoir' || Date.now() - radarAnnee(f.dpeDate) < 365 * 864e5);
-    writeDb(db);
-    // Enrichissement : propriétaire, autres biens, dirigeant, prix.
-    RADAR_ETAT.etape = 'Identification des propriétaires…';
-    db = readDb();
+    const rec = (db.radarRecherches || []).find((r) => r.id === rechercheId);
+    if (rec) { rec.ficheIds = ids; rec.majLe = nowISO(); rec.total = job.total; }
+    job.trouves = ids.length;
+    // Étape 1 (immédiate, fichier local) : propriétaire + autres biens.
+    job.etape = 'Propriétaires (fichier DGFiP)…';
+    const fiches = ids.map((id) => parId.get(id));
+    const annee = (pmMeta() || {}).annee || null;
     const parInsee = {};
-    db.radarFiches.forEach((f) => { (parInsee[f.insee] = parInsee[f.insee] || []).push(f); });
-    for (const insee of Object.keys(parInsee)) {
-      for (const f of parInsee[insee]) {
-        if (f.proprietaire && f.proprietaire.statut !== 'fichier_absent' && f.proprietaire.millesime === (pmMeta() || {}).annee) continue;
+    fiches.forEach((f) => (parInsee[f.insee] = parInsee[f.insee] || []).push(f));
+    Object.keys(parInsee).forEach((insee) => {
+      parInsee[insee].forEach((f) => {
+        if (f.proprietaire && f.proprietaire.statut !== 'fichier_absent' && f.proprietaire.millesime === annee) return;
         const p = radarProprietaire(f);
-        if (p.statut === 'identifie') { const biens = radarBiensSociete(p.siren); p.nbBiens = biens.length || 1; }
-        p.millesime = (pmMeta() || {}).annee || null;
-        f.proprietaire = p;
-      }
+        if (p.statut === 'identifie') p.nbBiens = radarBiensSociete(p.siren).length || 1;
+        p.millesime = annee; f.proprietaire = p;
+      });
       PM_CACHE.clear();
-    }
-    writeDb(db);
-    RADAR_ETAT.etape = 'Dirigeants des sociétés…';
-    db = readDb();
-    const sirens = Array.from(new Set(db.radarFiches.filter((f) => f.proprietaire && f.proprietaire.statut === 'identifie' && /^\d{9}$/.test(f.proprietaire.siren || '')).map((f) => f.proprietaire.siren)));
-    // Dirigeants (SIRENE, ~7 requêtes/s autorisées) et prix DVF en même temps.
-    const aFaire = sirens.filter((x) => !(db.radarSocietes && db.radarSocietes[x] && Date.now() - radarAnnee(db.radarSocietes[x].maj) < 30 * 864e5));
-    const prix = [];
-    RADAR_ARRONDISSEMENTS.forEach((arr) => ['Appartement', 'Maison'].forEach((type) => { if (db.radarFiches.some((f) => f.insee === arr.insee && f.type === type)) prix.push([arr, type]); }));
-    let nbDir = 0;
-    await Promise.all([
-      enParallele(aFaire, 3, async (siren) => {
-        if (Date.now() - debut > 15 * 60 * 1000) return;
-        for (let essai = 0; essai < 3; essai++) {
-          try { await radarDirigeants(db, siren); break; } catch (e) { await new Promise((r) => setTimeout(r, e.limite ? 3000 : 500)); }
-        }
-        RADAR_ETAT.etape = 'Dirigeants ' + (++nbDir) + '/' + aFaire.length + ' · prix des secteurs…';
-        await new Promise((r) => setTimeout(r, 400));
-      }),
-      enParallele(prix, 4, async ([arr, type]) => { try { await radarPrixM2(db, arr, type); } catch (e) { /* secteur suivant */ } })
-    ]);
-    db.radarFiches.forEach((f) => {
-      const soc = f.proprietaire && db.radarSocietes && db.radarSocietes[f.proprietaire.siren];
-      if (soc) { const d = soc.dirigeants.find((x) => x.nom); if (d) { f.proprietaire.dirigeant = d; f.proprietaire.dirigeantAge = d.age; } f.proprietaire.dirigeants = soc.dirigeants; }
-      const px = db.radarPrix && db.radarPrix[f.insee + '|' + f.type];
-      if (px && px.m2 && f.surface) { f.prixM2 = px.m2; f.prixBas = Math.round(f.surface * px.m2 * 0.93 / 10000) * 10000; f.prixHaut = Math.round(f.surface * px.m2 * 1.07 / 10000) * 10000; }
     });
-    db.radarLog = [{ at: nowISO(), raison: raison, dpeLus: lus.length, nouvelles: nouvelles, fiches: db.radarFiches.length, fichierProprietaires: pmMeta() ? pmMeta().annee : null }].concat(db.radarLog || []).slice(0, 30);
     writeDb(db);
-    Object.assign(RADAR_ETAT, { enCours: false, etape: '', derniere: db.radarLog[0] });
-    console.log('[radar] collecte : ' + lus.length + ' DPE lus, ' + nouvelles + ' nouvelles fiches');
+    // Étape 2 (réseau) : dirigeants, annonces légales, prix du secteur, ventes passées, LinkedIn.
+    db = readDb();
+    const F = ids.map((id) => db.radarFiches.find((x) => x.id === id)).filter(Boolean);
+    const sirens = Array.from(new Set(F.filter((f) => f.proprietaire && f.proprietaire.statut === 'identifie' && /^\d{9}$/.test(f.proprietaire.siren || '')).map((f) => f.proprietaire.siren)));
+    const ventesAFaire = F.filter((f) => f.lat && (!f.ventes || Date.now() - radarAnnee(f.ventes.maj) > 60 * 864e5))
+      .sort((a, b) => (b.proprietaire && b.proprietaire.statut === 'identifie' ? 1 : 0) - (a.proprietaire && a.proprietaire.statut === 'identifie' ? 1 : 0)).slice(0, 400);
+    const prix = [];
+    arrs.forEach((arr) => ['Appartement', 'Maison'].forEach((type) => { if (F.some((f) => f.insee === arr.insee && f.type === type)) prix.push([arr, type]); }));
+    job.aEnrichir = sirens.length * 2 + ventesAFaire.length + prix.length;
+    const fait = () => { job.enrichis++; job.etape = 'Enrichissement · ' + job.enrichis + '/' + job.aEnrichir + ' recherches faites (dirigeants, annonces légales, ventes, prix)…'; };
+    let pause = 0;
+    const essai = async (fn) => { for (let k = 0; k < 3; k++) { try { return await fn(); } catch (e) { await new Promise((r) => setTimeout(r, e.limite ? 3000 : 600)); } } return null; };
+    await Promise.all([
+      enParallele(sirens, 3, async (siren) => { await essai(() => radarDirigeants(db, siren)); fait(); await essai(() => radarBodacc(db, siren)); fait(); await new Promise((r) => setTimeout(r, 300)); }),
+      enParallele(prix, 4, async ([arr, type]) => { await essai(() => radarPrixM2(db, arr, type)); fait(); }),
+      enParallele(ventesAFaire, 3, async (f) => { const v = await essai(() => radarVentesAdresse(f)); if (v) f.ventes = v; fait(); if (++pause % 25 === 0) writeDb(db); })
+    ]);
+    radarAppliquer(db, F);
+    writeDb(db);
+    // Étape 3 : LinkedIn et site (quota Exa) pour les sociétés les plus prometteuses.
+    if (process.env.EXA_API_KEY) {
+      job.etape = 'Recherche LinkedIn et sites…';
+      const ctx = radarContexte(db);
+      const prioritaires = Array.from(new Set(F.filter((f) => f.proprietaire && f.proprietaire.statut === 'identifie' && !f.proprietaire.institutionnel).map((f) => ({ f, s: radarAvecCalculs(ctx, f).fiche.score })).sort((a, b) => b.s - a.s).map((x) => x.f.proprietaire.siren))).slice(0, 40);
+      let quota = false;
+      await enParallele(prioritaires, 2, async (siren) => { if (quota) return; try { await radarContactsSociete(db, siren); } catch (e) { if (e.quota) quota = true; } });
+      if (quota) job.erreurs.push('Quota Exa atteint : LinkedIn et sites limités aux premières sociétés.');
+      radarAppliquer(db, F);
+      writeDb(db);
+    }
+    db.radarLog = [{ at: nowISO(), rechercheId: rechercheId, dpeLus: lus.length, fiches: ids.length }].concat(db.radarLog || []).slice(0, 30);
+    writeDb(db);
+    Object.assign(job, { enCours: false, etape: '', fin: Date.now() });
+    console.log('[radar] recherche ' + rechercheId + ' : ' + ids.length + ' biens, ' + sirens.length + ' sociétés');
   } catch (e) {
-    Object.assign(RADAR_ETAT, { enCours: false, etape: '', erreur: String(e.message || e) });
+    Object.assign(job, { enCours: false, etape: '', erreur: String(e.message || e) });
     console.error('[radar] échec :', e);
   }
 }
-// Collecte chaque jour vers 6 h (heure du serveur), et au démarrage si rien depuis 24 h.
-setTimeout(() => { const db = readDb(); const d = (db.radarLog || [])[0]; if (!d || Date.now() - radarAnnee(d.at) > 24 * 3600e3) radarCollecter('auto'); }, 3 * 60 * 1000);
-setInterval(() => { if (new Date().getHours() === 6) radarCollecter('quotidien'); }, 3600e3).unref();
+// Recopie dans chaque fiche ce que les étapes ont trouvé (dirigeant, annonces, contacts, prix).
+function radarAppliquer(db, fiches) {
+  fiches.forEach((f) => {
+    const p = f.proprietaire || {};
+    const soc = p.siren && db.radarSocietes && db.radarSocietes[p.siren];
+    if (soc) { const d = soc.dirigeants.find((x) => x.nom); p.dirigeant = d || null; p.dirigeantAge = d ? d.age : null; p.dirigeants = soc.dirigeants; p.societe = { creation: soc.creation, siege: soc.siege, etat: soc.etat, nomComplet: soc.nomComplet }; }
+    const bo = p.siren && db.radarBodacc && db.radarBodacc[p.siren];
+    if (bo) p.bodacc = bo.annonces;
+    const ct = p.siren && db.radarContacts && db.radarContacts[p.siren];
+    if (ct) p.contacts = { linkedin: ct.linkedin, site: ct.site, telephones: ct.telephones, emails: ct.emails };
+    const px = db.radarPrix && db.radarPrix[f.insee + '|' + f.type];
+    if (px && px.m2 && f.surface) { f.prixM2 = px.m2; f.prixBas = Math.round(f.surface * px.m2 * 0.93 / 10000) * 10000; f.prixHaut = Math.round(f.surface * px.m2 * 1.07 / 10000) * 10000; }
+  });
+}
+// Les recherches enregistrées sont relancées chaque jour vers 6 h.
+setInterval(() => {
+  if (new Date().getHours() !== 6) return;
+  const db = readDb();
+  (db.radarRecherches || []).slice(0, 5).forEach((r, i) => setTimeout(() => { if (!(RADAR_JOBS[r.id] || {}).enCours) radarRechercher(r.id, r.criteres); }, i * 10 * 60 * 1000));
+}, 3600e3).unref();
 
 function radarAvecCalculs(ctx, f) {
   const acq = radarAcquereurs(ctx, f);
@@ -5113,13 +5253,28 @@ function radarAvecCalculs(ctx, f) {
   g.acquereurs = { club: acq.club.length, leads: acq.leads.length, aReconfirmer: acq.club.concat(acq.leads).filter((x) => x.aReconfirmer).length };
   g.score = radarScore(g, acq);
   g.prioritaire = g.score >= 60;
+  // Niveau d'enrichissement : ce que la fiche sait déjà (sur 10).
+  const p = f.proprietaire || {};
+  const points = [
+    ['étage', f.etage != null], ['porte', !!f.porte], ['propriétaire', p.statut === 'identifie'], ['dirigeant', !!p.dirigeant], ['âge', !!(p.dirigeant && p.dirigeant.age)],
+    ['annonces légales', !!p.bodacc], ['autres biens', !!p.nbBiens], ['ventes passées', !!f.ventes], ['prix', !!f.prixBas],
+    ['LinkedIn / site', !!(p.contacts && ((p.contacts.linkedin || []).length || p.contacts.site))]
+  ];
+  g.enrichissement = { n: points.filter((x) => x[1]).length, max: points.length, manque: points.filter((x) => !x[1]).map((x) => x[0]) };
   return { fiche: g, acq: acq };
 }
 
 app.get('/api/radar', requireAdmin, (req, res) => {
   const db = readDb();
   const ctx = radarContexte(db);
-  const fiches = (db.radarFiches || []).map((f) => radarAvecCalculs(ctx, f).fiche).sort((a, b) => b.score - a.score || radarAnnee(b.dpeDate) - radarAnnee(a.dpeDate));
+  const recherches = db.radarRecherches || [];
+  const rec = recherches.find((r) => r.id === req.query.recherche) || (req.query.recherche === 'tout' ? null : recherches[0]) || null;
+  const ids = rec ? new Set(rec.ficheIds || []) : null;
+  const fiches = (db.radarFiches || []).filter((f) => !ids || ids.has(f.id)).map((f) => radarAvecCalculs(ctx, f).fiche).filter((f) => {
+    const c = rec && rec.criteres; if (!c || !c.proprio) return true;
+    const p = f.proprietaire || {};
+    return c.proprio === 'sci' ? p.estSci : p.statut === 'identifie';
+  }).sort((a, b) => b.enrichissement.n - a.enrichissement.n || b.score - a.score);
   // Secteurs prioritaires : fiches, propriétaires identifiés, acquéreurs.
   const secteurs = RADAR_ARRONDISSEMENTS.map((a) => {
     const fs_ = fiches.filter((f) => f.quartier === a.quartier);
@@ -5127,7 +5282,18 @@ app.get('/api/radar', requireAdmin, (req, res) => {
     return { quartier: a.quartier, label: a.label, fiches: fs_.length, identifies: fs_.filter((f) => f.proprietaire && f.proprietaire.statut === 'identifie').length, acquereurs: recherches, poids: fs_.length + 3 * fs_.filter((f) => f.proprietaire && f.proprietaire.statut === 'identifie').length + 10 * recherches };
   }).sort((a, b) => b.poids - a.poids);
   const meta = pmMeta();
-  res.json({ ok: true, fiches: fiches, secteurs: secteurs, etat: RADAR_ETAT, log: (db.radarLog || []).slice(0, 5),
+  // Liste allégée (le détail complet est servi par GET /api/radar/:id).
+  const legere = (f) => {
+    const p = f.proprietaire || {};
+    const c = p.contacts || {};
+    return Object.assign({}, f, { ventes: undefined, historique: (f.historique || []).filter((h) => h.action === 'statut').slice(-3),
+      proprietaire: { statut: p.statut, nom: p.nom, siren: p.siren, estSci: p.estSci, institutionnel: p.institutionnel, societesImmeuble: p.societesImmeuble, confiance: p.confiance,
+        dirigeant: p.dirigeant ? { prenom: p.dirigeant.prenom, nom: p.dirigeant.nom, age: p.dirigeant.age } : null, bodacc: p.bodacc ? p.bodacc.map(() => 1) : null,
+        contacts: { linkedin: (c.linkedin || []).map(() => 1), site: c.site ? 1 : null, telephones: (c.telephones || []).map(() => 1) } } });
+  };
+  res.json({ ok: true, fiches: fiches.map(legere), secteurs: secteurs, recherche: rec ? Object.assign({}, rec, { ficheIds: undefined, libelle: radarLibelleCriteres(rec.criteres) }) : null,
+    job: rec ? radarJob(rec.id) : null, recherches: recherches.map((r) => ({ id: r.id, libelle: radarLibelleCriteres(r.criteres), majLe: r.majLe, nb: (r.ficheIds || []).length })),
+    exa: !!process.env.EXA_API_KEY, log: (db.radarLog || []).slice(0, 5),
     proprietaires: { disponible: !!meta, millesime: meta ? meta.annee : null, lignes: meta ? meta.lignes : 0, import: PM_IMPORT } });
 });
 app.get('/api/radar/:id', requireAdmin, (req, res) => {
@@ -5141,9 +5307,24 @@ app.get('/api/radar/:id', requireAdmin, (req, res) => {
     societe: p.siren && db.radarSocietes ? db.radarSocietes[p.siren] || null : null,
     memeAdresse: (db.radarFiches || []).filter((x) => x.id !== f.id && x.identifiantBan && x.identifiantBan === f.identifiantBan).map((x) => ({ id: x.id, etage: x.etage, surface: x.surface, dpeDate: x.dpeDate, dpe: x.dpe })) });
 });
-app.post('/api/radar/collecter', requireAdmin, (req, res) => {
-  if (!RADAR_ETAT.enCours) radarCollecter('manuel');
-  res.json({ ok: true, etat: RADAR_ETAT });
+app.post('/api/radar/recherche', requireAdmin, (req, res) => {
+  const db = readDb();
+  const criteres = radarCriteresPropres((req.body && req.body.criteres) || {});
+  const cle = JSON.stringify(criteres);
+  db.radarRecherches = db.radarRecherches || [];
+  let rec = db.radarRecherches.find((r) => JSON.stringify(r.criteres) === cle);
+  if (rec) db.radarRecherches = [rec].concat(db.radarRecherches.filter((r) => r !== rec));
+  else { rec = { id: uid('rr'), criteres: criteres, cree: nowISO(), ficheIds: [] }; db.radarRecherches.unshift(rec); }
+  db.radarRecherches = db.radarRecherches.slice(0, 12);
+  writeDb(db);
+  if (!(RADAR_JOBS[rec.id] || {}).enCours) radarRechercher(rec.id, criteres);
+  res.json({ ok: true, recherche: { id: rec.id, libelle: radarLibelleCriteres(criteres) }, job: RADAR_JOBS[rec.id] });
+});
+app.delete('/api/radar/recherche/:id', requireAdmin, (req, res) => {
+  const db = readDb();
+  db.radarRecherches = (db.radarRecherches || []).filter((r) => r.id !== req.params.id);
+  writeDb(db);
+  res.json({ ok: true });
 });
 app.patch('/api/radar/:id', requireAdmin, (req, res) => {
   const db = readDb();
