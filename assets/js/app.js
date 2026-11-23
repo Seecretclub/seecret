@@ -675,7 +675,6 @@
       '</div>';
     }
     const suivi = (state.suivis || []).indexOf(b.id) > -1;
-    const pop = popularite(b);
     const mien = b.mien || (state.monBien && state.monBien.id === b.id);
     return '<a class="ed-card" href="#/bien/' + b.id + '">' +
       '<div class="ed-card-photo" data-slides="' + photos.length + '">' +
@@ -687,7 +686,7 @@
           : '') +
         '<span class="ed-card-badge">' + badgeCarte(b, !mien) + '</span>' +
         (mien ? '' : '<button type="button" class="ed-save' + (suivi ? ' on' : '') + '" data-act="suivre" data-id="' + b.id + '" aria-pressed="' + suivi + '" aria-label="' + (suivi ? 'Retirer de mes favoris' : 'Enregistrer ce bien') + '" title="' + (suivi ? 'Enregistré' : 'Enregistrer') + '">' +
-          bookmarkSvg(suivi, 22) + (pop ? '<span class="ed-save-n">' + num(pop.n) + '</span>' : '') + '</button>') +
+          bookmarkSvg(suivi, 22) + '</button>') +
       '</div>' +
       '<div class="ed-card-body">' +
         '<span class="ed-card-type">' + esc(b.type) + ' · ' + esc(b.label) + '</span>' +
