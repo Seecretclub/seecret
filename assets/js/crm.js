@@ -1701,7 +1701,7 @@
       coupDeCoeur: b.coupDeCoeur || '', editorial: b.editorial || null, video: b.video || null, visite: b.visite || null, panoramas: b.panoramas || [], venduParAgence: b.venduParAgence === true ? true : (b.venduParAgence === false ? false : null),
       atouts: b.atouts || b.annexes || [], annexes: b.annexes || [], mandat: { type: 'simple', fin: '' }, cree: b.cree || nowISO(),
       exclusivite: b.exclusivite || { statut: 'scan_en_cours', liens: [] },
-      validation: b.validation || 'en_attente',
+      validation: b.validation || 'en_attente', surSeecret: b.surSeecret !== false,
       serveur: true, email: b.email || '', demo: !!b.demo
     };
   }
@@ -3896,12 +3896,36 @@
       '</div>';
   }
 
+  // Sur la plateforme Seecret = option « Sur Seecret » active + bien validé
+  // + statut avant-première ou ouvert (même règle que le serveur).
+  function surPlateforme(b) { return !!(b && b.serveur && b.surSeecret !== false && b.validation === 'valide' && (b.statut === 'avant-premiere' || b.statut === 'ouvert')); }
+  function raisonHorsPlateforme(b) {
+    if (!b.serveur) return 'Bien de démonstration local : il ne peut pas être publié.';
+    if (b.surSeecret === false) return 'Option « Sur Seecret » désactivée : le bien reste dans le CRM uniquement.';
+    const manque = [];
+    if (b.validation !== 'valide') manque.push('valider le bien');
+    if (!(b.statut === 'avant-premiere' || b.statut === 'ouvert')) manque.push('le passer en Avant-première ou Ouvert aux visites (statut actuel : ' + ((ST_BIEN[b.statut] || {}).label || b.statut || '—') + ')');
+    return manque.length ? 'Option active, mais pas encore visible : il reste à ' + manque.join(' et à ') + '.' : '';
+  }
+  function carteBien(b) {
+    return '<a class="se-card se-bien" href="#/bien/' + b.id + '">' +
+      '<div class="se-bien-photo">' + (photo(b) ? '<img src="' + photo(b) + '" alt=""/>' : '') + badgeBien(b.statut) + '</div>' +
+      '<div class="se-bien-body"><span class="se-sub">' + esc(b.ref) + ' · ' + esc(b.type) + (surPlateforme(b) ? ' · <span style="color:var(--color-club-violet)">Sur Seecret</span>' : '') + '</span>' +
+      '<h3>' + esc(b.titre) + '</h3><span class="se-price">' + euro(b.prix) + '</span>' +
+      '<div class="se-bien-foot">' + esc(qLabel(b.quartier)) + ' · ' + num(b.surface) + ' m² · ' + b.pieces + ' p.</div></div></a>';
+  }
   function viewBiensClub() {
-    const list = state.membresBiens || [];
-    return head('Le Club', 'Biens des membres', list.length + ' bien(s) off-market déposé(s).', '') +
+    const list = (state.biensServeur || []).filter(surPlateforme);
+    const prets = (state.biensServeur || []).filter((b) => !surPlateforme(b) && b.surSeecret !== false);
+    return head('Le Club', 'Biens du club', list.length + ' bien(s) visible(s) par les membres sur la plateforme.', '') +
       (list.length
-        ? '<div class="se-grid cols-2" style="gap:14px">' + list.map((b) => '<div class="se-card"><div style="font-weight:500">' + esc(b.titre || 'Bien') + ' ' + badgeDemo(b) + '</div><div class="se-hint" style="margin-top:4px">' + esc(b.label || '') + ' · ' + euro(b.prix) + '</div><div style="margin-top:8px">' + badgeBien(b.statut) + '</div></div>').join('') + '</div>'
-        : '<div class="se-card se-empty"><div class="se-empty-title">Aucun bien membre</div><p>Les biens déposés par les membres apparaîtront ici.</p></div>');
+        ? '<div class="se-bien-grid">' + list.map(carteBien).join('') + '</div>'
+        : '<div class="se-card se-empty"><div class="se-empty-title">Aucun bien sur la plateforme</div><p>Activez « Sur Seecret » sur la fiche d’un bien validé, en avant-première ou ouvert aux visites.</p></div>') +
+      (prets.length
+        ? '<div class="se-card" style="margin-top:18px"><h3>Option « Sur Seecret » active, pas encore visibles</h3><div class="se-list" style="margin-top:8px">' +
+            prets.map((b) => '<a class="se-list-item" href="#/bien/' + b.id + '" style="text-decoration:none;color:inherit"><div style="flex:1;min-width:0"><div style="font-size:13.5px">' + esc(b.titre) + '</div><div class="se-hint">' + esc(raisonHorsPlateforme(b)) + '</div></div><span class="se-hint">›</span></a>').join('') +
+          '</div></div>'
+        : '');
   }
 
   function viewDemandeDetail(r) {
@@ -4728,11 +4752,51 @@
           Object.keys(ST_BIEN).map((k) => '<option value="' + k + '"' + (st === k ? ' selected' : '') + '>' + ST_BIEN[k].label + '</option>').join('') +
         '</select><span class="se-hint">' + list.length + ' résultat(s)</span>' +
       '</div></div>' +
-      '<div class="se-bien-grid">' + list.map((b) => '<a class="se-card se-bien" href="#/bien/' + b.id + '">' +
-        '<div class="se-bien-photo">' + (photo(b) ? '<img src="' + photo(b) + '" alt=""/>' : '') + badgeBien(b.statut) + '</div>' +
-        '<div class="se-bien-body"><span class="se-sub">' + esc(b.ref) + ' · ' + esc(b.type) + '</span>' +
-        '<h3>' + esc(b.titre) + '</h3><span class="se-price">' + euro(b.prix) + '</span>' +
-        '<div class="se-bien-foot">' + esc(qLabel(b.quartier)) + ' · ' + num(b.surface) + ' m² · ' + b.pieces + ' p.</div></div></a>').join('') + '</div>';
+      '<div class="se-bien-grid">' + list.map(carteBien).join('') + '</div>';
+  }
+
+  function carteSurSeecret(b) {
+    if (!b.serveur) return '';
+    const visible = surPlateforme(b);
+    const actif = b.surSeecret !== false;
+    return '<div class="se-card"><div class="se-row" style="justify-content:space-between;align-items:center;gap:12px;flex-wrap:nowrap">' +
+        '<div style="min-width:0"><h3>Sur Seecret</h3><p class="se-hint" style="margin:4px 0 0">Publier ce bien sur la plateforme des membres.</p></div>' +
+        '<button type="button" class="se-switch' + (actif ? ' on' : '') + '" role="switch" aria-checked="' + actif + '" aria-label="Sur Seecret" data-act="bien-sur-seecret" data-id="' + b.id + '"><span></span></button>' +
+      '</div>' +
+      (visible
+        ? '<p class="se-hint" style="margin-top:10px;color:var(--color-ok)">Visible par les membres · <a href="#/biens-club">Voir dans Biens du club</a></p>'
+        : '<p class="se-hint" style="margin-top:10px">' + esc(raisonHorsPlateforme(b)) + '</p>' +
+          (actif && b.validation !== 'valide' ? '<button class="se-btn soft sm" style="margin-top:8px" data-act="bien-valider" data-id="' + b.id + '">Valider ce bien</button>' : '')) +
+    '</div>';
+  }
+  function photosCrm(b) {
+    const src = (p) => (/^(data:|https?:|\/)/.test(p) ? p : 'assets/img/' + p);
+    const photos = b.photos || [];
+    if (!b.serveur) return '<div class="se-photos" style="padding:12px">' + photos.map((p) => '<div class="se-photo"><img src="' + src(p) + '" alt=""/></div>').join('') + '</div>';
+    const envoi = state.photoEnvoi === b.id;
+    return '<div style="padding:12px"><div class="se-crm-photos">' +
+        photos.map((p, i) => '<div class="se-crm-photo' + (i === 0 ? ' principale' : '') + '"><img src="' + esc(src(p)) + '" alt=""/>' +
+          (i === 0 ? '<span class="se-crm-photo-tag">Principale</span>' : '') +
+          '<div class="se-crm-photo-actions">' +
+            (i > 0 ? '<button type="button" title="Définir comme principale" data-act="bien-photo" data-op="principale" data-i="' + i + '" data-id="' + b.id + '">★</button>' : '') +
+            (i > 0 ? '<button type="button" title="Avancer" data-act="bien-photo" data-op="gauche" data-i="' + i + '" data-id="' + b.id + '">←</button>' : '') +
+            (i < photos.length - 1 ? '<button type="button" title="Reculer" data-act="bien-photo" data-op="droite" data-i="' + i + '" data-id="' + b.id + '">→</button>' : '') +
+            '<button type="button" title="Retirer" data-act="bien-photo" data-op="retirer" data-i="' + i + '" data-id="' + b.id + '">×</button>' +
+          '</div></div>').join('') +
+        (photos.length < 12
+          ? '<label class="se-crm-photo-add">' + (envoi ? 'Envoi…' : ICONS.plus + '<span>Ajouter</span>') + '<input type="file" accept="image/jpeg,image/png,image/webp" multiple hidden data-bien-photos="' + b.id + '"' + (envoi ? ' disabled' : '') + '/></label>'
+          : '') +
+      '</div><p class="se-hint" style="margin-top:8px">' + photos.length + ' / 12 photos · format horizontal conseillé. Le membre ne peut plus modifier ses photos une fois le bien validé : c’est ici que vous les gérez.</p></div>';
+  }
+  async function enregistrerBien(b, champs, okMsg) {
+    try {
+      const r = await fetch('/api/biens/' + encodeURIComponent(b.serverId), { method: 'PATCH', headers: { 'content-type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify(champs) });
+      const res = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(res.error || 'erreur');
+      Object.assign(b, champs);
+      render(); if (okMsg) toast(okMsg, 'ok');
+      return true;
+    } catch (e) { toast('Enregistrement impossible : ' + (e.message || 'erreur'), 'warn'); return false; }
   }
 
   function viewBien(r) {
@@ -4778,8 +4842,9 @@
 
       '<div class="se-split">' +
         '<div class="se-grid" style="gap:18px">' +
+          carteSurSeecret(b) +
           '<div class="se-card" style="padding:0;overflow:hidden"><div class="se-bien-photo" style="aspect-ratio:16/9">' + (photo(b) ? '<img src="' + photo(b) + '" alt=""/>' : '') + '</div>' +
-            '<div class="se-photos" style="padding:12px">' + (b.photos || []).map((p) => '<div class="se-photo"><img src="' + (/^(data:|https?:|\/)/.test(p) ? p : 'assets/img/' + p) + '" alt=""/></div>').join('') + '</div></div>' +
+            photosCrm(b) + '</div>' +
           carteEditorial(b) +
           carteVideo(b) +
           carteVisite(b) +
@@ -5975,6 +6040,21 @@
       const d = state.demandes.find((x) => x.id === id || x.serverDemandeId === id);
       if (d) { d.statut = 'nouvelle'; commit(); toast('Demande relancée.', 'ok'); }
     },
+    'bien-sur-seecret': async (el, id) => {
+      const b = bien(id); if (!b || !b.serveur) return;
+      const v = b.surSeecret === false;
+      await enregistrerBien(b, { surSeecret: v }, v ? (surPlateforme(Object.assign({}, b, { surSeecret: true })) ? 'Le bien est maintenant visible sur Seecret.' : 'Option activée. ' + raisonHorsPlateforme(Object.assign({}, b, { surSeecret: true }))) : 'Bien retiré de la plateforme : il reste dans le CRM.');
+    },
+    'bien-photo': async (el, id) => {
+      const b = bien(id); if (!b || !b.serveur) return;
+      const i = Number(el.getAttribute('data-i')); const op = el.getAttribute('data-op');
+      const p = (b.photos || []).slice(); if (!(i >= 0 && i < p.length)) return;
+      if (op === 'principale') p.unshift(p.splice(i, 1)[0]);
+      else if (op === 'gauche' && i > 0) { const t = p[i - 1]; p[i - 1] = p[i]; p[i] = t; }
+      else if (op === 'droite' && i < p.length - 1) { const t = p[i + 1]; p[i + 1] = p[i]; p[i] = t; }
+      else if (op === 'retirer') p.splice(i, 1);
+      await enregistrerBien(b, { photos: p }, op === 'retirer' ? 'Photo retirée.' : op === 'principale' ? 'Photo principale changée.' : '');
+    },
     'bien-valider': async (el, id) => {
       const b = bien(id);
       const serverId = b ? (b.serverId || b.id) : id;
@@ -6890,6 +6970,22 @@
   });
 
   document.addEventListener('change', async (e) => {
+    if (e.target.hasAttribute('data-bien-photos')) {
+      const b = bien(e.target.getAttribute('data-bien-photos'));
+      const fichiers = Array.from(e.target.files || []);
+      if (!b || !fichiers.length) return;
+      const fd = new FormData(); fichiers.slice(0, 8).forEach((f) => fd.append('photos', f));
+      state.photoEnvoi = b.id; render();
+      try {
+        const r = await fetch('/api/biens/' + encodeURIComponent(b.serverId) + '/photos', { method: 'POST', body: fd, credentials: 'same-origin' });
+        const res = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(res.error || 'erreur');
+        b.photos = res.photos || b.photos;
+        toast(fichiers.length > 1 ? fichiers.length + ' photos ajoutées.' : 'Photo ajoutée.', 'ok');
+      } catch (err) { toast('Envoi impossible : ' + (err.message || 'erreur'), 'warn'); }
+      state.photoEnvoi = null; render();
+      return;
+    }
     if (e.target.hasAttribute('data-pano')) {
       const id = e.target.getAttribute('data-pano');
       const f = e.target.files && e.target.files[0];

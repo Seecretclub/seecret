@@ -1600,7 +1600,7 @@ app.get('/api/mon-bien', requireAuth, (req, res) => {
 app.post('/api/suivis/:bienId', requireAuth, (req, res) => {
   const db = req.db;
   const b = db.biens.find((x) => x.id === req.params.bienId);
-  if (!b || b.validation !== 'valide' || !(b.statut === 'avant-premiere' || b.statut === 'ouvert')) {
+  if (!bienSurPlateforme(b)) {
     return res.status(404).json({ error: 'Bien introuvable.' });
   }
   if (b.leadId === req.lead.id) return res.status(400).json({ error: 'C’est votre bien.' });
@@ -1953,7 +1953,11 @@ app.get('/api/admin/base', requireAdmin, (req, res) => {
 // Tout est calculé pour CE membre : ses visites, ses offres, les baisses de
 // prix des biens qu'il suit ou a visités (en prix HAI, jamais le net d'un
 // autre propriétaire), et l'activité anonyme autour de son propre bien.
-function bienSurPlateforme(b) { return b && b.validation === 'valide' && (b.statut === 'avant-premiere' || b.statut === 'ouvert'); }
+// Un bien est sur la plateforme Seecret si : l'option « Sur Seecret » est
+// active dans le CRM (un bien en prospection, un ancien bien… peut rester
+// dans le CRM sans être publié), qu'il est validé par l'agent, et qu'il est
+// en avant-première ou ouvert aux visites.
+function bienSurPlateforme(b) { return !!b && b.surSeecret !== false && b.validation === 'valide' && (b.statut === 'avant-premiere' || b.statut === 'ouvert'); }
 // Agent qui suit le membre : l'agent attribué dans le CRM (agentId, ou
 // l'agent qui l'a créé), sinon l'agent par défaut de l'agence.
 function agentAttribue(db, lead) {
@@ -2138,11 +2142,7 @@ app.get('/api/catalogue', requireAuth, (req, res) => {
   // qu'un bien passe sous offre, sous compromis ou vendu, il quitte purement
   // et simplement la plateforme — ce ne sont pas des badges à afficher, ce
   // sont des étapes internes au suivi de la vente par l'agence (CRM).
-  const biens = db.biens.filter((b) =>
-    b.validation === 'valide' &&
-    (b.statut === 'avant-premiere' || b.statut === 'ouvert') &&
-    (!monBien || b.id !== monBien.id)
-  );
+  const biens = db.biens.filter((b) => bienSurPlateforme(b) && (!monBien || b.id !== monBien.id));
   const reduit = aVenduChezNous(db, req.lead);
   res.json({ ok: true, biens: biens.map((b) => bienCatalogue(b, req.lead, reduit)) });
 });
@@ -2182,8 +2182,15 @@ app.patch('/api/mon-bien', requireAuth, (req, res) => {
 });
 
 // ---- Photos du bien ----
+// Une fois le bien validé par l'agent, le membre ne modifie plus ses photos :
+// il écrit à son agent, qui les gère depuis le CRM.
+const PHOTOS_VERROUILLEES = 'Vos photos ont été validées par votre agent : écrivez-lui pour les modifier.';
 app.post('/api/mon-bien/photos', requireAuth, upload.array('photos', 8), (req, res) => {
   const b = bienDuMembre(req.db, req.lead);
+  if (b.validation === 'valide') {
+    (req.files || []).forEach((f) => { try { fs.unlinkSync(f.path); } catch (e) { /* déjà absent */ } });
+    return res.status(409).json({ error: PHOTOS_VERROUILLEES });
+  }
   const urls = (req.files || []).map((f) => '/uploads/' + f.filename);
   b.photos = (b.photos || []).concat(urls).slice(0, 12);
   writeDb(req.db);
@@ -2192,6 +2199,7 @@ app.post('/api/mon-bien/photos', requireAuth, upload.array('photos', 8), (req, r
 
 app.delete('/api/mon-bien/photos', requireAuth, (req, res) => {
   const b = bienDuMembre(req.db, req.lead);
+  if (b.validation === 'valide') return res.status(409).json({ error: PHOTOS_VERROUILLEES });
   const url = String((req.body && req.body.url) || '');
   b.photos = (b.photos || []).filter((p) => p !== url);
   writeDb(req.db);
@@ -2200,6 +2208,7 @@ app.delete('/api/mon-bien/photos', requireAuth, (req, res) => {
 
 app.patch('/api/mon-bien/photos', requireAuth, (req, res) => {
   const b = bienDuMembre(req.db, req.lead);
+  if (b.validation === 'valide') return res.status(409).json({ error: PHOTOS_VERROUILLEES });
   const url = String((req.body && req.body.principale) || '');
   if ((b.photos || []).indexOf(url) === -1) return res.status(404).json({ error: 'Photo introuvable' });
   b.photos = [url].concat(b.photos.filter((p) => p !== url));
@@ -2408,6 +2417,20 @@ app.get('/api/biens', requireAdmin, (req, res) => {
   res.json({ ok: true, biens: db.biens.map(prixPourCrm) });
 });
 
+// Photos d'un bien, gérées par l'agent depuis le CRM (ajout ici ; ordre et
+// suppression via PATCH /api/biens/:id { photos }).
+app.post('/api/biens/:id/photos', requireAdmin, upload.array('photos', 8), (req, res) => {
+  const db = readDb();
+  const bien = db.biens.find((b) => b.id === req.params.id);
+  const fichiers = (req.files || []).filter((f) => /^image\//i.test(f.mimetype));
+  if (!bien) { (req.files || []).forEach((f) => { try { fs.unlinkSync(f.path); } catch (e) { /* rien */ } }); return res.status(404).json({ error: 'Bien introuvable' }); }
+  const place = 12 - (bien.photos || []).length;
+  if (place <= 0) { (req.files || []).forEach((f) => { try { fs.unlinkSync(f.path); } catch (e) { /* rien */ } }); return res.status(400).json({ error: '12 photos maximum : retirez-en avant d’en ajouter.' }); }
+  bien.photos = (bien.photos || []).concat(fichiers.slice(0, place).map((f) => '/uploads/' + f.filename));
+  writeDb(db);
+  res.json({ ok: true, photos: bien.photos, ignorees: Math.max(0, fichiers.length - place) });
+});
+
 app.patch('/api/biens/:id/valider', requireAdmin, (req, res) => {
   const db = readDb();
   const bien = db.biens.find((b) => b.id === req.params.id);
@@ -2503,6 +2526,8 @@ app.post('/api/biens', requireAdmin, (req, res) => {
     atouts: Array.isArray(body.atouts) ? body.atouts.map(String) : [],
     exclusivite: { statut: 'scan_en_cours', liens: [] },
     validation: 'en_attente', statut: String(body.statut || 'brouillon'), statutDemande: null,
+    // Créé depuis le CRM : pas sur la plateforme tant que l'agent n'active pas « Sur Seecret ».
+    surSeecret: body.surSeecret === true,
     agent: nomComplet(req.lead) || DEFAULT_AGENT_NOM, cree: nowISO()
   };
   db.biens.push(bien);
@@ -2541,6 +2566,7 @@ app.patch('/api/biens/:id', requireAdmin, (req, res) => {
   if (Array.isArray(body.annexes)) bien.annexes = body.annexes.map(String);
   if (Array.isArray(body.atouts)) bien.atouts = body.atouts.map(String);
   if (Array.isArray(body.photos)) bien.photos = body.photos.map(String).slice(0, 12);
+  if (typeof body.surSeecret === 'boolean') bien.surSeecret = body.surSeecret;
   // Pipeline Propositions → Offres (étape 4 du plan de fusion) : étape avant
   // l'offre écrite, post-visite — à_présenter / présentée / réponse_reçue.
   if (['a_presenter', 'presentee', 'reponse_recue', ''].indexOf(body.etapeProposition) > -1) {
@@ -3032,7 +3058,8 @@ app.post('/api/visites', requireAuth, (req, res) => {
   if (!bien) return res.status(404).json({ error: 'Bien introuvable' });
   // Seul un bien validé et en « visite ouverte » peut être visité (pas un
   // bien sous offre ou sous compromis, retiré du catalogue membre).
-  if (bien.statut !== 'ouvert' || bien.validation !== 'valide') {
+  if (!bienSurPlateforme(bien)) return res.status(404).json({ error: 'Bien introuvable' });
+  if (bien.statut !== 'ouvert') {
     return res.status(409).json({ error: 'Ce bien est en avant-première : le propriétaire n’a pas encore ouvert les visites. Suivez-le pour être informé dès que ce sera possible.' });
   }
   if (!creneaux.length && !creneauLibre) return res.status(400).json({ error: 'Proposez au moins un créneau.' });
@@ -3066,6 +3093,7 @@ app.post('/api/offres', requireAuth, (req, res) => {
   const message = String((req.body && req.body.message) || '');
   if (!bienId || !montant) return res.status(400).json({ error: 'Bien et montant requis' });
   const bien = req.db.biens.find((b) => b.id === bienId);
+  if (!bien || bien.surSeecret === false) return res.status(404).json({ error: 'Bien introuvable' });
   if (!bienOuvertAuxVisites(bien)) {
     return res.status(409).json({ error: 'Ce bien est en avant-première : le propriétaire n’a pas encore ouvert les visites, donc pas encore les offres. Suivez-le pour être informé dès que ce sera possible.' });
   }
