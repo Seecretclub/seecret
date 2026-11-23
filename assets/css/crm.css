@@ -380,3 +380,20 @@ body.se-maps-open { overflow: hidden; }
 .se-video { display: block; width: min(100%, 300px); aspect-ratio: 9 / 16; background: #141210; border-radius: 14px; object-fit: contain; }
 .se-video-progres { height: 6px; border-radius: 999px; background: var(--color-sand, #efebe4); overflow: hidden; margin-bottom: 6px; }
 .se-video-progres i { display: block; height: 100%; width: 0; background: var(--color-button-ink, #221a2c); transition: width .3s; }
+
+/* ---- visite virtuelle ---- */
+.se-visite-liste { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; counter-reset: piece; }
+.se-visite-liste li { display: flex; align-items: center; gap: 10px; padding: 8px; border: 1px solid var(--color-stroke-faint, #eeebe6); border-radius: 12px; counter-increment: piece; flex-wrap: wrap; }
+.se-visite-liste li::before { content: counter(piece); font-weight: 600; font-size: 12px; width: 18px; text-align: center; color: var(--color-taupe, #8a8178); }
+.se-visite-liste img { width: 72px; height: 54px; object-fit: cover; border-radius: 8px; flex: 0 0 72px; }
+.se-visite-champs { flex: 1 1 180px; min-width: 0; display: flex; align-items: center; gap: 8px; }
+.se-visite-champs .se-input { flex: 1; min-width: 0; }
+.se-visite-actions { display: flex; gap: 4px; }
+.se-visite-ajout { margin-top: 12px; }
+.se-visite-vignettes { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.se-visite-vignettes button { padding: 0; border: 1px dashed var(--color-stroke, #ddd6cc); border-radius: 8px; overflow: hidden; width: 64px; height: 48px; cursor: pointer; background: none; }
+.se-visite-vignettes img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: .85; }
+.se-visite-vignettes button:hover img { opacity: 1; }
+.se-visite-aide { margin-top: 12px; font-size: 13px; color: var(--color-graphite, #5f5a54); }
+.se-visite-aide summary { cursor: pointer; font-weight: 500; }
+.se-visite-aide p { margin: 8px 0 0; line-height: 1.55; }

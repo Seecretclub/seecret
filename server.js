@@ -1508,6 +1508,7 @@ function bienPublic(b) {
     description: b.description || '', photos: b.photos || [], statut: b.statut || 'brouillon',
     coupDeCoeur: b.coupDeCoeur || '',
     video: b.video && b.video.publie && b.video.url ? { url: b.video.url, type: b.video.type || 'video/mp4' } : null,
+    visite: b.visite && b.visite.publie && Array.isArray(b.visite.etapes) && b.visite.etapes.length ? { etapes: b.visite.etapes.map((e) => ({ piece: e.piece || '', image: e.image, mode: e.mode === '360' ? '360' : 'photo' })) } : null,
     editorial: b.editorial && b.editorial.publie && b.editorial.texte ? { titre: b.editorial.titre || '', texte: b.editorial.texte } : null,
     statutDemande: b.statutDemande || null, cree: b.cree || null,
     suiveurs: Number(b.suiveurs) || 0,
@@ -1631,6 +1632,47 @@ app.delete('/api/biens/:id/video', requireAdmin, (req, res) => {
   delete b.video;
   writeDb(db);
   res.json({ ok: true });
+});
+
+// ---------------- Visite virtuelle (pas à pas + 360°) ----------------
+// Une visite = une suite d'étapes (pièces) : soit une photo du bien (visite
+// « pas à pas » : on avance d'une pièce à l'autre), soit un panorama 360°
+// équirectangulaire (on tourne la tête dans la pièce). Les panoramas sont
+// envoyés depuis le CRM ; le visionneur 360° (Pannellum, libre) est servi
+// par le site lui-même.
+const PANO_MAX = 30 * 1024 * 1024;
+app.post('/api/biens/:id/panorama', requireAdmin, express.raw({ type: ['image/jpeg', 'image/png', 'image/webp'], limit: PANO_MAX }), (req, res) => {
+  const type = String(req.headers['content-type'] || '').split(';')[0];
+  const ext = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp' }[type];
+  if (!ext || !Buffer.isBuffer(req.body) || req.body.length < 1000) return res.status(400).json({ error: 'Panorama invalide (JPEG, PNG ou WebP).' });
+  const db = readDb();
+  const b = db.biens.find((x) => x.id === req.params.id);
+  if (!b) return res.status(404).json({ error: 'Bien introuvable.' });
+  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+  const nom = 'pano-' + String(b.id).replace(/[^\w-]/g, '') + '-' + crypto.randomBytes(6).toString('hex') + ext;
+  fs.writeFileSync(path.join(UPLOADS_DIR, nom), req.body);
+  b.panoramas = (Array.isArray(b.panoramas) ? b.panoramas : []).concat(['/uploads/' + nom]).slice(-30);
+  writeDb(db);
+  res.json({ ok: true, url: '/uploads/' + nom });
+});
+app.put('/api/biens/:id/visite', requireAdmin, (req, res) => {
+  const db = readDb();
+  const b = db.biens.find((x) => x.id === req.params.id);
+  if (!b) return res.status(404).json({ error: 'Bien introuvable.' });
+  const body = req.body || {};
+  const autorisees = new Set((b.photos || []).concat(b.panoramas || []));
+  const etapes = (Array.isArray(body.etapes) ? body.etapes : []).slice(0, 25).map((e) => ({
+    piece: String((e && e.piece) || '').trim().slice(0, 40), image: String((e && e.image) || ''), mode: e && e.mode === '360' ? '360' : 'photo'
+  })).filter((e) => autorisees.has(e.image));
+  const publie = !!body.publie;
+  if (publie && etapes.length < 2 && !etapes.some((e) => e.mode === '360')) return res.status(400).json({ error: 'Ajoutez au moins 2 pièces (ou un panorama 360°) avant de publier.' });
+  b.visite = { etapes: etapes, publie: publie, modifieLe: nowISO(), auteur: nomComplet(req.lead) };
+  // Panoramas retirés de la visite : supprimés du disque.
+  const gardes = new Set(etapes.map((e) => e.image));
+  (b.panoramas || []).filter((u) => !gardes.has(u)).forEach((u) => { if (/^\/uploads\/pano-[\w-]+\.(jpg|png|webp)$/.test(u)) { try { fs.unlinkSync(path.join(UPLOADS_DIR, path.basename(u))); } catch (e) { /* ignore */ } } });
+  b.panoramas = (b.panoramas || []).filter((u) => gardes.has(u));
+  writeDb(db);
+  res.json({ ok: true, visite: b.visite, panoramas: b.panoramas });
 });
 
 // ---------------- La Gazette du club ----------------
