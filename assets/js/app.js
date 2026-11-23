@@ -655,6 +655,16 @@
     if (n >= 5) return { n: n, texte: 'Ce bien est suivi par ' + num(n) + ' membres' };
     return null;
   }
+  // Cadre photo unique pour tout le site : la photo remplit le cadre (recadrage
+  // centré, jamais d'étirement). Si elle est verticale dans un cadre
+  // horizontal, elle est affichée entière sur un fond flou de la même photo,
+  // au lieu d'être coupée.
+  function cadre(src, cls, style) {
+    if (!src) return '';
+    return '<span class="ed-ph ' + (cls || '') + '"' + (style ? ' style="' + style + '"' : '') + '>' +
+      '<img class="ed-ph-fond" src="' + esc(src) + '" alt="" aria-hidden="true" loading="lazy"/>' +
+      '<img class="ed-ph-img" src="' + esc(src) + '" alt="" loading="lazy" data-cadre/></span>';
+  }
   function photosDe(b) {
     return (b.photos || []).slice(0, 8).map((x, i) => photoOf(b, i)).filter(Boolean);
   }
@@ -678,7 +688,7 @@
     const mien = b.mien || (state.monBien && state.monBien.id === b.id);
     return '<a class="ed-card" href="#/bien/' + b.id + '">' +
       '<div class="ed-card-photo" data-slides="' + photos.length + '">' +
-        photos.map((src, i) => '<img class="ed-slide' + (i === 0 ? ' on' : '') + '" src="' + src + '" alt="" loading="lazy"/>').join('') +
+        photos.map((src, i) => cadre(src, 'ed-slide' + (i === 0 ? ' on' : ''))).join('') +
         (photos.length > 1
           ? '<button type="button" class="ed-slide-nav prev" data-act="slide" data-id="-1" aria-label="Photo précédente"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m12 5-5 5 5 5"/></svg></button>' +
             '<button type="button" class="ed-slide-nav next" data-act="slide" data-id="1" aria-label="Photo suivante"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m8 5 5 5-5 5"/></svg></button>' +
@@ -707,7 +717,7 @@
       list.map((b, i) => {
         const lock = estVerrouille(b);
         return '<div class="ed-hero-slide ' + (i === 0 ? 'on' : '') + '">' +
-          (photoOf(b) ? '<img src="' + photoOf(b) + '" alt="" style="' + (lock ? 'filter:blur(16px);transform:scale(1.06);' : '') + '"/>' : '') +
+          (photoOf(b) ? (lock ? '<img src="' + photoOf(b) + '" alt="" style="filter:blur(16px);transform:scale(1.06)"/>' : cadre(photoOf(b), '')) : '') +
           '<div class="ed-hero-grad"></div>' +
           '<div class="ed-hero-txt">' +
             '<span class="ed-kicker" style="color:rgba(255,255,255,.75)">' + (popularite(b) ? 'Le plus suivi du mois' : 'À la une') + '</span>' +
@@ -902,7 +912,7 @@
     const prenom = (state.profil.prenom || '').trim();
     const img = (f) => '<img src="assets/img/' + f + '" alt=""/>';
     return '<div class="ed-bienvenue">' +
-      '<div class="ed-bienvenue-visuel">' + img('marais-1.jpg') + img('saintgermain-1.jpg') + img('trocadero-1.jpg') + '<span class="ed-logo">S</span></div>' +
+      '<div class="ed-bienvenue-visuel">' + img('trocadero-1.jpg') + img('saintgermain-1.jpg') + img('marais-1.jpg') + '<span class="ed-logo">S</span></div>' +
       '<div class="ed-bienvenue-txt">' +
         '<span class="ed-kicker">Bienvenue au club' + (prenom ? ', ' + esc(prenom) : '') + '</span>' +
         '<h2 class="ed-title" style="font-size:clamp(26px,5vw,36px)">Vous avez été accepté sur Seecret.</h2>' +
@@ -991,6 +1001,26 @@
     return '<svg viewBox="0 0 20 20" width="' + t + '" height="' + t + '" ' + (filled ? 'fill="currentColor"' : 'fill="none"') + ' stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M5.5 3h9A1.5 1.5 0 0 1 16 4.5V18l-6-3.5L4 18V4.5A1.5 1.5 0 0 1 5.5 3z"/></svg>';
   }
 
+  // Galerie de la fiche : même cadre 4:3 que les cartes, photos défilantes,
+  // vignettes cliquables.
+  function galerieBien(b, lock) {
+    const photos = photosDe(b);
+    if (!photos.length) return '<div class="ed-gallery"><div class="ed-gallery-main ed-card-photo"></div></div>';
+    if (lock) {
+      return '<div class="ed-gallery"><div class="ed-gallery-main" style="position:relative"><img src="' + photos[0] + '" alt="" style="width:100%;height:100%;object-fit:cover;filter:blur(18px);transform:scale(1.06)"/>' +
+        '<div style="position:absolute;inset:0;display:grid;place-items:center;background:rgba(20,18,16,.3)"><span class="se-btn light" style="pointer-events:none">Accès restreint</span></div></div></div>';
+    }
+    const fleche = (sens, cls, d) => '<button type="button" class="ed-slide-nav ' + cls + '" data-act="slide" data-id="' + sens + '" aria-label="' + (sens < 0 ? 'Photo précédente' : 'Photo suivante') + '"><svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><path d="' + d + '"/></svg></button>';
+    return '<div class="ed-gallery">' +
+      '<div class="ed-gallery-main ed-card-photo" data-slides="' + photos.length + '" data-galerie>' +
+        photos.map((src, k) => cadre(src, 'ed-slide' + (k === 0 ? ' on' : ''))).join('') +
+        (photos.length > 1 ? fleche(-1, 'prev', 'm12 5-5 5 5 5') + fleche(1, 'next', 'm8 5 5 5-5 5') +
+          '<span class="ed-slide-compte">1 / ' + photos.length + '</span>' : '') +
+      '</div>' +
+      (photos.length > 1 ? '<div class="ed-vignettes">' + photos.map((src, k) => '<button type="button" class="' + (k === 0 ? 'on' : '') + '" data-act="slide-aller" data-id="' + k + '" aria-label="Photo ' + (k + 1) + '"><img src="' + esc(src) + '" alt="" loading="lazy"/></button>').join('') + '</div>' : '') +
+    '</div>';
+  }
+
   function edViewBien(r) {
     const b = bien(r.param);
     if (!b) return '<div class="ed-panel"><div class="ed-card-title">Bien introuvable</div><a class="se-btn" style="margin-top:12px" href="#/catalogue">Retour au catalogue</a></div>';
@@ -1007,7 +1037,7 @@
     return '<div style="margin-bottom:20px"><a class="se-btn ghost sm" href="#/catalogue">← Catalogue</a></div>' +
       '<div class="ed-detail-grid">' +
         '<div>' +
-          '<div class="ed-gallery"><div class="ed-gallery-main" style="position:relative">' + (photoOf(b) ? '<img src="' + photoOf(b) + '" alt="" style="width:100%;height:100%;object-fit:cover;' + (lock ? 'filter:blur(18px);transform:scale(1.06);' : '') + '"/>' : '') + (lock ? '<div style="position:absolute;inset:0;display:grid;place-items:center;background:rgba(20,18,16,.3)"><span class="se-btn light" style="pointer-events:none">Accès restreint</span></div>' : '') + '</div></div>' +
+          galerieBien(b, lock) +
           '<div class="ed-panel" style="margin-top:18px">' +
             '<span class="ed-kicker">' + esc(b.type) + ' · ' + esc(b.label) + '</span>' +
             '<h1 class="ed-title">' + esc(b.titre) + '</h1>' +
@@ -1067,7 +1097,7 @@
       '<div class="ed-detail-grid">' +
         '<div>' +
           '<div class="ed-gallery"><div class="ed-gallery-main">' +
-            (photos[0] ? '<img src="' + esc(photos[0]) + '" alt=""/>' : '<div style="display:grid;place-items:center;height:100%;color:var(--color-taupe);font-size:13px">Aucune photo pour l’instant</div>') +
+            (photos[0] ? cadre(photos[0], '') : '<div style="display:grid;place-items:center;height:100%;color:var(--color-taupe);font-size:13px">Aucune photo pour l’instant</div>') +
           '</div></div>' +
           '<div class="se-row" style="gap:10px;margin-top:12px;flex-wrap:wrap">' +
             photos.map((p, i) => '<div style="position:relative">' +
@@ -1221,6 +1251,7 @@
       else window.scrollTo({ top: 0 });
       lastRoute = r.name;
     }
+    $$('img[data-cadre]').forEach((img) => { if (img.complete) ajusterCadre(img); });
     afficherTour();
   }
 
@@ -2155,6 +2186,7 @@
     'tour-suivant': () => { state.__tour = (state.__tour || 0) + 1; afficherTour(); },
     'tour-passer': () => { finirTour(); },
     'slide': (el, sens) => { defilerPhotos(el.closest('.ed-card-photo'), Number(sens) || 1); },
+    'slide-aller': (el, k) => { defilerPhotos(el.closest('.ed-gallery').querySelector('[data-galerie]'), 0, Number(k) || 0); },
     'filtres-toggle': () => { state.__filtresOuverts = !state.__filtresOuverts; render(); },
     'f-type': (el, t) => {
       const f = state.__filtres = state.__filtres || {};
@@ -2682,15 +2714,26 @@
   });
 
   // Photos des cartes : flèches, et défilement lent automatique au survol.
-  function defilerPhotos(box, sens) {
+  function defilerPhotos(box, sens, aller) {
     if (!box) return;
     const imgs = box.querySelectorAll('.ed-slide');
     if (imgs.length < 2) return;
     let i = Array.prototype.findIndex.call(imgs, (x) => x.classList.contains('on'));
-    i = (i + sens + imgs.length) % imgs.length;
+    i = aller != null ? aller : (i + sens + imgs.length) % imgs.length;
     imgs.forEach((x, k) => x.classList.toggle('on', k === i));
     box.querySelectorAll('.ed-slide-dots i').forEach((x, k) => x.classList.toggle('on', k === i));
+    const compte = box.querySelector('.ed-slide-compte'); if (compte) compte.textContent = (i + 1) + ' / ' + imgs.length;
+    const vig = box.parentNode && box.parentNode.querySelector('.ed-vignettes');
+    if (vig && box.hasAttribute('data-galerie')) vig.querySelectorAll('button').forEach((x, k) => x.classList.toggle('on', k === i));
   }
+  // Photo verticale dans un cadre horizontal : affichée entière sur fond flou.
+  function ajusterCadre(img) {
+    if (!img || !img.naturalWidth) return;
+    const box = img.parentNode;
+    const w = box.clientWidth || 4; const h = box.clientHeight || 3;
+    box.classList.toggle('vertical', img.naturalWidth / img.naturalHeight < (w / h) * 0.8);
+  }
+  document.addEventListener('load', (e) => { if (e.target && e.target.hasAttribute && e.target.hasAttribute('data-cadre')) ajusterCadre(e.target); }, true);
   let survolPhotos = null;
   document.addEventListener('pointerenter', (e) => {
     const box = e.target && e.target.classList && e.target.classList.contains('ed-card-photo') ? e.target : null;
