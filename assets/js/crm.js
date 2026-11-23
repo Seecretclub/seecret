@@ -335,6 +335,199 @@
     const base = propre != null && !isNaN(propre) ? propre : BAREME.acq;
     return estMixte(c) ? Math.min(base, BAREME.mixte) : base;
   }
+  // ---- Vidéo « home tour » (format Reel 9:16) ----
+  // Fabriquée dans le navigateur, sans service externe : les photos défilent
+  // avec un lent zoom (effet Ken Burns) et des fondus, encadrées d'une
+  // ouverture (titre, quartier) et d'une fin « Visible uniquement sur
+  // Seecret ». La musique est une nappe d'ambiance composée à la volée
+  // (Web Audio) : aucun droit d'auteur en jeu.
+  function videoSupportee() {
+    return !!(window.MediaRecorder && HTMLCanvasElement.prototype.captureStream);
+  }
+  function typeVideo() {
+    const choix = ['video/mp4;codecs=avc1.42E01E,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'];
+    return choix.find((t) => { try { return MediaRecorder.isTypeSupported(t); } catch (e) { return false; } }) || '';
+  }
+  function chargerImage(src) {
+    return new Promise((ok) => {
+      const img = new Image();
+      img.onload = () => ok(img);
+      img.onerror = () => ok(null);
+      img.src = /^(data:|https?:|\/)/.test(src) ? src : 'assets/img/' + src;
+    });
+  }
+  function ambiance(ctx, dest, duree) {
+    // Nappe douce : accords Cmaj7 – Am7 – Fmaj7 – G6, enveloppes lentes.
+    const accords = [[261.63, 329.63, 392.0, 493.88], [220.0, 261.63, 329.63, 392.0], [174.61, 220.0, 261.63, 329.63], [196.0, 246.94, 293.66, 329.63]];
+    const filtre = ctx.createBiquadFilter(); filtre.type = 'lowpass'; filtre.frequency.value = 1400;
+    const maitre = ctx.createGain(); maitre.gain.value = 0;
+    filtre.connect(maitre); maitre.connect(dest);
+    const t0 = ctx.currentTime + 0.05;
+    maitre.gain.linearRampToValueAtTime(0.6, t0 + 2);
+    maitre.gain.setValueAtTime(0.6, t0 + duree - 2.5);
+    maitre.gain.linearRampToValueAtTime(0, t0 + duree);
+    const pas = 4;
+    for (let t = 0, i = 0; t < duree; t += pas, i++) {
+      accords[i % accords.length].forEach((f, k) => {
+        [f, f / 2].forEach((fr, oct) => {
+          const o = ctx.createOscillator(); o.type = oct ? 'sine' : 'triangle'; o.frequency.value = fr;
+          o.detune.value = (k - 1.5) * 4;
+          const g = ctx.createGain(); g.gain.value = 0;
+          o.connect(g); g.connect(filtre);
+          const debut = t0 + t; const fin = Math.min(t0 + duree, debut + pas + 1.2);
+          g.gain.linearRampToValueAtTime(0, debut);
+          g.gain.linearRampToValueAtTime(oct ? 0.05 : 0.035, debut + 1.2);
+          g.gain.linearRampToValueAtTime(0, fin);
+          o.start(debut); o.stop(fin + 0.05);
+        });
+      });
+    }
+  }
+  function lignesTexte(c, texte, largeur) {
+    const mots = String(texte || '').split(/\s+/); const lignes = []; let l = '';
+    mots.forEach((m) => { const essai = l ? l + ' ' + m : m; if (c.measureText(essai).width > largeur && l) { lignes.push(l); l = m; } else l = essai; });
+    if (l) lignes.push(l);
+    return lignes;
+  }
+  async function genererHomeTour(b, progres) {
+    const W = 720, H = 1280, FPS = 30;
+    const sources = (b.photos || []).filter((p) => !/^https?:/.test(p) || p.indexOf(location.origin) === 0).slice(0, 8);
+    const images = (await Promise.all(sources.map(chargerImage))).filter(Boolean);
+    if (images.length < 2) throw new Error('Il faut au moins 2 photos du bien pour créer la vidéo.');
+    const INTRO = 2.6, PAR_PHOTO = 3.0, FONDU = 0.7, FIN = 2.8;
+    const duree = INTRO + images.length * PAR_PHOTO + FIN;
+    const canvas = document.createElement('canvas'); canvas.width = W; canvas.height = H;
+    const c = canvas.getContext('2d');
+    const serif = (getComputedStyle(document.documentElement).getPropertyValue('--font-serif') || 'Georgia, serif').trim();
+    const sans = getComputedStyle(document.body).fontFamily || 'system-ui, sans-serif';
+    const titre = (b.editorial && b.editorial.titre) || b.titre || 'Un bien du club';
+    const quartier = (typeof qLabel === 'function' ? qLabel(b.quartier) : '') || b.ville || 'Paris';
+    const infos = [b.surface ? b.surface + ' m²' : '', b.pieces ? b.pieces + ' pièces' : '', b.chambres ? b.chambres + ' chambre' + (b.chambres > 1 ? 's' : '') : ''].filter(Boolean).join('  ·  ');
+
+    function photo(img, t, sens) {
+      // Recadrage plein cadre + zoom lent et léger glissement.
+      const z = 1.06 + 0.12 * t;
+      const ratio = Math.max(W / img.width, H / img.height) * z;
+      const w = img.width * ratio, h = img.height * ratio;
+      const dx = (W - w) / 2 + (sens ? 1 : -1) * (t - 0.5) * W * 0.06;
+      const dy = (H - h) / 2;
+      c.drawImage(img, dx, dy, w, h);
+    }
+    function degrade(haut, opacite) {
+      const g = c.createLinearGradient(0, haut ? 0 : H * 0.45, 0, haut ? H * 0.35 : H);
+      g.addColorStop(0, haut ? 'rgba(10,9,8,' + opacite + ')' : 'rgba(10,9,8,0)');
+      g.addColorStop(1, haut ? 'rgba(10,9,8,0)' : 'rgba(10,9,8,' + opacite + ')');
+      c.fillStyle = g; c.fillRect(0, 0, W, H);
+    }
+    function texteCentre(txt, y, taille, police, couleur, espacement) {
+      c.font = taille + 'px ' + police; c.fillStyle = couleur; c.textAlign = 'center'; c.textBaseline = 'alphabetic';
+      if (espacement) { try { c.letterSpacing = espacement + 'px'; } catch (e) { /* ancien navigateur */ } }
+      c.fillText(txt, W / 2, y);
+      try { c.letterSpacing = '0px'; } catch (e) { /* ignore */ }
+    }
+    function image(t) {
+      c.fillStyle = '#141210'; c.fillRect(0, 0, W, H);
+      if (t < INTRO) {
+        const k = t / INTRO;
+        c.globalAlpha = Math.min(1, k * 2); photo(images[0], k * 0.4, true); c.globalAlpha = 1;
+        c.fillStyle = 'rgba(10,9,8,.5)'; c.fillRect(0, 0, W, H);
+        const a = Math.min(1, Math.max(0, (t - 0.3) / 0.8));
+        c.globalAlpha = a;
+        texteCentre('SEECRET', H * 0.36, 22, sans, 'rgba(255,255,255,.8)', 8);
+        c.font = '58px ' + serif;
+        lignesTexte(c, titre, W - 120).slice(0, 4).forEach((l, i) => texteCentre(l, H * 0.46 + i * 66, 58, serif, '#fff'));
+        texteCentre(quartier.toUpperCase(), H * 0.46 + Math.min(4, lignesTexte(c, titre, W - 120).length) * 66 + 40, 22, sans, 'rgba(255,255,255,.85)', 5);
+        c.globalAlpha = 1;
+        return;
+      }
+      const tp = t - INTRO;
+      if (tp < images.length * PAR_PHOTO) {
+        const i = Math.min(images.length - 1, Math.floor(tp / PAR_PHOTO));
+        const local = (tp - i * PAR_PHOTO) / PAR_PHOTO;
+        photo(images[i], local, i % 2 === 0);
+        const resteFondu = (PAR_PHOTO - (tp - i * PAR_PHOTO));
+        if (resteFondu < FONDU && i < images.length - 1) {
+          c.globalAlpha = 1 - resteFondu / FONDU; photo(images[i + 1], 0, (i + 1) % 2 === 0); c.globalAlpha = 1;
+        }
+        degrade(false, 0.55); degrade(true, 0.35);
+        texteCentre('SEECRET', 70, 18, sans, 'rgba(255,255,255,.85)', 7);
+        if (i === 0 && infos) { c.globalAlpha = Math.min(1, local * 3); texteCentre(infos, H - 120, 28, sans, '#fff'); c.globalAlpha = 1; }
+        if (i === 1) { c.globalAlpha = Math.min(1, local * 3); c.font = '44px ' + serif; texteCentre(quartier, H - 120, 44, serif, '#fff'); c.globalAlpha = 1; }
+        return;
+      }
+      const tf = (t - INTRO - images.length * PAR_PHOTO) / FIN;
+      photo(images[images.length - 1], 1, true);
+      c.fillStyle = 'rgba(10,9,8,' + Math.min(0.82, 0.3 + tf * 1.2) + ')'; c.fillRect(0, 0, W, H);
+      c.globalAlpha = Math.min(1, tf * 2.5);
+      texteCentre('Visible uniquement', H * 0.45, 54, serif, '#fff');
+      texteCentre('sur Seecret', H * 0.45 + 64, 54, serif, '#fff');
+      texteCentre('LE CLUB OFF-MARKET', H * 0.45 + 140, 20, sans, 'rgba(255,255,255,.8)', 6);
+      c.globalAlpha = 1;
+    }
+
+    image(0);
+    const flux = canvas.captureStream(FPS);
+    let actx = null;
+    try {
+      actx = new (window.AudioContext || window.webkitAudioContext)();
+      await actx.resume();
+      const dest = actx.createMediaStreamDestination();
+      ambiance(actx, dest, duree);
+      dest.stream.getAudioTracks().forEach((tr) => flux.addTrack(tr));
+    } catch (e) { /* vidéo sans musique */ }
+    const type = typeVideo();
+    const rec = new MediaRecorder(flux, Object.assign({ videoBitsPerSecond: 3500000, audioBitsPerSecond: 128000 }, type ? { mimeType: type } : {}));
+    const morceaux = [];
+    rec.ondataavailable = (e) => { if (e.data && e.data.size) morceaux.push(e.data); };
+    const fini = new Promise((ok) => { rec.onstop = ok; });
+    rec.start(1000);
+    const debut = performance.now();
+    await new Promise((ok) => {
+      const tic = () => {
+        const t = (performance.now() - debut) / 1000;
+        image(Math.min(t, duree));
+        if (progres) progres(Math.min(1, t / duree));
+        if (t >= duree) return ok();
+        // setTimeout plutôt que requestAnimationFrame : l'enregistrement continue
+        // même si l'onglet passe brièvement en arrière-plan.
+        setTimeout(tic, 1000 / FPS);
+      };
+      tic();
+    });
+    rec.stop();
+    await fini;
+    flux.getTracks().forEach((tr) => tr.stop());
+    if (actx) actx.close().catch(() => {});
+    const mime = (rec.mimeType || type || 'video/webm').split(';')[0];
+    return { blob: new Blob(morceaux, { type: mime }), type: mime, duree: Math.round(duree) };
+  }
+  function carteVideo(b) {
+    if (!b.serverId) return '';
+    const v = b.video;
+    const ap = state.videoApercu && state.videoApercu[b.serverId];
+    const enCours = state.videoEnCours === b.serverId;
+    const nbPhotos = (b.photos || []).length;
+    return '<div class="se-card se-video-carte">' +
+      '<div class="se-row" style="justify-content:space-between;gap:10px;flex-wrap:wrap"><h3>Vidéo home tour</h3>' +
+        (v ? (v.publie ? '<span class="se-badge open">En ligne sur la fiche</span>' : '<span class="se-badge muted">Non publiée</span>') : '') + '</div>' +
+      '<p class="se-hint" style="margin:6px 0 12px">Une vidéo verticale de ~' + Math.round(2.6 + Math.min(8, nbPhotos) * 3 + 2.8) + ' s au format Reel Instagram, créée à partir des photos du bien (8 maximum), avec titre, quartier et musique d’ambiance. Gardez cet onglet ouvert pendant la création.</p>' +
+      (enCours ? '<div class="se-video-progres"><i style="width:' + Math.round((state.videoProgres || 0) * 100) + '%"></i></div><p class="se-hint" data-video-statut>Création en cours… ' + Math.round((state.videoProgres || 0) * 100) + ' %</p>' : '') +
+      (ap ? '<video class="se-video" src="' + ap.url + '" controls playsinline></video>' +
+          '<div class="se-row" style="gap:8px;flex-wrap:wrap;margin-top:10px"><button type="button" class="se-btn" data-act="video-publier" data-id="' + esc(b.serverId) + '">Publier sur la fiche</button>' +
+          '<a class="se-btn ghost" href="' + ap.url + '" download="home-tour-' + esc((b.titre || 'bien').toLowerCase().replace(/[^a-z0-9]+/g, '-')) + (ap.type === 'video/mp4' ? '.mp4' : '.webm') + '">Télécharger pour Instagram</a>' +
+          '<button type="button" class="se-btn ghost" data-act="video-oublier" data-id="' + esc(b.serverId) + '">Annuler</button></div>'
+        : v ? '<video class="se-video" src="' + esc(v.url) + '" controls playsinline preload="metadata"></video>' +
+          '<div class="se-row" style="gap:8px;flex-wrap:wrap;margin-top:10px">' +
+            '<button type="button" class="se-btn ghost" data-act="video-generer" data-id="' + esc(b.serverId) + '"' + (enCours ? ' disabled' : '') + '>Recréer la vidéo</button>' +
+            '<a class="se-btn ghost" href="' + esc(v.url) + '" download>Télécharger pour Instagram</a>' +
+            '<button type="button" class="se-btn ghost" data-act="video-visibilite" data-id="' + esc(b.serverId) + '">' + (v.publie ? 'Retirer de la fiche' : 'Publier sur la fiche') + '</button>' +
+            '<button type="button" class="se-btn ghost" data-act="video-supprimer" data-id="' + esc(b.serverId) + '">Supprimer</button></div>'
+        : (!videoSupportee() ? '<p class="se-note">Ce navigateur ne sait pas créer de vidéo. Utilisez Chrome, Edge ou Safari récent.</p>'
+          : nbPhotos < 2 ? '<p class="se-note">Ajoutez au moins 2 photos au bien pour créer la vidéo.</p>'
+          : '<button type="button" class="se-btn" data-act="video-generer" data-id="' + esc(b.serverId) + '"' + (enCours ? ' disabled' : '') + '>' + (enCours ? 'Création…' : 'Créer la vidéo') + '</button>')) +
+    '</div>';
+  }
+
   // ---- Texte éditorial de la fiche (rédigé par Célia, validé par l'agent) ----
   function carteEditorial(b) {
     if (!b.serverId) return '';
@@ -1440,7 +1633,7 @@
       delai: b.delai || '', dejaEnVente: b.dejaEnVente || '', motif: b.motif || '',
       statut: b.statut || 'brouillon', etapeProposition: b.etapeProposition || '', proprietaireId: lead ? lead.id : null,
       photos: b.photos || [], description: b.description || '',
-      coupDeCoeur: b.coupDeCoeur || '', editorial: b.editorial || null, venduParAgence: b.venduParAgence === true ? true : (b.venduParAgence === false ? false : null),
+      coupDeCoeur: b.coupDeCoeur || '', editorial: b.editorial || null, video: b.video || null, venduParAgence: b.venduParAgence === true ? true : (b.venduParAgence === false ? false : null),
       atouts: b.atouts || b.annexes || [], annexes: b.annexes || [], mandat: { type: 'simple', fin: '' }, cree: b.cree || nowISO(),
       exclusivite: b.exclusivite || { statut: 'scan_en_cours', liens: [] },
       validation: b.validation || 'en_attente',
@@ -4524,6 +4717,7 @@
           '<div class="se-card" style="padding:0;overflow:hidden"><div class="se-bien-photo" style="aspect-ratio:16/9">' + (photo(b) ? '<img src="' + photo(b) + '" alt=""/>' : '') + '</div>' +
             '<div class="se-photos" style="padding:12px">' + (b.photos || []).map((p) => '<div class="se-photo"><img src="' + (/^(data:|https?:|\/)/.test(p) ? p : 'assets/img/' + p) + '" alt=""/></div>').join('') + '</div></div>' +
           carteEditorial(b) +
+          carteVideo(b) +
           '<div class="se-card"><h3>Prix et honoraires</h3><div class="se-kv" style="margin-top:10px">' +
             kv('Prix net vendeur', euro(b.prix)) +
             kv('Honoraires acquéreur', tauxTxt(tauxPour(b, null)) + ' % TTC' + ((b.tauxHonoraires === null || b.tauxHonoraires === undefined || b.tauxHonoraires === '') ? ' (barème)' : ' (propre au bien)')) +
@@ -6492,6 +6686,59 @@
       toast('Offre refusée.');
     },
     'message-ouvrir': (el, id) => { location.hash = '#/messages/' + id; },
+    'video-generer': async (el, id) => {
+      const b = (state.biensServeur || []).find((x) => x.serverId === id);
+      if (!b || state.videoEnCours) return;
+      state.videoEnCours = id; state.videoProgres = 0; render();
+      try {
+        let dernier = 0;
+        const res = await genererHomeTour(b, (p) => {
+          state.videoProgres = p;
+          if (p - dernier > 0.04 || p === 1) {
+            dernier = p;
+            const barre = document.querySelector('.se-video-progres i'); if (barre) barre.style.width = Math.round(p * 100) + '%';
+            const st = document.querySelector('[data-video-statut]'); if (st) st.textContent = 'Création en cours… ' + Math.round(p * 100) + ' %';
+          }
+        });
+        state.videoApercu = state.videoApercu || {};
+        if (state.videoApercu[id]) URL.revokeObjectURL(state.videoApercu[id].url);
+        state.videoApercu[id] = { url: URL.createObjectURL(res.blob), blob: res.blob, type: res.type };
+        toast('Vidéo prête (' + res.duree + ' s, ' + (res.blob.size / 1048576).toFixed(1).replace('.', ',') + ' Mo). Regardez-la avant de la publier.', 'ok');
+      } catch (err) { toast(err.message || 'Création impossible', 'warn'); }
+      state.videoEnCours = null; render();
+    },
+    'video-oublier': (el, id) => {
+      if (state.videoApercu && state.videoApercu[id]) { URL.revokeObjectURL(state.videoApercu[id].url); delete state.videoApercu[id]; }
+      render();
+    },
+    'video-publier': async (el, id) => {
+      const ap = state.videoApercu && state.videoApercu[id];
+      if (!ap) return;
+      el.disabled = true; el.textContent = 'Envoi…';
+      try {
+        const r = await fetch('/api/biens/' + encodeURIComponent(id) + '/video?publier=1', { method: 'POST', headers: { 'content-type': ap.type }, body: ap.blob });
+        const res = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(res.error || 'Envoi impossible');
+        const b = (state.biensServeur || []).find((x) => x.serverId === id); if (b) b.video = res.video;
+        URL.revokeObjectURL(ap.url); delete state.videoApercu[id];
+        toast('Vidéo publiée : les membres la voient sur la fiche.', 'ok');
+      } catch (err) { toast(err.message || 'Envoi impossible', 'warn'); }
+      render();
+    },
+    'video-visibilite': async (el, id) => {
+      const b = (state.biensServeur || []).find((x) => x.serverId === id); if (!b || !b.video) return;
+      const r = await fetch('/api/biens/' + encodeURIComponent(id) + '/video', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ publie: !b.video.publie }) });
+      const res = await r.json().catch(() => ({}));
+      if (r.ok) { b.video = res.video; toast(res.video.publie ? 'Vidéo publiée sur la fiche.' : 'Vidéo retirée de la fiche.', 'ok'); } else toast(res.error || 'Erreur', 'warn');
+      render();
+    },
+    'video-supprimer': async (el, id) => {
+      const b = (state.biensServeur || []).find((x) => x.serverId === id); if (!b) return;
+      if (!el.dataset.confirme) { el.dataset.confirme = '1'; el.textContent = 'Confirmer la suppression'; return; }
+      const r = await fetch('/api/biens/' + encodeURIComponent(id) + '/video', { method: 'DELETE' });
+      if (r.ok) { b.video = null; toast('Vidéo supprimée.', 'ok'); } else toast('Suppression impossible', 'warn');
+      render();
+    },
     'editorial-generer': async (el, id) => {
       const form = el.closest('form');
       state.editorialBrouillon = state.editorialBrouillon || {};

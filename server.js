@@ -1507,6 +1507,7 @@ function bienPublic(b) {
     historiquePrix: Array.isArray(b.historiquePrix) ? b.historiquePrix : [],
     description: b.description || '', photos: b.photos || [], statut: b.statut || 'brouillon',
     coupDeCoeur: b.coupDeCoeur || '',
+    video: b.video && b.video.publie && b.video.url ? { url: b.video.url, type: b.video.type || 'video/mp4' } : null,
     editorial: b.editorial && b.editorial.publie && b.editorial.texte ? { titre: b.editorial.titre || '', texte: b.editorial.texte } : null,
     statutDemande: b.statutDemande || null, cree: b.cree || null,
     suiveurs: Number(b.suiveurs) || 0,
@@ -1587,6 +1588,49 @@ app.post('/api/membre/onboarding', requireAuth, (req, res) => {
   req.lead.onboarding = Object.assign({}, req.lead.onboarding || {}, { [etape]: nowISO() });
   writeDb(req.db);
   res.json({ ok: true, onboarding: req.lead.onboarding });
+});
+
+// ---------------- Vidéo « home tour » ----------------
+// La vidéo verticale est fabriquée dans le navigateur de l'agent (CRM) à
+// partir des photos du bien, puis envoyée ici. Une seule vidéo par bien :
+// la précédente est supprimée du disque.
+const VIDEO_MAX = 80 * 1024 * 1024;
+function supprimerVideoFichier(v) {
+  if (!v || !v.url || !/^\/uploads\/video-[\w-]+\.(mp4|webm)$/.test(v.url)) return;
+  try { fs.unlinkSync(path.join(UPLOADS_DIR, path.basename(v.url))); } catch (e) { /* déjà supprimée */ }
+}
+app.post('/api/biens/:id/video', requireAdmin, express.raw({ type: ['video/mp4', 'video/webm'], limit: VIDEO_MAX }), (req, res) => {
+  const type = String(req.headers['content-type'] || '').split(';')[0];
+  if (['video/mp4', 'video/webm'].indexOf(type) === -1 || !Buffer.isBuffer(req.body) || req.body.length < 1000) {
+    return res.status(400).json({ error: 'Vidéo invalide (MP4 ou WebM attendu).' });
+  }
+  const db = readDb();
+  const b = db.biens.find((x) => x.id === req.params.id);
+  if (!b) return res.status(404).json({ error: 'Bien introuvable.' });
+  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+  const nom = 'video-' + String(b.id).replace(/[^\w-]/g, '') + '-' + crypto.randomBytes(6).toString('hex') + (type === 'video/mp4' ? '.mp4' : '.webm');
+  fs.writeFileSync(path.join(UPLOADS_DIR, nom), req.body);
+  supprimerVideoFichier(b.video);
+  b.video = { url: '/uploads/' + nom, type: type, taille: req.body.length, cree: nowISO(), auteur: nomComplet(req.lead), publie: String(req.query.publier || '1') === '1' };
+  writeDb(db);
+  res.json({ ok: true, video: b.video });
+});
+app.patch('/api/biens/:id/video', requireAdmin, (req, res) => {
+  const db = readDb();
+  const b = db.biens.find((x) => x.id === req.params.id);
+  if (!b || !b.video) return res.status(404).json({ error: 'Aucune vidéo pour ce bien.' });
+  b.video.publie = !!(req.body && req.body.publie);
+  writeDb(db);
+  res.json({ ok: true, video: b.video });
+});
+app.delete('/api/biens/:id/video', requireAdmin, (req, res) => {
+  const db = readDb();
+  const b = db.biens.find((x) => x.id === req.params.id);
+  if (!b) return res.status(404).json({ error: 'Bien introuvable.' });
+  supprimerVideoFichier(b.video);
+  delete b.video;
+  writeDb(db);
+  res.json({ ok: true });
 });
 
 // ---------------- La Gazette du club ----------------
