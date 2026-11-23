@@ -316,16 +316,19 @@
   const prixM2 = (b) => (b.surface ? Math.round(b.prix / b.surface) : 0);
   // ---- Prix net vendeur / HAI ----
   // b.prix = prix NET vendeur. Le prix honoraires inclus (HAI) dépend de
-  // l'acquéreur : taux du bien (ou barème agence), taux réduit pour un profil
-  // « Acquéreur et Vendeur ». Barème chargé depuis /api/agence (même calcul
-  // que le serveur, qui reste la source de vérité pour le catalogue membre).
+  // l'acquéreur : taux du bien (ou barème agence), taux réduit seulement pour
+  // un client dont le bien a été VENDU par nous. Barème chargé depuis
+  // /api/agence (même calcul que le serveur, source de vérité du catalogue).
   const BAREME = { acq: 5, mixte: 3, pas: 1 };
   const tauxTxt = (t) => String(t).replace('.', ',');
+  const REDUIT = { reduit: true };
   function estMixte(c) {
     if (!c) return false;
-    if (c.type === 'mixte' || c.projet === 'mixte') return true;
-    const cl = c.clientId ? client(c.clientId) : null;
-    return !!(cl && cl.type === 'mixte');
+    if (c.reduit) return true;
+    const cl = c.clientId ? client(c.clientId) : c;
+    if (!cl || !cl.id) return false;
+    return ((state.biensServeur || []).concat(state.biens || [])).some((b) =>
+      b.statut === 'vendu' && (b.proprietaireId === cl.id || (cl.serverId && b.leadId === cl.serverId)));
   }
   function tauxPour(b, c) {
     const propre = (b && b.tauxHonoraires !== null && b.tauxHonoraires !== undefined && b.tauxHonoraires !== '') ? Number(b.tauxHonoraires) : null;
@@ -4464,7 +4467,7 @@
     return '<div class="se-fiche-head">' +
       '<div style="flex:1"><div class="kicker" style="color:var(--color-taupe)">' + esc(b.ref) + ' · ' + esc(b.type) + ' · ' + esc(qLabel(b.quartier)) + (prop ? ' · <a href="#/client/' + prop.id + '" style="color:var(--color-club-violet);text-decoration:none">Propriétaire : ' + esc(nomClient(prop)) + '</a>' : '') + '</div>' +
       '<h1 class="display" style="font-size:30px;margin:4px 0 2px">' + esc(b.titre) + '</h1>' +
-      '<div class="se-row" style="gap:8px">' + badgeBien(b.statut) + badgeExclusivite(b) + badgeValidation(b) + badgeDemo(b) + '<span class="se-pill" title="Prix net vendeur">Net <b>' + euro(b.prix) + '</b></span><span class="se-pill" title="Prix affiché aux acquéreurs">HAI <b>' + euro(haiPour(b, null)) + '</b> · ' + tauxTxt(tauxPour(b, null)) + ' %</span><span class="se-pill" title="Prix affiché à un profil acquéreur + vendeur">Mixte ' + euro(haiPour(b, { type: 'mixte' })) + '</span><span class="se-pill">' + euro(prixM2(b)) + ' /m² net</span></div></div>' +
+      '<div class="se-row" style="gap:8px">' + badgeBien(b.statut) + badgeExclusivite(b) + badgeValidation(b) + badgeDemo(b) + '<span class="se-pill" title="Prix net vendeur">Net <b>' + euro(b.prix) + '</b></span><span class="se-pill" title="Prix affiché aux acquéreurs">HAI <b>' + euro(haiPour(b, null)) + '</b> · ' + tauxTxt(tauxPour(b, null)) + ' %</span><span class="se-pill" title="Prix affiché à un client dont le bien a été vendu par l’agence">Vendeur chez nous ' + euro(haiPour(b, REDUIT)) + '</span><span class="se-pill">' + euro(prixM2(b)) + ' /m² net</span></div></div>' +
       '<div class="se-actions">' +
         '<button class="se-btn ghost" data-act="bien-editer" data-id="' + b.id + '">Modifier</button>' +
         '<button class="se-btn ghost" data-act="bien-statut" data-id="' + b.id + '">Changer le statut</button>' +
@@ -4479,7 +4482,7 @@
             kv('Prix net vendeur', euro(b.prix)) +
             kv('Honoraires acquéreur', tauxTxt(tauxPour(b, null)) + ' % TTC' + ((b.tauxHonoraires === null || b.tauxHonoraires === undefined || b.tauxHonoraires === '') ? ' (barème)' : ' (propre au bien)')) +
             kv('Prix affiché (HAI)', euro(haiPour(b, null))) +
-            kv('Prix affiché profil mixte', euro(haiPour(b, { type: 'mixte' })) + ' · ' + tauxTxt(tauxPour(b, { type: 'mixte' })) + ' %') +
+            kv('Prix affiché à un vendeur chez nous', euro(haiPour(b, REDUIT)) + ' · ' + tauxTxt(tauxPour(b, REDUIT)) + ' %') +
           '</div>' +
           ((b.historiquePrix || []).length
             ? '<div class="se-list" style="margin-top:12px">' + b.historiquePrix.slice().reverse().map((h) => '<div class="se-list-item"><div style="flex:1;min-width:0"><div style="font-size:13.5px">' + (h.ancien ? euro(h.ancien) + ' → ' : '') + '<b>' + euro(h.nouveau) + '</b> net</div><div class="se-hint">' + dFR(h.at) + (h.auteur ? ' · ' + esc(h.auteur) : '') + (h.source ? ' · ' + esc(h.source) : '') + '</div></div></div>').join('') + '</div>'
@@ -5324,7 +5327,7 @@
       '</div>' +
     '</div>';
 
-    const pdfRows = [['Prix honoraires inclus', b ? euro(haiPour(b, null)) : '—'], ['Honoraires', b ? tauxTxt(tauxPour(b, null)) + ' % TTC à la charge de l’acquéreur' : '—'], ['Surface', b && b.surface ? b.surface + ' m²' : '—'], ['Pièces', b && b.pieces ? b.pieces : '—'], ['Chambres', b && b.chambres != null ? b.chambres : '—'], ['Salles de bain', b && b.sdb != null ? b.sdb : '—'], ['Étage', b && b.etage != null ? (b.etage === 0 ? 'RDC' : b.etage) : '—'], ['DPE', b && b.dpe ? b.dpe : '—'], ['GES', b && b.ges ? b.ges : '—']];
+    const pdfRows = [['Prix honoraires inclus', b ? euro(haiPour(b, null)) : '—'], ['Surface', b && b.surface ? b.surface + ' m²' : '—'], ['Pièces', b && b.pieces ? b.pieces : '—'], ['Chambres', b && b.chambres != null ? b.chambres : '—'], ['Salles de bain', b && b.sdb != null ? b.sdb : '—'], ['Étage', b && b.etage != null ? (b.etage === 0 ? 'RDC' : b.etage) : '—'], ['DPE', b && b.dpe ? b.dpe : '—'], ['GES', b && b.ges ? b.ges : '—']];
     const pdfView = '<div class="se-pdf-preview">' +
       '<div class="se-pdf-head"><div class="se-pdf-logo">SEECRET</div><div class="se-pdf-tag">Fiche confidentielle</div></div>' +
       '<div class="se-pdf-body">' +

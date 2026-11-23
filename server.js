@@ -859,7 +859,6 @@ function ficheProduitHtml(bien) {
   const photos = (bien.photos || []).slice(0, 8);
   const rows = [
     ['Prix honoraires inclus', bien.prix ? prixHai(bien.prix, tauxHonorairesPour(bien, null)).toLocaleString('fr-FR') + ' €' : '—'],
-    ['Honoraires', bien.prix ? String(tauxHonorairesPour(bien, null)).replace('.', ',') + ' % TTC à la charge de l’acquéreur' : '—'],
     ['Surface', bien.surface ? bien.surface + ' m²' : '—'],
     ['Pièces', bien.pieces || '—'],
     ['Chambres', bien.chambres || '—'],
@@ -903,8 +902,7 @@ function emailBienPreview(bien, nom, message) {
     '<div style="font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:#3b2b4a;font-weight:600;">Seecret</div>',
     '<h1 style="font-family:Georgia,\'Times New Roman\',serif;font-weight:400;font-size:28px;line-height:1.12;color:#141210;margin:16px 0 0;">' + (bien.titre || 'Un bien') + '</h1>',
     '<p style="font-size:16px;line-height:1.6;color:#5f5a54;margin:12px 0 0;">' + hello + '</p>',
-    '<p style="font-size:16px;line-height:1.6;color:#5f5a54;margin:6px 0 0;">' + (bien.prix ? prixHai(bien.prix, tauxHonorairesPour(bien, null)).toLocaleString('fr-FR') + ' € honoraires inclus' : '') + (bien.surface ? ' · ' + bien.surface + ' m²' : '') + (bien.quartier ? ' · ' + bien.quartier : '') + '</p>' +
-    (bien.prix ? '<p style="font-size:12px;line-height:1.5;color:#5f5a54;margin:4px 0 0;">' + mentionHonoraires(tauxHonorairesPour(bien, null)) + '</p>' : ''),
+    '<p style="font-size:16px;line-height:1.6;color:#5f5a54;margin:6px 0 0;">' + (bien.prix ? prixHai(bien.prix, tauxHonorairesPour(bien, null)).toLocaleString('fr-FR') + ' € honoraires inclus' : '') + (bien.surface ? ' · ' + bien.surface + ' m²' : '') + (bien.quartier ? ' · ' + bien.quartier : '') + '</p>',
     (bien.description ? '<p style="font-size:15px;line-height:1.6;color:#5f5a54;margin:14px 0 0;">' + bien.description + '</p>' : ''),
     '</td></tr>',
     '</table>',
@@ -1448,14 +1446,19 @@ function tauxValide(v) {
   const n = Number(String(v).replace(',', '.'));
   return isNaN(n) || n < 0 || n > 20 ? null : Math.round(n * 100) / 100;
 }
-// Taux applicable à un acquéreur donné : taux propre au bien s'il a été fixé
-// dans le CRM, sinon le barème de l'agence ; un profil « Acquéreur et Vendeur »
-// (mixte) bénéficie du taux réduit (jamais plus que le taux du bien).
-function tauxHonorairesPour(bien, lead) {
+// Taux applicable à un acquéreur : taux propre au bien s'il a été fixé dans le
+// CRM, sinon le barème de l'agence. Le taux réduit (3 %) ne s'applique qu'à un
+// membre dont le bien a été VENDU par nous — être simplement acquéreur et
+// vendeur ne suffit pas. Jamais plus que le taux du bien.
+function aVenduChezNous(db, lead) {
+  if (!db || !lead) return false;
+  return (db.biens || []).some((b) => b.leadId === lead.id && b.statut === 'vendu');
+}
+function tauxHonorairesPour(bien, lead, reduit) {
   const a = agence();
   const propre = tauxValide(bien && bien.tauxHonoraires);
   const base = propre != null ? propre : a.tauxAcquereur;
-  return lead && lead.projet === 'mixte' ? Math.min(base, a.tauxMixte) : base;
+  return reduit ? Math.min(base, a.tauxMixte) : base;
 }
 function prixHai(net, taux) {
   const n = Number(net) || 0;
@@ -1482,8 +1485,8 @@ function prixPourCrm(b) {
   const taux = tauxHonorairesPour(b, null);
   return Object.assign({}, b, {
     prixNet: b.prix || 0, tauxHonoraires: tauxValide(b.tauxHonoraires), tauxApplique: taux,
-    tauxMixte: Math.min(taux, agence().tauxMixte), prixHai: prixHai(b.prix, taux),
-    prixHaiMixte: prixHai(b.prix, Math.min(taux, agence().tauxMixte))
+    tauxReduit: Math.min(taux, agence().tauxMixte), prixHai: prixHai(b.prix, taux),
+    prixHaiReduit: prixHai(b.prix, Math.min(taux, agence().tauxMixte))
   });
 }
 
@@ -1512,18 +1515,22 @@ function bienPublic(b) {
 // Version catalogue d'un bien, vue par les AUTRES membres : ni adresse exacte
 // ni coordonnées GPS. L'adresse n'est communiquée qu'à la confirmation d'une
 // visite (mandat signé + validation de l'agent), par email et WhatsApp.
-// Le prix renvoyé est le prix HAI calculé pour CE membre (taux réduit s'il est
-// aussi vendeur) ; le net vendeur et son historique sont retirés.
-function bienCatalogue(b, lead) {
+// Le prix renvoyé est le prix HAI calculé pour CE membre (taux réduit s'il a
+// vendu son bien chez nous). Ni le net, ni le taux, ni le montant des
+// honoraires ne sont transmis : l'acquéreur ne voit que le prix HAI.
+function bienCatalogue(b, lead, reduit) {
   const p = bienPublic(b);
   delete p.adresse;
   delete p.lat;
   delete p.lon;
   p.adresseMasquee = true;
-  const taux = tauxHonorairesPour(b, lead);
+  const taux = tauxHonorairesPour(b, lead, reduit);
   p.prix = prixHai(b.prix, taux);
-  p.honoraires = { taux: taux, charge: 'acquereur', mention: mentionHonoraires(taux) };
-  if (process.env.AGENCE_AFFICHER_PRIX_NET === '1') p.honoraires.prixHorsHonoraires = b.prix || 0;
+  p.honoraires = { inclus: true };
+  if (process.env.AGENCE_AFFICHER_PRIX_NET === '1') {
+    p.honoraires.mention = mentionHonoraires(taux);
+    p.honoraires.prixHorsHonoraires = b.prix || 0;
+  }
   delete p.prixNet;
   delete p.prixHai;
   delete p.tauxHonoraires;
@@ -1561,7 +1568,8 @@ app.get('/api/catalogue', requireAuth, (req, res) => {
     (b.statut === 'avant-premiere' || b.statut === 'ouvert') &&
     (!monBien || b.id !== monBien.id)
   );
-  res.json({ ok: true, biens: biens.map((b) => bienCatalogue(b, req.lead)) });
+  const reduit = aVenduChezNous(db, req.lead);
+  res.json({ ok: true, biens: biens.map((b) => bienCatalogue(b, req.lead, reduit)) });
 });
 
 app.patch('/api/mon-bien', requireAuth, (req, res) => {
@@ -2051,7 +2059,7 @@ app.post('/api/biens/:id/envoi', requireAdmin, async (req, res) => {
       await mailer.sendMail({
         from: '"Bonjour Seecret" <' + FROM_EMAIL + '>',
         to: email,
-        subject: (bien.titre || 'Un bien') + ' — ' + (bien.prix ? prixHai(bien.prix, tauxHonorairesPour(bien, null)).toLocaleString('fr-FR') + ' € HAI' : ''),
+        subject: (bien.titre || 'Un bien') + ' — ' + (bien.prix ? prixHai(bien.prix, tauxHonorairesPour(bien, null)).toLocaleString('fr-FR') + ' €' : ''),
         html: emailBienPreview(bien, nom, message) + '<p style="font-size:13px;color:#5f5a54;margin:18px 0 0;">Téléchargez la fiche confidentielle complète : <a href="' + originOf(req) + '/api/biens/' + bien.id + '/pdf?t=' + jetonFiche(bien.id) + '" style="color:#3b2b4a;">voir la fiche (PDF)</a></p>'
       });
       emailEnvoye = true;
@@ -2473,9 +2481,10 @@ app.post('/api/offres', requireAuth, (req, res) => {
     return res.status(409).json({ error: 'Ce bien est en avant-première : le propriétaire n’a pas encore ouvert les visites, donc pas encore les offres. Suivez-le pour être informé dès que ce sera possible.' });
   }
   const bienAdresse = bien ? (bien.adresse || bien.titre || '') : '';
-  // L'acquéreur fait son offre sur le prix affiché (honoraires inclus) : on
-  // garde le taux appliqué et l'équivalent net vendeur pour le propriétaire.
-  const tauxOffre = tauxHonorairesPour(bien, req.lead);
+  // L'acquéreur fait son offre sur le prix affiché (honoraires inclus). Le taux
+  // et l'équivalent net vendeur sont gardés pour l'agence (CRM uniquement) :
+  // ils ne sont jamais renvoyés à l'acquéreur.
+  const tauxOffre = tauxHonorairesPour(bien, req.lead, aVenduChezNous(req.db, req.lead));
   const offre = {
     id: uid('o'), bienId: bienId, leadId: req.lead.id, email: req.lead.email, nom: nomComplet(req.lead),
     montant: montant, tauxHonoraires: tauxOffre, prixAffiche: prixHai(bien.prix, tauxOffre),
@@ -2485,7 +2494,7 @@ app.post('/api/offres', requireAuth, (req, res) => {
   req.db.offres.unshift(offre);
   const demande = {
     id: uid('d'), type: 'offre', leadId: req.lead.id, bienId: bienId, email: req.lead.email,
-    nom: nomComplet(req.lead), message: 'Montant : ' + montant.toLocaleString('fr-FR') + ' € HAI (soit ' + offre.montantNet.toLocaleString('fr-FR') + ' € net vendeur)' + (bienAdresse ? ' · ' + bienAdresse : '') + (message ? ' — ' + message : ''),
+    nom: nomComplet(req.lead), message: 'Montant : ' + montant.toLocaleString('fr-FR') + ' € HAI (soit ' + offre.montantNet.toLocaleString('fr-FR') + ' € net vendeur, info agence)' + (bienAdresse ? ' · ' + bienAdresse : '') + (message ? ' — ' + message : ''),
     montant: montant, offreId: offre.id, bienAdresse: bienAdresse, role: 'offre', statut: 'nouvelle', source: 'Espace membre', cree: nowISO()
   };
   req.db.demandes.unshift(demande);

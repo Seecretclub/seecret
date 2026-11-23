@@ -310,9 +310,10 @@
   const prixM2 = (b) => (b.surface ? Math.round(b.prix / b.surface) : 0);
   // Prix : le propriétaire voit son net vendeur (b.prix) et le prix affiché aux
   // acquéreurs (b.prixHai, calculé par le serveur) ; les biens du catalogue
-  // arrivent déjà en prix honoraires inclus, avec la mention des honoraires.
+  // arrivent déjà en prix honoraires inclus, sans taux ni montant d'honoraires
+  // (la mention n'apparaît que si l'agence active AGENCE_AFFICHER_PRIX_NET).
   const tauxTxt = (t) => String(t).replace('.', ',');
-  const mentionHai = (b) => (b && b.honoraires
+  const mentionHai = (b) => (b && b.honoraires && b.honoraires.mention
     ? '<p class="se-hint se-mention-hai">' + esc(b.honoraires.mention) +
       (b.honoraires.prixHorsHonoraires ? ' Prix hors honoraires : ' + euro(b.honoraires.prixHorsHonoraires) + '.' : '') + '</p>'
     : '');
