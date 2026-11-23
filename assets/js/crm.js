@@ -4774,19 +4774,18 @@
     const photos = b.photos || [];
     if (!b.serveur) return '<div class="se-photos" style="padding:12px">' + photos.map((p) => '<div class="se-photo"><img src="' + src(p) + '" alt=""/></div>').join('') + '</div>';
     const envoi = state.photoEnvoi === b.id;
-    return '<div style="padding:12px"><div class="se-crm-photos">' +
-        photos.map((p, i) => '<div class="se-crm-photo' + (i === 0 ? ' principale' : '') + '"><img src="' + esc(src(p)) + '" alt=""/>' +
+    // Glisser une photo (souris, ou appui long au doigt) pour la déplacer ;
+    // la première est la photo principale (tri-photos.js).
+    return '<div style="padding:12px"><div class="se-crm-photos" data-tri-photos="crm:' + esc(b.id) + '">' +
+        photos.map((p, i) => '<div class="se-crm-photo' + (i === 0 ? ' principale' : '') + '" data-tri-index="' + i + '"><img src="' + esc(src(p)) + '" alt="" draggable="false"/>' +
           (i === 0 ? '<span class="se-crm-photo-tag">Principale</span>' : '') +
           '<div class="se-crm-photo-actions">' +
-            (i > 0 ? '<button type="button" title="Définir comme principale" data-act="bien-photo" data-op="principale" data-i="' + i + '" data-id="' + b.id + '">★</button>' : '') +
-            (i > 0 ? '<button type="button" title="Avancer" data-act="bien-photo" data-op="gauche" data-i="' + i + '" data-id="' + b.id + '">←</button>' : '') +
-            (i < photos.length - 1 ? '<button type="button" title="Reculer" data-act="bien-photo" data-op="droite" data-i="' + i + '" data-id="' + b.id + '">→</button>' : '') +
-            '<button type="button" title="Retirer" data-act="bien-photo" data-op="retirer" data-i="' + i + '" data-id="' + b.id + '">×</button>' +
+            '<button type="button" title="Retirer" data-tri-fixe data-act="bien-photo" data-op="retirer" data-i="' + i + '" data-id="' + b.id + '">×</button>' +
           '</div></div>').join('') +
         (photos.length < 12
           ? '<label class="se-crm-photo-add">' + (envoi ? 'Envoi…' : ICONS.plus + '<span>Ajouter</span>') + '<input type="file" accept="image/jpeg,image/png,image/webp" multiple hidden data-bien-photos="' + b.id + '"' + (envoi ? ' disabled' : '') + '/></label>'
           : '') +
-      '</div><p class="se-hint" style="margin-top:8px">' + photos.length + ' / 12 photos · format horizontal conseillé. Le membre ne peut plus modifier ses photos une fois le bien validé : c’est ici que vous les gérez.</p></div>';
+      '</div><p class="se-hint" style="margin-top:8px">' + photos.length + ' / 12 photos · faites glisser une photo pour la déplacer (appui long sur téléphone) ; la première est la photo principale. Format horizontal conseillé. Le membre ne peut plus modifier ses photos une fois le bien validé : c’est ici que vous les gérez.</p></div>';
   }
   async function enregistrerBien(b, champs, okMsg) {
     try {
@@ -6969,6 +6968,13 @@
     fn(el, el.getAttribute('data-id'), e);
   });
 
+  document.addEventListener('tri-photos', (e) => {
+    const cle = String(e.detail.cle || '');
+    if (cle.indexOf('crm:') !== 0) return;
+    const b = bien(cle.slice(4)); if (!b || !b.serveur) return;
+    const p = window.TriPhotos.reordonner(b.photos || [], e.detail.de, e.detail.vers);
+    enregistrerBien(b, { photos: p }, e.detail.vers === 0 ? 'Nouvelle photo principale.' : 'Ordre des photos enregistré.');
+  });
   document.addEventListener('change', async (e) => {
     if (e.target.hasAttribute('data-bien-photos')) {
       const b = bien(e.target.getAttribute('data-bien-photos'));

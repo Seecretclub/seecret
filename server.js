@@ -2209,6 +2209,15 @@ app.delete('/api/mon-bien/photos', requireAuth, (req, res) => {
 app.patch('/api/mon-bien/photos', requireAuth, (req, res) => {
   const b = bienDuMembre(req.db, req.lead);
   if (b.validation === 'valide') return res.status(409).json({ error: PHOTOS_VERROUILLEES });
+  // Nouvel ordre complet (glisser-déposer) : mêmes photos, autre ordre.
+  if (Array.isArray(req.body && req.body.ordre)) {
+    const ordre = req.body.ordre.map(String);
+    const actuelles = (b.photos || []).slice();
+    if (ordre.length !== actuelles.length || ordre.slice().sort().join('\n') !== actuelles.slice().sort().join('\n')) return res.status(400).json({ error: 'Ordre des photos invalide : rechargez la page.' });
+    b.photos = ordre;
+    writeDb(req.db);
+    return res.json({ ok: true, photos: b.photos });
+  }
   const url = String((req.body && req.body.principale) || '');
   if ((b.photos || []).indexOf(url) === -1) return res.status(404).json({ error: 'Photo introuvable' });
   b.photos = [url].concat(b.photos.filter((p) => p !== url));
