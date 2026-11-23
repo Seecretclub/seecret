@@ -1412,6 +1412,10 @@
   }
 
   function render() {
+    // Un seul outil de prospection : l'ancien « Immo Data Robot » (tableau et
+    // onglet Radar) renvoie vers le Radar. Ses autres onglets restent
+    // accessibles par « Anciens outils » en bas du Radar.
+    if (location.hash === '#/robot-radar' || location.hash === '#/robot') { location.replace('#/radar'); return; }
     const r = parseRoute();
     $$('.se-modal-back').forEach((m) => m.remove());
 
@@ -1546,7 +1550,6 @@
           nav('biens', r.name, 'building', 'Produits') +
           nav('recherches', r.name, 'search', 'Recherches') +
           nav('radar', r.name, 'search', 'Radar') +
-          nav('robot', r.name, 'robot', 'Immo Data Robot', (matchings().filter((m) => m.statut === 'nouveau').length) || '') +
           nav('notifications', r.name, 'inbox', 'À prévenir', (notifications().length) || '') +
         '</nav>' +
         '<div class="se-nav-label">Le Club</div>' +
@@ -4718,6 +4721,15 @@
       return true;
     });
   }
+  function radarProprioLigneLiens(p) {
+    if (!p || p.statut !== 'identifie') return radarProprioLigne(p);
+    const d = p.dirigeant; const c = p.contacts || {};
+    const li = (c.linkedin || []).find((l) => l.url);
+    const nomD = d ? ((d.prenom || '') + ' ' + String(d.nom || '').toUpperCase()).trim() : '';
+    const urlD = li ? li.url : 'https://www.linkedin.com/search/results/people/?keywords=' + encodeURIComponent(nomD);
+    return '<span class="rd-badge noir">IDENTIFIÉ</span><a href="https://annuaire-entreprises.data.gouv.fr/entreprise/' + esc(p.siren || '') + '" target="_blank" rel="noopener"><b>' + esc(p.nom) + '</b></a>' +
+      (d ? '<span class="rd-sep">·</span><a href="' + esc(urlD) + '" target="_blank" rel="noopener" title="' + (li ? 'Profil LinkedIn trouvé' : 'Chercher sur LinkedIn') + '">' + esc(nomD) + (d.age ? ', ' + d.age + ' ans' : '') + '</a>' + (li ? ' <span class="rd-ico">in</span>' : '') : '');
+  }
   function radarProprioLigne(p) {
     if (!p || p.statut === 'fichier_absent') return '<span class="rd-badge gris">PROPRIÉTAIRE</span><span class="se-hint">Fichier des propriétaires pas encore chargé</span>';
     if (p.statut === 'identifie') {
@@ -4819,7 +4831,8 @@
     const entete = D.recherche ? '<div class="rd-resultats"><b>' + num(fiches.length) + ' bien' + (fiches.length > 1 ? 's' : '') + ' trouvé' + (fiches.length > 1 ? 's' : '') + '</b><span class="se-hint">' + esc(D.recherche.libelle) + (D.recherche.total > fiches.length ? ' · ' + num(D.recherche.total) + ' DPE au total' : '') + '</span></div>' : '<p class="se-hint">Lancez une première recherche.</p>';
     const cartes = '<div class="rd-liste">' + (liste.length ? liste.slice(0, radar.limite).map(radarCarte).join('') : '<div class="se-card"><p class="se-hint">' + (job && job.enCours ? 'Les premiers résultats arrivent…' : 'Aucune fiche avec ces critères.') + '</p></div>') + '</div>' +
       (liste.length > radar.limite ? '<button class="se-btn ghost" style="margin-top:12px;width:100%" data-act="radar-plus">Afficher plus (' + num(liste.length - radar.limite) + ' restantes)</button>' : '');
-    return intro + pm + aide + formRadar() + exa + recs + progression + entete + onglets + filtres + '<p class="se-hint" style="margin:8px 0">' + num(liste.length) + ' fiche' + (liste.length > 1 ? 's' : '') + ' affichée' + (liste.length > 1 ? 's' : '') + '</p>' + cartes + secteurs;
+    const anciens = '<p class="se-hint" style="margin-top:24px">Anciens outils (propriétaires, signaux vendeurs, portefeuille foncier, BODACC) : <a href="#/robot-proprietaires">ouvrir</a>. Tout ce qu’ils faisaient est désormais fait automatiquement par le Radar.</p>';
+    return intro + pm + aide + formRadar() + exa + recs + progression + entete + onglets + filtres + '<p class="se-hint" style="margin:8px 0">' + num(liste.length) + ' fiche' + (liste.length > 1 ? 's' : '') + ' affichée' + (liste.length > 1 ? 's' : '') + '</p>' + cartes + secteurs + anciens;
   }
   async function chargerFicheRadar(id) {
     radar.fiches[id] = { chargement: true };
@@ -4853,7 +4866,7 @@
     const confiances = { 'étage et porte': 'lot de la société au même étage et à la même porte', 'étage': 'seule société à posséder un lot à cet étage', 'immeuble entier': 'la société possède tout l’immeuble', maison: 'seule société propriétaire à cette adresse' };
     const proprio = '<div class="se-card"><h3>Propriétaire</h3>' +
       (p.statut === 'identifie'
-        ? '<div class="rd-proprio" style="margin-top:10px">' + radarProprioLigne(p) + '</div>' +
+        ? '<div class="rd-proprio" style="margin-top:10px">' + radarProprioLigneLiens(p) + '</div>' +
           '<div class="se-kv" style="margin-top:12px">' + kv('Société', esc(p.nom) + (p.forme ? ' · ' + esc(p.forme) : '')) + kv('SIREN', '<a href="https://annuaire-entreprises.data.gouv.fr/entreprise/' + esc(p.siren) + '" target="_blank" rel="noopener">' + esc(p.siren) + '</a>') +
             kv('Droit', esc(p.droit || 'Propriétaire')) + kv('Pourquoi elle', esc(confiances[p.confiance] || p.confiance || '') + ' (fichier DGFiP ' + esc(p.millesime || '') + ')') + kv('Dans l’immeuble', num(p.lotsSociete) + ' lot' + (p.lotsSociete > 1 ? 's' : '') + ' à elle sur ' + num(p.lotsImmeuble) + ' lots détenus par des sociétés') +
             kv('Siège', esc(soc.siege || '')) + kv('Créée le', soc.creation ? esc(new Date(soc.creation).toLocaleDateString('fr-FR')) : '') + '</div>' +
