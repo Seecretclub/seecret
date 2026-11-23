@@ -520,6 +520,7 @@
             '<a role="menuitem" href="#/profil" class="' + (r.name === 'profil' ? 'active' : '') + '">Mon profil</a>' +
             '<div class="ed-menu-sep"></div>' +
             '<a role="menuitem" href="#" data-act="bienvenue-revoir">Revoir la présentation</a>' +
+            '<a role="menuitem" href="#" data-act="musique-ouvrir">Musique d’ambiance</a>' +
             '<a role="menuitem" href="#" data-act="logout">Se déconnecter</a>' +
             (estStaff() ? '<div class="ed-menu-sep"></div><a role="menuitem" class="ed-menu-crm" href="/crm.html">Aller sur le CRM →</a>' : '') +
           '</div>' +
@@ -996,6 +997,7 @@
     afficherTour();
     API.send('POST', '/api/membre/onboarding', { etape: 'visite' }).catch(() => {});
     if (state.membre) state.membre.onboarding = Object.assign({}, state.membre.onboarding, { visite: new Date().toISOString() });
+    rendreMusique();
   }
 
   function bookmarkSvg(filled, taille) {
@@ -1343,6 +1345,80 @@
     if (Math.abs(dx) > 50) afficherEtape(visiteEtat.i + (dx < 0 ? 1 : -1), dx < 0 ? 1 : -1);
   }, { passive: true });
 
+  // ---- Navigation en musique (option) ----
+  // Proposée une fois, après la découverte de la plateforme. Ambiances =
+  // playlists publiques vérifiées (Spotify, YouTube), ou le lien du membre.
+  // Le lecteur vit hors du rendu principal : la musique continue quand on
+  // change de page.
+  const AMBIANCES = [
+    { id: 'jazz', nom: 'Jazz', sous: 'Jazz Vibes', lien: { source: 'spotify', type: 'playlist', id: '37i9dQZF1DX0SM0LYsmbMT' } },
+    { id: 'piano', nom: 'Piano', sous: 'Peaceful Piano', lien: { source: 'spotify', type: 'playlist', id: '37i9dQZF1DX4sWSpwq3LiO' } },
+    { id: 'classique', nom: 'Classique', sous: 'Classical Essentials', lien: { source: 'spotify', type: 'playlist', id: '37i9dQZF1DWWEJlAGA9gs0' } },
+    { id: 'lounge', nom: 'Lounge', sous: 'Soft Lounge', lien: { source: 'spotify', type: 'playlist', id: '37i9dQZF1DX82pCGH5USnM' } },
+    { id: 'chill', nom: 'Chill', sous: 'Chill Vibes', lien: { source: 'spotify', type: 'playlist', id: '37i9dQZF1DX889U0CL85jj' } },
+    { id: 'soul', nom: 'Soul & R&B', sous: 'BUTTER', lien: { source: 'spotify', type: 'playlist', id: '37i9dQZF1DWVzZlRWgqAGH' } },
+    { id: 'lofi', nom: 'Lofi', sous: 'Lofi Girl · YouTube', lien: { source: 'youtube', type: 'video', id: 'jfKfPfyJRdk' } }
+  ];
+  function lienCourant() {
+    const m = state.membre && state.membre.musique;
+    if (!m || !m.actif) return null;
+    if (m.lien) return m.lien;
+    const a = AMBIANCES.find((x) => x.id === m.ambiance);
+    return a ? a.lien : null;
+  }
+  function urlLecteur(l) {
+    if (l.source === 'spotify') return 'https://open.spotify.com/embed/' + l.type + '/' + encodeURIComponent(l.id) + '?utm_source=generator&theme=0';
+    if (l.type === 'playlist') return 'https://www.youtube-nocookie.com/embed/videoseries?list=' + encodeURIComponent(l.id);
+    return 'https://www.youtube-nocookie.com/embed/' + encodeURIComponent(l.id) + '?autoplay=1';
+  }
+  function musiqueRacine() {
+    let r = document.getElementById('musique-root');
+    if (!r) { r = document.createElement('div'); r.id = 'musique-root'; document.body.appendChild(r); }
+    return r;
+  }
+  function choixMusiqueModal() {
+    const m = (state.membre && state.membre.musique) || {};
+    return '<div class="ed-musique-choix"><span class="ed-kicker">En option</span><h3 class="ed-title" style="font-size:28px;margin:6px 0 4px">Naviguer en musique ?</h3>' +
+      '<p class="se-muted" style="margin:0 0 14px">Choisissez une ambiance : elle vous accompagne pendant la visite des biens, sans s’interrompre d’une page à l’autre.</p>' +
+      '<div class="ed-musique-grille">' + AMBIANCES.map((a) => '<button type="button" class="ed-musique-ambiance' + (m.actif && m.ambiance === a.id ? ' on' : '') + '" data-act="musique-choisir" data-id="' + a.id + '"><b>' + esc(a.nom) + '</b><span>' + esc(a.sous) + '</span></button>').join('') + '</div>' +
+      '<form data-form="musique-lien" class="ed-musique-lien"><label class="se-sub">Ou votre propre playlist (lien Spotify ou YouTube)</label>' +
+        '<div class="se-row" style="gap:8px;margin-top:6px"><input class="se-input" name="lien" placeholder="https://open.spotify.com/playlist/…" value="' + esc(m.lien ? (m.lien.source === 'spotify' ? 'https://open.spotify.com/' + m.lien.type + '/' + m.lien.id : 'https://www.youtube.com/watch?v=' + m.lien.id) : '') + '" style="flex:1;min-width:0"/><button class="se-btn" type="submit">Écouter</button></div></form>' +
+      '<p class="se-hint" style="margin:12px 0 0">Spotify joue les titres en entier si vous êtes connecté à Spotify dans ce navigateur (sinon des extraits de 30 s). YouTube joue sans compte.</p>' +
+      '<div class="se-modal-foot"><button class="se-btn ghost" type="button" data-act="musique-non">' + (m.actif ? 'Couper la musique' : 'Non merci') + '</button></div></div>';
+  }
+  function rendreMusique() {
+    const racine = musiqueRacine();
+    const l = state.session ? lienCourant() : null;
+    const m = state.membre && state.membre.musique;
+    // Invitation discrète, une seule fois, une fois la découverte terminée.
+    if (!l) {
+      const ob = (state.membre && state.membre.onboarding) || {};
+      const proposer = state.session && state.membre && !m && ob.bienvenue && state.__tour == null && !modal && !state.__musiqueIgnoree;
+      racine.innerHTML = proposer ? '<div class="ed-musique-invite"><span class="ed-musique-note">♪</span><span><b>Naviguer en musique ?</b><small>Jazz, piano, lounge… ou votre playlist</small></span>' +
+        '<button type="button" class="se-btn sm" data-act="musique-ouvrir">Choisir</button><button type="button" class="ed-musique-x" data-act="musique-non" aria-label="Non merci">×</button></div>' : '';
+      return;
+    }
+    const url = urlLecteur(l);
+    const existant = racine.querySelector('iframe');
+    const replie = !!state.__musiqueReplie;
+    if (existant && existant.getAttribute('src') === url) {
+      racine.querySelector('.ed-musique').classList.toggle('replie', replie);
+      return;
+    }
+    const nom = (AMBIANCES.find((a) => m && a.id === m.ambiance) || {}).nom || 'Ma playlist';
+    racine.innerHTML = '<div class="ed-musique' + (replie ? ' replie' : '') + (l.source === 'youtube' ? ' youtube' : '') + '">' +
+      '<div class="ed-musique-barre"><button type="button" class="ed-musique-titre" data-act="musique-replier" aria-label="Afficher ou masquer le lecteur">♪ ' + esc(nom) + '</button>' +
+        '<button type="button" class="ed-musique-btn" data-act="musique-ouvrir">Changer</button></div>' +
+      '<iframe src="' + url + '" title="Musique d’ambiance" allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" loading="lazy"></iframe></div>';
+  }
+  async function enregistrerMusique(corps) {
+    const r = await API.send('PUT', '/api/membre/musique', corps);
+    if (state.membre) state.membre.musique = r.musique;
+    state.__musiqueReplie = false;
+    modal = null;
+    render();
+  }
+
   // ---- Journal de bord (page « Mon bien ») ----
   function rdvTxt(r) {
     if (!r || !r.date) return '';
@@ -1656,6 +1732,7 @@
     }
     $$('img[data-cadre]').forEach((img) => { if (img.complete) ajusterCadre(img); });
     rendreChat();
+    rendreMusique();
     afficherTour();
   }
 
@@ -2590,6 +2667,10 @@
       state.__chatBrouillon = 'Bonjour, je souhaiterais faire le point sur le prix de mon bien et organiser une réestimation avec vous.';
       actions['chat-ouvrir']();
     },
+    'musique-ouvrir': () => { state.__menuOuvert = false; modal = choixMusiqueModal(); render(); },
+    'musique-choisir': async (el, id) => { try { await enregistrerMusique({ ambiance: id }); toast('Ambiance « ' + (AMBIANCES.find((a) => a.id === id) || {}).nom + ' » : lancez la lecture dans le lecteur en bas à gauche.', 'ok'); } catch (e) { toast(e.message || 'Impossible', 'warn'); } },
+    'musique-non': async () => { state.__musiqueIgnoree = true; try { await enregistrerMusique({ actif: false }); } catch (e) { modal = null; render(); } },
+    'musique-replier': () => { state.__musiqueReplie = !state.__musiqueReplie; rendreMusique(); },
     'visite-ouvrir': (el, id) => { ouvrirVisite(bien(id)); },
     'visite-fermer': () => { fermerVisite(); },
     'visite-aller': (el, sens) => {
@@ -2894,6 +2975,13 @@
     e.preventDefault();
     const kind = form.getAttribute('data-form');
     const data = new FormData(form);
+
+    if (kind === 'musique-lien') {
+      const lien = String(data.get('lien') || '').trim();
+      if (!lien) return;
+      try { await enregistrerMusique({ lien: lien }); toast('Votre playlist est prête : lancez la lecture dans le lecteur en bas à gauche.', 'ok'); } catch (err) { toast(err.message || 'Lien non reconnu', 'warn'); }
+      return;
+    }
 
     if (kind === 'chat') {
       const texte = String(data.get('texte') || '').trim();

@@ -453,7 +453,8 @@ function publicLead(lead) {
     derniereConnexion: lead.derniereConnexion || null,
     connexions: (lead.connexions || []).slice(-10).reverse(),
     suivis: Array.isArray(lead.suivis) ? lead.suivis : [],
-    onboarding: lead.onboarding || {}
+    onboarding: lead.onboarding || {},
+    musique: lead.musique || null
   };
 }
 
@@ -1971,6 +1972,33 @@ app.post('/api/messages/:leadId', requireAdmin, (req, res) => {
   }
   writeDb(db);
   res.json({ ok: true, message: messageSortant(m) });
+});
+
+// Navigation en musique (option) : ambiance choisie par le membre, ou son
+// propre lien Spotify / YouTube. Seuls ces deux lecteurs sont acceptés.
+function lienMusique(u) {
+  const s = String(u || '').trim();
+  let m = /open\.spotify\.com\/(?:intl-[a-z]{2}\/)?(playlist|album|track|artist)\/([A-Za-z0-9]{10,40})/.exec(s);
+  if (m) return { source: 'spotify', type: m[1], id: m[2] };
+  m = /(?:youtube\.com\/(?:watch\?(?:.*&)?v=|live\/|embed\/)|youtu\.be\/)([\w-]{11})/.exec(s);
+  if (m) return { source: 'youtube', type: 'video', id: m[1] };
+  m = /youtube\.com\/(?:playlist|watch)\?(?:.*&)?list=([\w-]{10,60})/.exec(s);
+  if (m) return { source: 'youtube', type: 'playlist', id: m[1] };
+  return null;
+}
+app.put('/api/membre/musique', requireAuth, (req, res) => {
+  const body = req.body || {};
+  if (body.actif === false) {
+    req.lead.musique = { actif: false, choisiLe: nowISO() };
+  } else {
+    const ambiance = String(body.ambiance || '').slice(0, 30);
+    let lien = null;
+    if (body.lien) { lien = lienMusique(body.lien); if (!lien) return res.status(400).json({ error: 'Lien non reconnu : collez un lien de playlist, d’album ou de titre Spotify, ou un lien YouTube.' }); }
+    if (!ambiance && !lien) return res.status(400).json({ error: 'Choisissez une ambiance.' });
+    req.lead.musique = { actif: true, ambiance: lien ? '' : ambiance, lien: lien, choisiLe: nowISO() };
+  }
+  writeDb(req.db);
+  res.json({ ok: true, musique: req.lead.musique });
 });
 
 app.get('/api/catalogue', requireAuth, (req, res) => {
