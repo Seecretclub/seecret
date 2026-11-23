@@ -2691,13 +2691,12 @@
             '<div class="se-field" style="width:150px"><label>Code postal</label><input class="se-input" name="code_postal" data-rr="dpe_code_postal" value="' + rr('dpe_code_postal') + '" placeholder="75011"/></div>' +
             '<div class="se-field" style="width:130px"><label>Section</label><input class="se-input" name="section" data-rr="dpe_section" value="' + rr('dpe_section') + '" placeholder="EC"/></div>' +
             '<div class="se-field" style="width:140px"><label>N° parcelle</label><input class="se-input" name="numero" data-rr="dpe_numero" value="' + rr('dpe_numero') + '" placeholder="32"/></div>' +
-            '<button class="se-btn" type="button" data-act="dpe-search">Rechercher</button>' +
-            '<span class="se-hint" id="dpe-status"></span>' +
           '</div>' +
-          '<p class="se-hint" style="margin-top:8px">Type de bien, surface, étage, époque… se règlent une seule fois ci-dessous, dans « Filtres &amp; tri » : ils affinent aussi bien la recherche (Rechercher) que l’affichage de ce qui est déjà chargé.</p>' +
+          '<p class="se-hint" style="margin-top:8px">Type de bien, surface, étage, époque… se règlent une seule fois ci-dessous, dans « Filtres &amp; tri » : ils affinent aussi bien la recherche (Lancer la recherche) que l’affichage de ce qui est déjà chargé.</p>' +
         '</form>' +
         '<hr style="margin:16px 0;border:none;border-top:1px solid var(--color-stroke-faint)"/>' +
         barreFiltresRobot() +
+        '<div class="se-lancer"><button class="se-btn" type="button" data-act="dpe-search">Lancer la recherche</button><span class="se-hint" id="dpe-status"></span></div>' +
       '</div>' +
       '<div class="se-chips" style="margin-bottom:10px">' + [1,2,3,4,5,6].map((lvl) => {
         const label = ['Propriétaire + tél', 'Propriétaire + email', 'Propriétaire + LinkedIn', 'Société à enrichir', 'Propriétaire sans coord', 'Non identifié'][lvl - 1];
@@ -3043,7 +3042,7 @@
           '<div class="se-field"><label>DPE (A–G)</label><input class="se-input" name="dpe" data-rr="cad_dpe" value="' + rr('cad_dpe') + '" maxlength="1" placeholder="E"/></div>' +
         '</form>' +
         '<div style="display:flex;align-items:center;gap:10px;margin-top:12px">' +
-          '<button class="se-btn" data-act="robot-search">Rechercher</button>' +
+          '<button class="se-btn" data-act="robot-search">Lancer la recherche</button>' +
           '<span class="se-hint" id="robot-status"></span>' +
         '</div>' +
       '</div>' +
@@ -3798,8 +3797,6 @@
             '<div class="se-field" style="width:150px"><label>Code postal</label><input class="se-input" name="code_postal" data-rr="dpe_code_postal" value="' + rr('dpe_code_postal') + '" placeholder="75011"/></div>' +
             '<div class="se-field" style="width:130px"><label>Section</label><input class="se-input" name="section" data-rr="dpe_section" value="' + rr('dpe_section') + '" placeholder="EC"/></div>' +
             '<div class="se-field" style="width:140px"><label>N° parcelle</label><input class="se-input" name="numero" data-rr="dpe_numero" value="' + rr('dpe_numero') + '" placeholder="32"/></div>' +
-            '<button class="se-btn" type="button" data-act="dpe-search">Rechercher</button>' +
-            '<span class="se-hint" id="dpe-status"></span>' +
           '</div>' +
           '<details style="margin-top:14px">' +
             '<summary style="cursor:pointer;font-size:13px;color:var(--color-taupe);user-select:none">Critères avancés</summary>' +
@@ -3818,6 +3815,7 @@
               '<button class="se-btn ghost sm" type="button" data-act="dpe-preset" data-preset="anciens">DPE anciens (&lt; 2023)</button>' +
             '</div>' +
           '</details>' +
+          '<div class="se-lancer"><button class="se-btn" type="button" data-act="dpe-search">Lancer la recherche</button><span class="se-hint" id="dpe-status"></span></div>' +
         '</form>' +
       '</div>' +
       (res ? '<div class="se-card"><div class="se-row" style="justify-content:space-between"><h3>Résultats</h3><span class="se-hint">' + res.count + ' affiché(s) · ' + res.total + ' DPE au total · source ADEME</span></div>' + liste + '</div>' : '');

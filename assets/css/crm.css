@@ -397,3 +397,22 @@ body.se-maps-open { overflow: hidden; }
 .se-visite-aide { margin-top: 12px; font-size: 13px; color: var(--color-graphite, #5f5a54); }
 .se-visite-aide summary { cursor: pointer; font-weight: 500; }
 .se-visite-aide p { margin: 8px 0 0; line-height: 1.55; }
+
+/* ---- CRM sur mobile : rien ne doit dépasser l'écran ni se chevaucher ---- */
+.se-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.se-card, .se-grid > *, .se-split > * { min-width: 0; }
+@media (max-width: 860px) {
+  .se-split { grid-template-columns: minmax(0, 1fr); }
+  .se-mail { flex-wrap: wrap; }
+  .se-mail-body { flex: 1 1 calc(100% - 60px); }
+  .se-mail-meta { white-space: normal; }
+  .se-mail-actions { flex: 1 1 100%; }
+  .se-fiche-head { flex-wrap: wrap; }
+  .se-fiche-head .se-actions { width: 100%; }
+  .se-topbar { gap: 10px; }
+  .se-topbar h2 { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .se-topbar .se-spacer { display: none; }
+  .se-topbar .se-btn { white-space: nowrap; flex: 0 0 auto; }
+}
+.se-lancer { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--color-stroke-faint, #eeebe6); }
+@media (max-width: 860px) { .se-lancer .se-btn { flex: 1 1 100%; justify-content: center; } }
