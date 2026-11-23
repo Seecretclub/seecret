@@ -335,6 +335,27 @@
     const base = propre != null && !isNaN(propre) ? propre : BAREME.acq;
     return estMixte(c) ? Math.min(base, BAREME.mixte) : base;
   }
+  // ---- Écoles de secteur (secteurs officiels de la Ville de Paris) ----
+  function carteEcoles(b) {
+    if (!b.serverId) return '';
+    state.ecoles = state.ecoles || {};
+    const e = state.ecoles[b.serverId];
+    if (e === undefined) {
+      state.ecoles[b.serverId] = null;
+      fetch('/api/biens/' + encodeURIComponent(b.serverId) + '/ecoles', { credentials: 'same-origin' }).then((r) => r.json())
+        .then((j) => { state.ecoles[b.serverId] = j; render(); })
+        .catch(() => { state.ecoles[b.serverId] = { ok: false, error: 'Secteurs scolaires indisponibles.' }; render(); });
+    }
+    const ligne = (titre, x) => x ? kv(titre, esc(x.etablissements.join(' · ') || '—') + (x.adresses && x.adresses.length ? '<div class="se-hint">' + esc(x.adresses.join(' · ')) + '</div>' : '')) : kv(titre, '—');
+    return '<div class="se-card"><h3>Écoles de secteur</h3>' +
+      (!e ? '<p class="se-hint" style="margin-top:8px">Recherche des secteurs scolaires…</p>'
+        : e.error ? '<p class="se-note" style="margin-top:8px">' + esc(e.error) + '</p>'
+        : !e.disponible ? '<p class="se-hint" style="margin-top:8px">' + esc(e.raison || 'Sectorisation indisponible.') + '</p>'
+        : '<div class="se-kv" style="margin-top:10px">' + ligne('Maternelle', e.maternelle) + ligne('Élémentaire', e.elementaire) + ligne('Collège', e.college) + '</div>' +
+          '<p class="se-hint" style="margin-top:8px">Secteurs officiels ' + esc((e.elementaire && e.elementaire.annee) || '') + ' — ' + esc(e.source || '') + '. Lycées : affectation par Affelnet, sans secteur à l’adresse.</p>') +
+    '</div>';
+  }
+
   // ---- Visite virtuelle : parcours pièce par pièce (photos et/ou 360°) ----
   function brouillonVisite(b) {
     state.visiteEdition = state.visiteEdition || {};
@@ -3528,7 +3549,7 @@
       '<p class="se-hint" style="margin-top:10px">Estimation indicative à partir de ' + s.nbComparables + ' transaction(s) DVF (source officielle, gratuite) — ne remplace pas une estimation professionnelle sur place.</p>';
     const liste = (v.comparables || []).length
       ? '<details style="margin-top:10px"><summary style="cursor:pointer;font-size:12px;color:var(--color-taupe)">Voir les comparables (' + v.comparables.length + ')</summary><div class="se-list" style="margin-top:8px">' +
-          v.comparables.map((c) => '<div class="se-list-item"><div style="flex:1;min-width:0"><div style="font-size:13px">' + esc(c.adresse || '—') + '</div><div class="se-hint">' + esc(c.date || '') + ' · ' + Math.round(parseFloat(String(c.valeur || '0').replace(',', '.'))).toLocaleString('fr-FR') + ' € · ' + esc(c.surface || '—') + ' m²</div></div></div>').join('') +
+          v.comparables.map((c) => '<div class="se-list-item"><div style="flex:1;min-width:0"><div style="font-size:13px">' + esc(c.adresse || ((c.typeLocal || 'Vente') + (parseFloat(c.surface) > 0 ? ' · ' + Math.round(parseFloat(c.surface)) + ' m²' : ''))) + '</div><div class="se-hint">' + esc(c.date || '') + ' · ' + Math.round(parseFloat(String(c.valeur || '0').replace(',', '.'))).toLocaleString('fr-FR') + ' €' + (parseFloat(c.surface) > 0 ? ' · ' + Math.round(parseFloat(String(c.valeur || '0')) / parseFloat(c.surface)).toLocaleString('fr-FR') + ' €/m²' : '') + '</div></div></div>').join('') +
         '</div></details>'
       : '';
     return html + liste;
@@ -4761,6 +4782,7 @@
           carteEditorial(b) +
           carteVideo(b) +
           carteVisite(b) +
+          carteEcoles(b) +
           '<div class="se-card"><h3>Prix et honoraires</h3><div class="se-kv" style="margin-top:10px">' +
             kv('Prix net vendeur', euro(b.prix)) +
             kv('Honoraires acquéreur', tauxTxt(tauxPour(b, null)) + ' % TTC' + ((b.tauxHonoraires === null || b.tauxHonoraires === undefined || b.tauxHonoraires === '') ? ' (barème)' : ' (propre au bien)')) +
