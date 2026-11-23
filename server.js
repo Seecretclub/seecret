@@ -1589,6 +1589,58 @@ app.post('/api/membre/onboarding', requireAuth, (req, res) => {
   res.json({ ok: true, onboarding: req.lead.onboarding });
 });
 
+// ---------------- La Gazette du club ----------------
+// Chiffres calculés sur les vraies données du club (aucune donnée de marché
+// inventée) + le mot du mois et le coup de cœur, rédigés par l'agence.
+const COMMISSION_REFERENCE = Number(process.env.GAZETTE_COMMISSION_REFERENCE || 5);
+app.get('/api/gazette', requireAuth, (req, res) => {
+  const db = req.db;
+  const g = db.gazette || {};
+  const surPlateforme = db.biens.filter(bienSurPlateforme);
+  const vendusAgence = db.biens.filter((b) => b.statut === 'vendu' && b.venduParAgence === true);
+  // Record : le délai le plus court entre l'ouverture aux visites et la
+  // première offre reçue (90 derniers jours).
+  const depuis = Date.now() - 90 * 864e5;
+  let record = null;
+  db.biens.forEach((b) => {
+    const offres = (db.offres || []).filter((o) => o.bienId === b.id && new Date(o.cree).getTime() > depuis);
+    if (!offres.length) return;
+    const premiere = offres.map((o) => new Date(o.cree).getTime()).sort((a, c) => a - c)[0];
+    const ouverture = new Date(b.ouvertLe || b.cree || 0).getTime();
+    if (!ouverture || premiere < ouverture) return;
+    const heures = Math.max(1, Math.round((premiere - ouverture) / 36e5));
+    if (!record || heures < record.heures) record = { bienId: b.id, titre: b.titre || 'Un bien du club', quartier: labelQuartier(b.quartier) || '', type: b.type || '', heures: heures, surPlateforme: bienSurPlateforme(b), photo: (b.photos || [])[0] || null };
+  });
+  const membres = db.leads.filter((l) => l.statut === 'accepte' && ROLES_STAFF.indexOf(roleOf(l)) === -1).length;
+  const visites = db.demandes.filter((d) => d.type === 'visite' && d.rdv).length;
+  const evitees = Math.round(vendusAgence.reduce((n, b) => n + (Number(b.prix) || 0), 0) * COMMISSION_REFERENCE / 100);
+  const coup = g.coupDeCoeur && g.coupDeCoeur.bienId ? db.biens.find((b) => b.id === g.coupDeCoeur.bienId && bienSurPlateforme(b)) : null;
+  res.json({
+    ok: true,
+    numero: new Date().toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' }),
+    chiffres: { biens: surPlateforme.length, membres: membres, visites: visites, ventes: vendusAgence.length, commissionsEvitees: evitees, commissionReference: COMMISSION_REFERENCE },
+    record: record,
+    mot: g.mot && g.mot.texte ? { titre: g.mot.titre || '', texte: g.mot.texte, auteur: g.mot.auteur || '', date: g.mot.date || null } : null,
+    coupDeCoeur: coup ? { bienId: coup.id, phrase: g.coupDeCoeur.phrase || '', auteur: g.coupDeCoeur.auteur || '' } : null
+  });
+});
+app.get('/api/gazette/edition', requireAdmin, (req, res) => {
+  const db = readDb();
+  res.json({ ok: true, gazette: db.gazette || {}, biens: db.biens.filter(bienSurPlateforme).map((b) => ({ id: b.id, titre: b.titre || 'Sans titre', quartier: labelQuartier(b.quartier) || '' })) });
+});
+app.put('/api/gazette/edition', requireAdmin, (req, res) => {
+  const db = readDb();
+  const body = req.body || {};
+  const g = db.gazette = db.gazette || {};
+  if (body.mot) g.mot = { titre: String(body.mot.titre || '').trim().slice(0, 120), texte: String(body.mot.texte || '').trim().slice(0, 3000), auteur: nomComplet(req.lead), date: nowISO() };
+  if (body.coupDeCoeur) {
+    const id = String(body.coupDeCoeur.bienId || '');
+    g.coupDeCoeur = id ? { bienId: id, phrase: String(body.coupDeCoeur.phrase || '').trim().slice(0, 400), auteur: nomComplet(req.lead), date: nowISO() } : null;
+  }
+  writeDb(db);
+  res.json({ ok: true, gazette: g });
+});
+
 // ---------------- Texte éditorial des fiches (Célia) ----------------
 // Célia rédige, à partir des caractéristiques ET des photos du bien, un titre
 // et un texte au ton « magazine de décoration haut de gamme ». L'agent relit,
@@ -2223,6 +2275,8 @@ app.patch('/api/biens/:id', requireAdmin, (req, res) => {
   const bien = db.biens.find((b) => b.id === req.params.id);
   if (!bien) return res.status(404).json({ error: 'Bien introuvable' });
   const body = req.body || {};
+  // Date d'ouverture aux visites : sert au « record du mois » de la Gazette.
+  if (body.statut === 'ouvert' && bien.statut !== 'ouvert') bien.ouvertLe = nowISO();
   // « Vendu » : l'agent précise si la vente a été faite par l'agence — seule
   // une vente par Seecret ouvre au propriétaire le taux réduit sur ses achats.
   if (body.statut === 'vendu') {
@@ -4632,6 +4686,7 @@ app.patch('/api/demandes/:id', requireAdmin, (req, res) => {
     const b = db.biens.find((x) => x.id === d.bienId);
     if (b) {
       b.statut = (req.body && req.body.action) === 'vente' ? 'vendu' : 'ouvert';
+      if (b.statut === 'ouvert') b.ouvertLe = nowISO();
       b.statutDemande = null;
     }
     notif = notifierClient(db, {
