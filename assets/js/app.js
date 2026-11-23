@@ -614,7 +614,8 @@
   // de l'email déjà envoyé. Une case à cocher les marque lus (persisté côté
   // serveur), comme les notifications agent dans le CRM.
   function banniereNotifications() {
-    const non = (state.mesNotifications || []).filter((n) => !n.lue);
+    // Les réponses de l'agent ont leur propre pastille (bouton « Mon agent »).
+    const non = (state.mesNotifications || []).filter((n) => !n.lue && n.type !== 'message');
     if (!non.length) return '';
     return '<div class="ed-panel" style="margin-bottom:22px;border:1px solid var(--color-club-green,#1b3a32);background:var(--color-club-mist)">' +
       '<div style="display:flex;gap:12px;align-items:flex-start">' +
@@ -1073,11 +1074,131 @@
       '</div>';
   }
 
+  // ---- Journal de bord (page « Mon bien ») ----
+  function rdvTxt(r) {
+    if (!r || !r.date) return '';
+    const d = new Date(r.date + 'T12:00:00');
+    return d.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' }) + (r.heure ? ' à ' + r.heure.replace(':', ' h ') : '');
+  }
+  const ETAT_VISITE = { en_attente: ['En attente', 'warn'], confirmee: ['Confirmée', 'open'], refusee: ['Non retenue', 'muted'] };
+  const ETAT_OFFRE = { en_attente: ['Transmise au propriétaire', 'warn'], acceptee: ['Acceptée', 'open'], refusee: ['Non retenue', 'muted'], contre: ['Contre-proposition', 'offer'] };
+  function journalHtml() {
+    const j = state.journal;
+    if (!j) return '<div class="ed-panel ed-journal" style="margin-bottom:22px"><span class="ed-kicker">Journal de bord</span><p class="se-hint" style="margin:8px 0 0">Chargement…</p></div>';
+    const ligne = (titre, sous, pastille, lien) => '<a class="ed-j-ligne" href="' + (lien || '#') + '"><span class="ed-j-txt"><b>' + esc(titre) + '</b><span>' + sous + '</span></span>' + (pastille || '') + '</a>';
+    const pastille = (p) => '<span class="ed-badge ' + p[1] + '">' + p[0] + '</span>';
+    const vide = (t) => '<p class="se-hint" style="margin:6px 0 0">' + t + '</p>';
+    const visites = (j.visites || []).slice(0, 4).map((v) => {
+      const sous = v.etat === 'confirmee' ? 'Rendez-vous ' + esc(rdvTxt(v.rdv)) + ' · adresse envoyée par email' : (v.etat === 'refusee' ? 'Demandée le ' + esc(dateFR(v.cree)) : 'Créneaux proposés : ' + esc((v.creneaux || []).join(' · ') || '—'));
+      return ligne(v.titre, sous, pastille(ETAT_VISITE[v.etat] || ETAT_VISITE.en_attente), '#/bien/' + v.bienId);
+    }).join('');
+    const offres = (j.offres || []).slice(0, 4).map((o) => {
+      const st = ETAT_OFFRE[o.statut] || ETAT_OFFRE.en_attente;
+      const sous = euro(o.montant) + (o.statut === 'contre' && o.contre ? ' · le propriétaire propose ' + euro(o.contre) : '') + ' · ' + esc(dateFR(o.cree));
+      return ligne(o.titre, sous, pastille(st), '#/bien/' + o.bienId);
+    }).join('');
+    const baisses = (j.baisses || []).slice(0, 4).map((x) => {
+      const pctB = x.ancien ? Math.round(((x.ancien - x.nouveau) / x.ancien) * 1000) / 10 : 0;
+      return ligne(x.titre, '<s>' + euro(x.ancien) + '</s> → <b>' + euro(x.nouveau) + '</b> · ' + esc(dateFR(x.at)), '<span class="ed-badge open">−' + String(pctB).replace('.', ',') + ' %</span>', '#/bien/' + x.bienId);
+    }).join('');
+    const mb = j.monBien;
+    const agent = (j.agent && j.agent.nom) || 'votre agent';
+    return '<section class="ed-journal" style="margin-bottom:26px">' +
+      '<div class="ed-j-tete"><div><span class="ed-kicker">Journal de bord</span><h2 class="ed-title" style="font-size:26px;margin:4px 0 0">Où en sont vos projets</h2></div>' +
+        '<button type="button" class="ed-agent" data-act="chat-ouvrir"><span class="ed-avatar">' + esc(agent.split(' ').map((x) => x.charAt(0)).join('').slice(0, 2).toUpperCase()) + '</span><span><small>Votre agent</small><b>' + esc(agent) + '</b></span><span class="se-btn sm">Écrire' + (j.messagesNonLus ? ' · ' + j.messagesNonLus : '') + '</span></button>' +
+      '</div>' +
+      '<div class="ed-j-grille">' +
+        '<div class="ed-panel"><h3>Mes dernières visites</h3>' + (visites || vide('Aucune visite demandée pour l’instant.')) + '</div>' +
+        '<div class="ed-panel"><h3>Mon offre en cours</h3>' + (offres || vide('Aucune offre en cours.')) + '</div>' +
+        '<div class="ed-panel"><h3>Baisses de prix</h3>' + (baisses || vide('Aucune baisse de prix sur les biens que vous suivez ou avez visités.')) + '</div>' +
+        (mb ? '<div class="ed-panel"><h3>Autour de mon bien</h3><div class="ed-j-chiffres">' +
+          '<div><b>' + num(mb.suiveurs) + '</b><span>membre' + (mb.suiveurs > 1 ? 's le suivent' : ' le suit') + '</span></div>' +
+          '<div><b>' + num(mb.visitesDemandees) + '</b><span>visite' + (mb.visitesDemandees > 1 ? 's demandées' : ' demandée') + '</span></div>' +
+          '<div><b>' + num(mb.visitesConfirmees) + '</b><span>confirmée' + (mb.visitesConfirmees > 1 ? 's' : '') + '</span></div>' +
+          '<div><b>' + num(mb.offres) + '</b><span>offre' + (mb.offres > 1 ? 's reçues' : ' reçue') + '</span></div>' +
+        '</div></div>' : '') +
+      '</div>' +
+    '</section>';
+  }
+  async function chargerJournal() {
+    try { state.journal = await API.get('/api/mon-journal'); } catch (e) { /* journal indisponible */ }
+  }
+
+  // ---- Fenêtre de discussion avec l'agent (hors du rendu principal, pour ne
+  // jamais perdre la saisie lors d'un rafraîchissement) ----
+  function chatRacine() {
+    let r = document.getElementById('chat-root');
+    if (!r) { r = document.createElement('div'); r.id = 'chat-root'; document.body.appendChild(r); }
+    return r;
+  }
+  function heureMsg(iso) {
+    const d = new Date(iso);
+    const auj = new Date().toDateString() === d.toDateString();
+    return (auj ? '' : d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' }) + ' · ') + d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+  }
+  function rendreChat() {
+    const racine = chatRacine();
+    if (!state.session) { racine.innerHTML = ''; return; }
+    const nonLus = (state.journal && state.journal.messagesNonLus) || 0;
+    const agent = (state.chat && state.chat.agent && state.chat.agent.nom) || (state.journal && state.journal.agent && state.journal.agent.nom) || 'Votre agent';
+    if (!state.__chatOuvert) {
+      racine.innerHTML = '<button type="button" class="ed-chat-bouton" data-act="chat-ouvrir" aria-label="Écrire à mon agent">' +
+        '<svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M4 4h12a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H9l-4 3v-3H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"/></svg>' +
+        '<span>Mon agent</span>' + (nonLus ? '<i>' + nonLus + '</i>' : '') + '</button>';
+      return;
+    }
+    const msgs = (state.chat && state.chat.messages) || [];
+    const saisie = racine.querySelector('textarea');
+    const brouillon = saisie ? saisie.value : (state.__chatBrouillon || '');
+    const avaitFocus = saisie && document.activeElement === saisie;
+    racine.innerHTML = '<div class="ed-chat" role="dialog" aria-label="Discussion avec votre agent">' +
+      '<div class="ed-chat-tete"><span class="ed-avatar">' + esc(agent.split(' ').map((x) => x.charAt(0)).join('').slice(0, 2).toUpperCase()) + '</span>' +
+        '<div><b>' + esc(agent) + '</b><small>Votre agent Seecret · répond en général dans la journée</small></div>' +
+        '<button type="button" class="ed-chat-fermer" data-act="chat-fermer" aria-label="Fermer">×</button></div>' +
+      '<div class="ed-chat-fil" data-chat-fil>' +
+        (msgs.length ? msgs.map((m) => '<div class="ed-msg ' + (m.de === 'membre' ? 'moi' : 'agent') + '">' + esc(m.texte).replace(/\n/g, '<br>') + '<time>' + esc(heureMsg(m.at)) + '</time></div>').join('')
+          : '<p class="ed-chat-vide">Posez votre question à ' + esc(agent) + ' : une visite, une offre, votre bien… Vous recevrez sa réponse ici et par email.</p>') +
+      '</div>' +
+      '<form class="ed-chat-saisie" data-form="chat"><textarea name="texte" rows="1" maxlength="2000" placeholder="Votre message…" aria-label="Votre message"></textarea>' +
+        '<button class="se-btn sm" type="submit">Envoyer</button></form>' +
+    '</div>';
+    const ta = racine.querySelector('textarea');
+    ta.value = brouillon;
+    if (avaitFocus || state.__chatFocus) { ta.focus(); state.__chatFocus = false; }
+    const fil = racine.querySelector('[data-chat-fil]');
+    fil.scrollTop = fil.scrollHeight;
+  }
+  async function chargerChat() {
+    try {
+      state.chat = await API.get('/api/mes-messages');
+      if (state.journal) state.journal.messagesNonLus = 0;
+    } catch (e) { /* ignore */ }
+    rendreChat();
+  }
+  // Rafraîchissement : toutes les 15 s fenêtre ouverte, sinon toutes les 60 s
+  // pour le compteur de messages non lus.
+  let chatMinuteur = null;
+  function planifierChat() {
+    clearTimeout(chatMinuteur);
+    if (!state.session) return;
+    chatMinuteur = setTimeout(async () => {
+      if (document.visibilityState === 'visible') {
+        if (state.__chatOuvert) await chargerChat();
+        else {
+          const avant = state.journal && state.journal.messagesNonLus;
+          await chargerJournal();
+          if ((state.journal && state.journal.messagesNonLus) !== avant) rendreChat();
+        }
+      }
+      planifierChat();
+    }, state.__chatOuvert ? 15000 : 60000);
+  }
+
   function edViewMonBien() {
     const b = state.monBien;
     if (!b) {
-      return edHead('Mon bien', 'Votre bien', '') +
-        '<div class="ed-panel"><p class="se-muted">Votre fiche est en cours de préparation. Rechargez la page dans un instant.</p></div>';
+      return edHead('Mon bien', 'Votre espace', '') + journalHtml() +
+        '<div class="ed-panel"><p class="se-muted">Votre fiche bien est en cours de préparation. Rechargez la page dans un instant.</p></div>';
     }
     const photos = b.photos || [];
     const demande = b.statutDemande;
@@ -1094,6 +1215,7 @@
     return edHead('Mon bien', esc(b.titre || 'Votre bien'),
       (b.type || '') + (b.ville ? ' · ' + b.ville : '') + (b.surface ? ' · ' + num(b.surface) + ' m²' : '') +
       (b.exterieur && b.exterieur !== 'Aucun' ? ' · ' + esc(b.exterieur) : '')) +
+      journalHtml() +
       '<div class="ed-detail-grid">' +
         '<div>' +
           '<div class="ed-gallery"><div class="ed-gallery-main">' +
@@ -1227,12 +1349,18 @@
       bien: edViewBien,
       visites: viewVisites,
       offres: viewOffres,
-      messages: viewMessages,
+      messages: edViewMonBien,
       profil: viewProfil,
       outils: viewOutils,
       agence: viewAgence
     };
 
+    if (r.name === 'messages' && !state.__chatOuvert) { state.__chatOuvert = true; state.__chatFocus = true; chargerChat(); planifierChat(); }
+    // Journal rafraîchi à chaque arrivée sur « Mon bien » (une seule fois par visite).
+    if ((r.name === 'mon-bien' || r.name === 'messages') && r.name !== lastRoute && !state.__journalDemande) {
+      state.__journalDemande = true;
+      chargerJournal().then(() => { state.__journalDemande = false; if (['mon-bien', 'messages'].indexOf(parseRoute().name) > -1) render(); });
+    }
     const view = views[r.name] || edViewAccueil;
     app().innerHTML = edShell(r, view(r));
 
@@ -1252,6 +1380,7 @@
       lastRoute = r.name;
     }
     $$('img[data-cadre]').forEach((img) => { if (img.complete) ajusterCadre(img); });
+    rendreChat();
     afficherTour();
   }
 
@@ -1414,6 +1543,8 @@
       try { const d = await API.get('/api/documents'); state.docs = d.documents || []; } catch (e) { /* pas de docs */ }
       try { const n = await API.get('/api/mes-notifications'); state.mesNotifications = n.notifications || []; } catch (e) { /* pas de notifications */ }
       try { const md = await API.get('/api/mandat?apercu=0'); state.mandatActif = md.mandat || null; } catch (e) { /* pas de mandat */ }
+      await chargerJournal();
+      planifierChat();
       // Première connexion après l'acceptation : fenêtre de bienvenue (une fois).
       const ob = me.membre.onboarding || {};
       if (me.membre.statut === 'accepte' && !ob.bienvenue) modal = bienvenueModal();
@@ -2167,6 +2298,12 @@
         toast((e && e.message) || 'Action impossible pour le moment.', 'warn');
       }
     },
+    'chat-ouvrir': () => { state.__chatOuvert = true; state.__chatFocus = true; rendreChat(); chargerChat(); planifierChat(); },
+    'chat-fermer': () => {
+      const ta = document.querySelector('#chat-root textarea'); state.__chatBrouillon = ta ? ta.value : '';
+      state.__chatOuvert = false; rendreChat(); planifierChat();
+      if (parseRoute().name === 'messages') history.replaceState(null, '', '#/mon-bien');
+    },
     'menu-toggle': () => { state.__menuOuvert = !state.__menuOuvert; render(); },
     'bienvenue-ok': () => {
       modal = null;
@@ -2454,6 +2591,22 @@
     const kind = form.getAttribute('data-form');
     const data = new FormData(form);
 
+    if (kind === 'chat') {
+      const texte = String(data.get('texte') || '').trim();
+      if (!texte) return;
+      const bouton = form.querySelector('button'); bouton.disabled = true;
+      try {
+        const r = await API.send('POST', '/api/mes-messages', { texte: texte });
+        state.chat = state.chat || { messages: [] };
+        state.chat.messages = (state.chat.messages || []).concat([r.message]);
+        form.querySelector('textarea').value = '';
+        state.__chatBrouillon = '';
+        state.__chatFocus = true;
+        rendreChat();
+      } catch (err) { toast(err.message || 'Envoi impossible.', 'warn'); bouton.disabled = false; }
+      return;
+    }
+
     if (kind === 'auth-email') {
       const email = String(data.get('email') || '').trim().toLowerCase();
       if (!email) return;
@@ -2705,6 +2858,12 @@
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && state.__tour != null) { finirTour(); return; }
+    if (e.key === 'Enter' && !e.shiftKey && e.target.closest && e.target.closest('.ed-chat-saisie')) {
+      e.preventDefault();
+      const f = e.target.closest('form'); if (f.requestSubmit) f.requestSubmit(); else f.querySelector('button').click();
+      return;
+    }
+    if (e.key === 'Escape' && state.__chatOuvert) { actions['chat-fermer'](); return; }
     if (!e.target.hasAttribute || !e.target.hasAttribute('data-arr-input')) return;
     if (e.key === 'Enter') {
       e.preventDefault();
