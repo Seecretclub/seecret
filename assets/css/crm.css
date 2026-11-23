@@ -553,3 +553,24 @@ body.se-maps-open { overflow: hidden; }
 }
 @media (max-width: 420px) { .rd-form-grille { grid-template-columns: 1fr; } }
 .rd-ul a, .rd-form a, .se-kv a { color: #1d4f8f; text-decoration: underline; text-underline-offset: 2px; }
+/* Radar futurs vendeurs */
+.rd-une { display: flex; flex-direction: column; gap: 4px; padding: 16px 20px; margin-bottom: 14px; border-radius: 14px; background: #1f3b2f; color: #fff; text-decoration: none; font-size: 16px; }
+.rd-une b { font-size: 20px; font-weight: 600; }
+.rd-une span { font-size: 13.5px; opacity: .85; }
+.rd-barre-filtres { margin-bottom: 14px; display: flex; flex-direction: column; gap: 12px; }
+.rd-toggle { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; }
+.rd-score.moyen { background: #f3ead9; color: #8a5a1c; }
+.rd-raison { font-size: 13.5px; color: #2f6b4f; }
+.rd-pastille.bleu { background: #e9f0fb; color: #1d4f8f; }
+.rd-chances { display: flex; gap: 14px; align-items: center; }
+.rd-signaux { list-style: none; margin: 14px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; font-size: 14px; line-height: 1.5; }
+.rd-signaux li { display: flex; gap: 10px; align-items: flex-start; }
+.rd-signaux li span { flex: 0 0 38px; text-align: center; font-size: 12.5px; font-weight: 600; border-radius: 5px; padding: 1px 0; }
+.rd-signaux li.plus span { background: #e4f0e8; color: #2f6b4f; }
+.rd-signaux li.moins span { background: #f8e3dc; color: #9a3a20; }
+.rd-signaux li.info span { background: var(--color-sand, #efe9df); color: var(--color-graphite, #6b645c); }
+.rd-contacts li { display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; }
+.rd-contacts .se-hint { min-width: 120px; }
+.rd-lettre { margin-top: 14px; }
+.rd-lettre summary { cursor: pointer; font-weight: 500; }
+.rd-lettre pre { white-space: pre-wrap; font: inherit; font-size: 13.5px; line-height: 1.55; background: var(--color-sand, #f3efe8); padding: 14px; border-radius: 12px; margin: 10px 0; }
