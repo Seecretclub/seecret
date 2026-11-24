@@ -589,3 +589,11 @@ body.se-maps-open { overflow: hidden; }
 .rd-lots td { padding: 6px 8px; border-bottom: 1px solid var(--color-stroke-faint, #f0ebe3); }
 .rd-lots tr.moi td { background: #e4f0e8; }
 @media (max-width: 760px) { .rd-carte-map { height: 420px; } }
+
+/* Radar : bouton Rechercher */
+.rd-form-actions .rd-rechercher{margin-left:auto;min-width:150px}
+.rd-rechercher.rd-a-lancer{box-shadow:0 0 0 3px rgba(176,141,87,.35);animation:rd-pulse 1.6s ease-in-out infinite}
+@keyframes rd-pulse{50%{box-shadow:0 0 0 6px rgba(176,141,87,.12)}}
+.rd-attente{font-size:13px;color:var(--se-accent,#b08d57);font-weight:600}
+.rd-une-note{display:block;font-size:12px;opacity:.75;margin-top:4px}
+@media (max-width:640px){.rd-form-actions .rd-rechercher{margin-left:0;width:100%;order:10}.rd-attente{width:100%}}
