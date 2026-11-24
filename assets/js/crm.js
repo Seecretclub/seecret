@@ -7615,7 +7615,8 @@
         const res = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(res.error || 'Rédaction impossible');
         state.editorialBrouillon[id] = { titre: res.titre, texte: res.texte };
-        toast('Célia a rédigé une proposition' + (res.photosAnalysees ? ' (' + res.photosAnalysees + ' photo' + (res.photosAnalysees > 1 ? 's' : '') + ' analysée' + (res.photosAnalysees > 1 ? 's' : '') + ')' : '') + '. Relisez avant de publier.', 'ok');
+        if (res.sansIa) toast('Célia est indisponible pour l’instant (quota de l’IA atteint) : voici un premier jet construit à partir de la fiche, à retoucher avant de publier.', 'warn');
+        else toast('Célia a rédigé une proposition' + (res.photosAnalysees ? ' (' + res.photosAnalysees + ' photo' + (res.photosAnalysees > 1 ? 's' : '') + ' analysée' + (res.photosAnalysees > 1 ? 's' : '') + ')' : '') + '. Relisez avant de publier.', 'ok');
       } catch (err) { toast(err.message || 'Rédaction impossible', 'warn'); }
       state.editorialEnCours = null;
       render();
