@@ -4044,6 +4044,31 @@
     if (!(b.statut === 'avant-premiere' || b.statut === 'ouvert')) manque.push('le passer en Avant-première ou En vente (statut actuel : ' + ((ST_BIEN[b.statut] || {}).label || b.statut || '—') + ')');
     return manque.length ? 'Option active, mais pas encore visible : il reste à ' + manque.join(' et à ') + '.' : '';
   }
+  // Import de fiches vendeurs préparées (.json) : envoi par paquets de 15.
+  async function envoyerFiches(items, lot, simulation, progres) {
+    const tot = { leadsCrees: 0, leadsCompletes: 0, biensCrees: 0, biensCompletes: 0, photos: 0, erreurs: [] };
+    for (let i = 0; i < items.length; i += 15) {
+      const r = await fetch('/api/import/fiches-vendeurs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ items: items.slice(i, i + 15), lot: lot, simulation: simulation }) });
+      const res = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(res.error || 'HTTP ' + r.status);
+      ['leadsCrees', 'leadsCompletes', 'biensCrees', 'biensCompletes', 'photos'].forEach((k) => { tot[k] += res[k] || 0; });
+      (res.erreurs || []).forEach((x) => tot.erreurs.push({ i: x.i + i, raison: x.raison }));
+      if (progres) progres(Math.min(items.length, i + 15), items.length);
+    }
+    return tot;
+  }
+  function carteImportFiches() {
+    const f = state.impFiches;
+    const ligne = (r) => r.leadsCrees + ' lead(s) propriétaire créé(s), ' + r.leadsCompletes + ' complété(s) · ' + r.biensCrees + ' bien(s) créé(s), ' + r.biensCompletes + ' complété(s)' + (r.photos ? ' · ' + r.photos + ' photo(s)' : '') + (r.erreurs.length ? ' · ' + r.erreurs.length + ' écarté(s)' : '');
+    let corps = '<p class="se-hint" style="margin:4px 0 10px">Fichier .json préparé à partir des fiches d’une agence : chaque propriétaire devient un lead vendeur, chaque fiche un bien (en préparation, hors plateforme) avec sa photo.</p>' +
+      '<label class="se-btn ghost sm">Choisir le fichier<input type="file" accept=".json,application/json" multiple hidden data-import-fiches/></label>';
+    if (f && f.chargement) corps += '<p class="se-hint" style="margin-top:10px">Lecture de ' + esc(f.fichiers.join(', ')) + '…</p>';
+    if (f && f.erreur) corps += '<p class="se-hint" style="margin-top:10px;color:var(--color-alert)">' + esc(f.erreur) + '</p>';
+    if (f && f.sim && !f.fait) corps += '<div class="se-note" style="margin-top:10px">Aperçu (' + f.items.length + ' fiches) : ' + esc(ligne(f.sim)) + '</div>' +
+      '<button class="se-btn" style="margin-top:10px" data-act="import-fiches-go"' + (f.envoi ? ' disabled' : '') + '>' + (f.envoi ? 'Import… ' + esc(f.envoi) : 'Importer ' + f.items.length + ' fiches') + '</button>';
+    if (f && f.fait) corps += '<div class="se-note" style="margin-top:10px;background:var(--color-ok-soft);border:0;color:var(--color-ok)">Import terminé : ' + esc(ligne(f.fait)) + '. Vérification vendu / en ligne lancée en arrière-plan.</div>';
+    return '<details class="se-card pad-sm" style="margin-bottom:18px"' + (f ? ' open' : '') + '><summary style="cursor:pointer;font-weight:500">Importer des fiches vendeurs</summary>' + corps + '</details>';
+  }
   async function suivreVerifLot() {
     for (;;) {
       await new Promise((ok) => setTimeout(ok, 8000));
@@ -5323,6 +5348,7 @@
     return head('Portefeuille', 'Biens',
       list.length + ' bien(s) · ' + euro(list.reduce((n, b) => n + b.prix, 0)) + ' de valeur de présentation.',
       '<button class="se-btn" data-act="bien-nouveau">' + ICONS.plus + ' Nouveau bien</button>') +
+      carteImportFiches() +
       '<div class="se-card pad-sm" style="margin-bottom:18px"><div class="se-filters">' +
         '<select class="se-select" data-filter="statutBien"><option value="">Tous les statuts</option>' +
           Object.keys(ST_BIEN).map((k) => '<option value="' + k + '"' + (st === k ? ' selected' : '') + '>' + ST_BIEN[k].label + '</option>').join('') +
@@ -7573,6 +7599,21 @@
       } catch (e) { toast('Vérification impossible : ' + (e.message || 'erreur'), 'warn'); }
       delete state.verifEnCours[b.serverId]; render();
     },
+    'import-fiches-go': async () => {
+      const f = state.impFiches;
+      if (!f || !f.items) return;
+      f.envoi = '0 / ' + f.items.length; render();
+      try {
+        f.fait = await envoyerFiches(f.items, f.lot, false, (n, t) => { f.envoi = n + ' / ' + t; render(); });
+        f.items = []; f.envoi = '';
+        const rb = await fetch('/api/biens', { headers: { accept: 'application/json' } });
+        if (rb.ok) state.biensServeur = ((await rb.json()).biens || []).map(mapBienServeur);
+        await fetch('/api/biens/verifier', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ lot: f.lot }) });
+        state.verifLot = true; suivreVerifLot();
+        toast('Import terminé.', 'ok');
+      } catch (e) { f.envoi = ''; toast('Import interrompu : ' + (e.message || 'erreur') + '. Relancez : les fiches déjà importées ne seront pas dupliquées.', 'warn'); }
+      render();
+    },
     'biens-verifier-tous': async () => {
       const ids = (state.biensServeur || []).filter((b) => b.importLot && !b.verifs).map((b) => b.serverId);
       if (!ids.length) { toast('Tous les biens importés sont déjà vérifiés.', 'ok'); return; }
@@ -7886,6 +7927,22 @@
         imp = { nom: f.name, lot: imp.lot, entetes: t.entetes, lignes: t.lignes, corresp: window.ImportClients.devinerCorrespondance(t.entetes) };
         importAppliquer();
       } catch (err) { imp = { nom: f.name, erreur: 'Lecture impossible : ' + err.message }; render(); }
+      return;
+    }
+    if (e.target.hasAttribute('data-import-fiches')) {
+      const fichiers = Array.from(e.target.files || []);
+      if (!fichiers.length) return;
+      state.impFiches = { chargement: true, fichiers: fichiers.map((f) => f.name) }; render();
+      try {
+        let items = []; let lot = '';
+        for (const f of fichiers) {
+          const d = JSON.parse(await f.text());
+          items = items.concat(d.items || []); lot = lot || d.lot || '';
+        }
+        const sim = await envoyerFiches(items, lot, true);
+        state.impFiches = { fichiers: fichiers.map((f) => f.name), items: items, lot: lot || 'fiches-vendeurs', sim: sim };
+      } catch (err) { state.impFiches = { erreur: 'Lecture impossible : ' + err.message }; }
+      render();
       return;
     }
     if (e.target.hasAttribute('data-bien-photos')) {
