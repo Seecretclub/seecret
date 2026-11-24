@@ -6986,6 +6986,90 @@ app.get('/api/biens/verifier', requireAdmin, (req, res) => {
   res.json({ enCours: !!VERIF.enCours, enAttente: VERIF.file.length, faits: VERIF.faits, erreurs: VERIF.erreurs, debut: VERIF.debut, arret: VERIF.arret || null });
 });
 
+// ---- Bot de suivi de l'agence d'origine (gratuit, sans clé) ----
+// Le site De Ferla publie toutes ses annonces dans un flux public (une seule
+// requête par jour). Pour chaque bien importé, on regarde si sa référence y
+// est encore : disparue = vendu, sous compromis ou mandat terminé, le bon
+// moment pour rappeler le vendeur. Une baisse de prix est aussi relevée.
+const SUIVI_FLUX = { 'De Ferla': process.env.SUIVI_DEFERLA_URL || 'https://immobilier.altelis.com/deferla' };
+const SUIVI = { enCours: false, derniere: null, resultat: null };
+async function suiviAgenceLancer(origine) {
+  if (SUIVI.enCours) return SUIVI.resultat;
+  SUIVI.enCours = true;
+  try {
+    const r = await fetch(SUIVI_FLUX['De Ferla'], { headers: { Accept: 'application/json', 'User-Agent': 'Seecret/1.0 (suivi des mandats)' }, signal: AbortSignal.timeout(60000) });
+    if (!r.ok) throw new Error('flux ' + r.status);
+    const liste = await r.json();
+    if (!Array.isArray(liste) || liste.length < 20) throw new Error('flux vide ou incomplet (' + (Array.isArray(liste) ? liste.length : 0) + ')');
+    const parRef = new Map(liste.filter((x) => x && x.Bien_Reference).map((x) => [String(x.Bien_Reference), x]));
+    const db = readDb();
+    const auj = nowISO();
+    const res = { verifies: 0, enLigne: 0, retires: 0, nouveauxRetraits: 0, baisses: 0, retoursEnLigne: 0, annoncesAgence: liste.length, le: auj, origine: origine || 'auto' };
+    db.biens.forEach((b) => {
+      if (!b.refAgence || !b.mandatOrigine || !/ferla/i.test(b.mandatOrigine.agence || b.source || '')) return;
+      res.verifies++;
+      const s0 = b.suiviAgence || null;
+      const x = parRef.get(String(b.refAgence));
+      const s = Object.assign({ historique: [] }, s0 || {});
+      s.verifieLe = auj;
+      if (x) {
+        res.enLigne++;
+        const prix = Number(x.Bien_Prix) || 0;
+        if (s.statut === 'retire') { s.historique.push({ date: auj, evenement: 'de nouveau en ligne' }); res.retoursEnLigne++; }
+        const ancien = s.prix || Number(b.details && b.details.prixAffiche) || 0;
+        if (prix && ancien && prix < ancien - 500) {
+          s.historique.push({ date: auj, evenement: 'baisse de prix', ancien: ancien, nouveau: prix });
+          s.derniereBaisse = { date: auj, ancien: ancien, nouveau: prix };
+          res.baisses++;
+          if (b.leadId) logActivite(db, { leadId: b.leadId, bienId: b.id, type: 'baisse_prix_agence', auteur: 'Bot de suivi', detail: 'Prix sur le site De Ferla : ' + ancien + ' € → ' + prix + ' €' });
+        } else if (prix && ancien && prix > ancien + 500) {
+          s.historique.push({ date: auj, evenement: 'hausse de prix', ancien: ancien, nouveau: prix });
+        }
+        s.statut = 'en_ligne'; s.prix = prix || s.prix || 0; s.libelle = String(x['Bien_Libellés'] || '').slice(0, 160);
+        s.vuLe = auj; delete s.retireLe; delete s.retireAvant;
+      } else {
+        res.retires++;
+        if (s.statut !== 'retire') {
+          res.nouveauxRetraits++;
+          s.statut = 'retire';
+          // Premier passage du bot : on sait seulement que l'annonce a disparu
+          // entre l'export du fichier et aujourd'hui.
+          if (!s0) { s.retireAvant = auj; } else { s.retireLe = auj; s.historique.push({ date: auj, evenement: 'retirée du site' }); }
+          if (s0 && b.leadId) logActivite(db, { leadId: b.leadId, bienId: b.id, type: 'annonce_retiree_agence', auteur: 'Bot de suivi', detail: 'Annonce retirée du site De Ferla : vendu, sous compromis ou mandat terminé ?' });
+        }
+      }
+      s.historique = s.historique.slice(-20);
+      b.suiviAgence = s;
+    });
+    db.suiviAgence = res;
+    writeDb(db);
+    SUIVI.resultat = res; SUIVI.derniere = auj;
+    console.log('[suivi] ' + res.verifies + ' biens : ' + res.enLigne + ' en ligne, ' + res.retires + ' retirés (' + res.nouveauxRetraits + ' nouveaux), ' + res.baisses + ' baisse(s)');
+    return res;
+  } catch (e) {
+    SUIVI.resultat = { erreur: String(e.message || e).slice(0, 160), le: nowISO() };
+    console.error('[suivi] ' + SUIVI.resultat.erreur);
+    return SUIVI.resultat;
+  } finally { SUIVI.enCours = false; }
+}
+// Une fois par jour (premier passage une minute après le démarrage si le dernier date de plus de 20 h).
+setTimeout(() => {
+  const tour = () => {
+    try {
+      const d = (readDb().suiviAgence || {}).le;
+      if (!d || Date.now() - new Date(d).getTime() > 20 * 3600 * 1000) suiviAgenceLancer('auto');
+    } catch (e) { /* prochain tour */ }
+  };
+  tour();
+  setInterval(tour, 3600 * 1000);
+}, 60000);
+app.post('/api/biens/suivi-agence', requireAdmin, async (req, res) => {
+  res.json(Object.assign({ ok: true }, await suiviAgenceLancer('manuel')));
+});
+app.get('/api/biens/suivi-agence', requireAdmin, (req, res) => {
+  res.json({ ok: true, enCours: SUIVI.enCours, dernier: readDb().suiviAgence || null });
+});
+
 // ---- Sauvegarde complète du serveur (super-admin) ----
 // Archive .tar.gz envoyée en flux : la base (copie cohérente faite dans le
 // dossier temporaire du conteneur, pas sur le volume) + toutes les photos et
