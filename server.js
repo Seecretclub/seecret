@@ -4614,6 +4614,13 @@ function pmNiveauLibelle(n) {
   return v;
 }
 
+// Millésime 2026 : texte en UTF-8 (lu comme Latin-1 → « PropriÃ©taire ») et
+// droit écrit « P - Propriétaire » au lieu de « P ». On répare à la lecture.
+function pmTexte(v) {
+  const t = String(v == null ? '' : v);
+  return /Ã[\u0080-\u00bf]|Â[\u0080-\u00bf ]/.test(t) ? Buffer.from(t, 'latin1').toString('utf8') : t;
+}
+function pmLigneReparee(row) { return row.map((v, i) => (i === PMC.droit ? String(v || '').split(' - ')[0].trim() : pmTexte(v))); }
 function pmLotDepuisLigne(row) {
   const forme = row[PMC.forme] || '';
   const estSci = /^SCI/i.test(forme) || /^654/.test(row[PMC.formeCode] || '') || /\bSCI\b|CIVILE IMMOBILIERE/i.test(row[PMC.nom] || '');
@@ -4667,12 +4674,12 @@ function pmBase() {
 function pmFermerBase() { try { if (PM_BASE) PM_BASE.b.close(); } catch (e) { /* rien */ } PM_BASE = null; }
 function pmLignesAdresse(insee, numero) {
   const b = pmBase();
-  if (b) return b.adr.all(insee, numero, Number(numero) || -1);
+  if (b) return b.adr.all(insee, numero, Number(numero) || -1).map(pmLigneReparee);
   return pmLireBucket('insee', insee).filter((r) => String(parseInt(r[PMC.num], 10)) === numero);
 }
 function pmLignesSiren(siren) {
   const b = pmBase();
-  if (b) return b.siren.all(siren);
+  if (b) return b.siren.all(siren).map(pmLigneReparee);
   return pmLireBucket('siren', siren.slice(0, 2)).filter((r) => r[PMC.siren] === siren);
 }
 function pmLotsImmeuble(q) {
@@ -5450,6 +5457,14 @@ function radarPlafonner() {
     console.warn('[radar] ' + ids.length + ' DPE anciens retirés pour garder de la place (' + placeLibreMo() + ' Mo libres).');
   } catch (e) { console.error('[radar] plafond :', e.message); }
 }
+// Une fois : reconnaître de nouveau après la correction du format 2026.
+setTimeout(() => {
+  try {
+    if (!RS || !pmMeta() || RS.cacheGet.get('meta', 'reident-2026')) return;
+    radarReidentifier();
+    RS.cacheSet.run('meta', 'reident-2026', new Date().toISOString(), '1');
+  } catch (e) { console.error('[radar] ré-identification :', e.message); }
+}, 30 * 1000);
 // Après un import du fichier des propriétaires : on reconnaît les sociétés
 // propriétaires de tous les DPE déjà stockés, sans rien retélécharger.
 function radarReidentifier() {
