@@ -6527,6 +6527,245 @@ app.post('/api/leads/import', requireAdmin, (req, res) => {
   res.json(Object.assign({ ok: true, simulation: simulation, lot: lot }, resultat));
 });
 
+// ---- Import de fiches vendeurs (export du logiciel d'agence) ----
+// Chaque élément : le propriétaire (lead vendeur) + son bien + la photo du bien.
+// Rapprochement : lead par email, ou téléphone + même nom ; bien par référence
+// d'origine (refAgence). On complète sans jamais écraser ce qui existe.
+// Les biens restent hors plateforme (« Sur Seecret » désactivé, En préparation) :
+// ce sont des mandats d'une autre agence, rien n'est publié sans l'agent.
+const DETAILS_BIEN = ['prixAffiche', 'honorairesAcheteur', 'surfaceCarrez', 'surfaceTotale', 'niveaux', 'etagesImmeuble', 'etageTexte', 'exposition', 'vue', 'standing', 'chauffage', 'eauChaude', 'eauxUsees', 'anneeRenovation', 'style', 'dpeKwh', 'gesKg', 'taxeFonciere', 'lotsCopropriete', 'residence', 'quartierOrigine', 'disponibilite', 'prestations', 'surfacesDetail', 'proximites'];
+function nettoyerDetails(d) {
+  const out = {};
+  DETAILS_BIEN.forEach((k) => {
+    const v = d && d[k];
+    if (v === undefined || v === null || v === '') return;
+    if (Array.isArray(v)) out[k] = v.slice(0, 60).map((x) => (typeof x === 'object' ? { piece: String(x.piece || '').slice(0, 60), surface: Number(x.surface) || null } : String(x).slice(0, 80)));
+    else out[k] = typeof v === 'number' ? v : String(v).slice(0, 200);
+  });
+  return out;
+}
+app.post('/api/import/fiches-vendeurs', requireAdmin, (req, res) => {
+  const items = Array.isArray(req.body && req.body.items) ? req.body.items.slice(0, 120) : [];
+  const simulation = !!(req.body && req.body.simulation);
+  const lot = String((req.body && req.body.lot) || 'fiches-vendeurs').slice(0, 60);
+  const db = readDb();
+  const agentId = estAgentSimple(roleOf(req.lead)) ? req.lead.id : null;
+  const nomCle = (n) => String(n || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z]/g, '');
+  const str = (v, n) => String(v == null ? '' : v).trim().slice(0, n || 200);
+  const num = (v) => (v === null || v === undefined || v === '' || isNaN(Number(v)) ? 0 : Number(v));
+  const r = { leadsCrees: 0, leadsCompletes: 0, biensCrees: 0, biensCompletes: 0, photos: 0, erreurs: [] };
+  const libre = placeLibreMo();
+  items.forEach((it, i) => {
+    try {
+      const p = it.proprio || {}; const b = it.bien || {};
+      const email = str(p.email, 160).toLowerCase(); const tel = str(p.tel, 40); const telN = telNormalise(tel);
+      if (!email && telN.length < 9) { r.erreurs.push({ i: i, raison: 'sans contact' }); return; }
+      let lead = (email && db.leads.find((l) => String(l.email || '').toLowerCase() === email)) ||
+        (telN.length >= 9 && db.leads.find((l) => telNormalise(l.tel) === telN && nomCle(l.nom) === nomCle(p.nom))) || null;
+      if (lead) {
+        r.leadsCompletes++;
+        if (!simulation) {
+          ['nom', 'tel', 'adresse', 'civilite', 'raisonSociale'].forEach((k) => { if (!lead[k] && str(p[k])) lead[k] = str(p[k]); });
+          if (!lead.email && email) lead.email = email;
+          lead.bienAVendre = true; if (lead.projet === 'acquereur') lead.projet = 'mixte';
+          lead.tags = Array.from(new Set((lead.tags || []).concat(['Fichier De Ferla'])));
+        }
+      } else {
+        r.leadsCrees++;
+        lead = {
+          id: uid('l'), prenom: str(p.prenom, 80), nom: str(p.nom, 120), email: email, tel: tel, civilite: str(p.civilite, 10),
+          ville: str(b.ville, 80), adresse: str(p.adresse), adresseBien: [str(b.adresse), str(b.codePostal), str(b.ville)].filter(Boolean).join(' '),
+          projet: 'vendeur', role: 'membre', type: p.natureLead === 'sci' ? 'sci' : p.natureLead === 'societe' ? 'societe' : 'personne', natureLead: ['sci', 'societe'].indexOf(p.natureLead) > -1 ? p.natureLead : 'personne',
+          raisonSociale: str(p.raisonSociale, 120), representant: '', siren: '', dirigeants: [],
+          source: 'Fichier De Ferla', statut: 'prospect', pipeline: 'a_contacter', importLot: lot,
+          autresTelephones: (p.autresTels || []).map((x) => str(x, 40)).slice(0, 4), autresEmails: (p.autresEmails || []).map((x) => str(x, 160)).slice(0, 4),
+          telAVerifier: !!p.telAVerifier, civiliteTexte: str(p.civiliteTexte, 20),
+          budgetMin: 0, budgetMax: 0, quartiers: b.quartier ? [str(b.quartier, 20)] : [], piecesMin: 0, surfaceMin: 0, surfaceMax: 0,
+          delai: '', financement: '', apport: 0, courtier: false, bienAVendre: true, typeBien: str(b.type, 40),
+          notes: '', tags: ['Fichier De Ferla'].concat(b.mandatOrigine && b.mandatOrigine.type ? ['Mandat ' + b.mandatOrigine.type.toLowerCase()] : []),
+          creePar: req.lead.id, agentId: agentId, cree: nowISO()
+        };
+        if (!simulation) db.leads.push(lead);
+      }
+      const ref = str(b.refAgence, 40);
+      let bien = ref && db.biens.find((x) => x.refAgence === ref);
+      const champs = {
+        adresse: str(b.adresse), codePostal: str(b.codePostal, 10), ville: str(b.ville, 80), quartier: str(b.quartier, 20),
+        lat: Number(b.lat) || null, lon: Number(b.lon) || null, type: str(b.type, 40) || 'Appartement',
+        surface: num(b.surface), pieces: num(b.pieces), chambres: num(b.chambres), sdb: num(b.sdb),
+        etage: b.etage === null || b.etage === undefined ? null : num(b.etage), ascenseur: !!b.ascenseur, anneeConstruction: num(b.anneeConstruction),
+        etat: str(b.etat, 60), dpe: /^[A-G]$/.test(b.dpe || '') ? b.dpe : '', ges: /^[A-G]$/.test(b.ges || '') ? b.ges : '',
+        exterieur: str(b.exterieur, 40), surfaceExterieur: num(b.surfaceExterieur), annexes: Array.isArray(b.annexes) ? b.annexes.map(String).slice(0, 10) : [],
+        prix: num(b.prix), charges: num(b.charges), description: str(b.description, 6000), atouts: Array.isArray(b.atouts) ? b.atouts.map(String).slice(0, 12) : []
+      };
+      if (bien) {
+        r.biensCompletes++;
+        if (!simulation) {
+          Object.keys(champs).forEach((k) => { const v = champs[k]; const vide = bien[k] === undefined || bien[k] === null || bien[k] === '' || bien[k] === 0 || (Array.isArray(bien[k]) && !bien[k].length); if (vide && v !== '' && v !== 0 && v !== null && !(Array.isArray(v) && !v.length)) bien[k] = v; });
+          bien.details = Object.assign({}, nettoyerDetails(b.details), bien.details || {});
+        }
+      } else {
+        r.biensCrees++;
+        bien = Object.assign({ id: uid('b'), leadId: lead.id, email: lead.email || '', nom: [lead.prenom, lead.nom].filter(Boolean).join(' '), titre: '' }, champs, {
+          titre: [champs.type, champs.pieces ? champs.pieces + ' pièces' : '', champs.surface ? Math.round(champs.surface) + ' m²' : '', champs.quartier ? labelQuartier(champs.quartier) : champs.ville].filter(Boolean).join(' · '),
+          refAgence: ref, details: nettoyerDetails(b.details), accesVisites: str(b.accesVisites, 1500),
+          mandatOrigine: { agence: str(b.mandatOrigine && b.mandatOrigine.agence, 60), type: str(b.mandatOrigine && b.mandatOrigine.type, 30), numero: str(b.mandatOrigine && b.mandatOrigine.numero, 30), debut: str(b.mandatOrigine && b.mandatOrigine.debut, 10) || null, fin: str(b.mandatOrigine && b.mandatOrigine.fin, 10) || null },
+          tauxHonoraires: tauxValide(b.tauxHonoraires),
+          historiquePrix: champs.prix ? [{ at: nowISO(), ancien: 0, nouveau: champs.prix, auteur: 'Import', source: 'Fichier De Ferla' }] : [],
+          photos: [], exclusivite: { statut: 'scan_en_cours', liens: [] }, validation: 'en_attente', statut: 'brouillon', statutDemande: null,
+          surSeecret: false, source: 'Fichier De Ferla', sourceFichier: str(b.sourceFichier, 120), importLot: lot,
+          agent: nomComplet(req.lead) || DEFAULT_AGENT_NOM, cree: nowISO()
+        });
+        if (!simulation) db.biens.push(bien);
+      }
+      // Photo du bien (JPEG/PNG en base64), si le bien n'en a pas encore.
+      const ph = it.photo;
+      if (!simulation && ph && ph.data && !(bien.photos || []).length && (libre === null || libre > 60)) {
+        const ext = /png/.test(ph.type || '') ? '.png' : '.jpg';
+        const buf = Buffer.from(String(ph.data), 'base64');
+        if (buf.length > 500 && buf.length < 3 * 1024 * 1024) {
+          fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+          const nom = 'imp-' + String(bien.id).replace(/[^\w-]/g, '') + '-' + crypto.randomBytes(4).toString('hex') + ext;
+          fs.writeFileSync(path.join(UPLOADS_DIR, nom), buf);
+          bien.photos = ['/uploads/' + nom]; r.photos++;
+        }
+      }
+    } catch (e) { r.erreurs.push({ i: i, raison: e.message }); }
+  });
+  if (!simulation) writeDb(db);
+  res.json(Object.assign({ ok: true, simulation: simulation }, r));
+});
+
+// ---- Vérifications marché d'un bien : vendu (DVF) ? toujours en ligne (portails) ? ----
+// Tâche de fond, un bien à la fois, pour ne pas saturer le Cerema ni Exa.
+const VERIF = { file: [], enCours: null, faits: 0, debut: null, erreurs: 0 };
+function insseeDepuisCp(cp) {
+  const c = String(cp || '');
+  if (/^750(\d\d)$/.test(c)) return c === '75016' || c === '75116' ? '75116' : '751' + c.slice(3);
+  return '';
+}
+const typeDvfCompatible = (type, lib) => {
+  const t = radarNorm(type); const l = radarNorm(lib);
+  if (/maison|villa|hotel particulier|propriete|chateau/.test(t)) return /maison/.test(l);
+  if (/terrain/.test(t)) return /terrain/.test(l);
+  if (/parking|box/.test(t)) return /dependance|activite|indetermine/.test(l);
+  if (/bureau|local|commerce|immeuble/.test(t)) return /activite|mixte|indetermine|appartement|maison/.test(l);
+  return /appartement/.test(l);
+};
+async function verifierDvf(b) {
+  if (!b.lat || !b.lon) await normaliserAdresse(b);
+  if (!b.lat || !b.lon) return { statut: 'sans_position', maj: nowISO() };
+  const d = 0.00025; // ~25 m autour de l'adresse : la parcelle et ses voisines
+  const bbox = [b.lon - d, b.lat - d, b.lon + d, b.lat + d].map((x) => x.toFixed(6)).join(',');
+  const insee = b.insee || insseeDepuisCp(b.codePostal);
+  const params = Object.assign({ in_bbox: bbox }, insee ? { code_insee: insee } : {});
+  const muts = await dvfCerema(params, 4, { geo: true, budgetMs: 25000 });
+  const depuis = (b.mandatOrigine && b.mandatOrigine.debut) || '';
+  const surf = Number(b.surface) || 0;
+  let derniere = '';
+  const ventes = [];
+  muts.forEach((x) => {
+    const date = String(x.datemut || '');
+    if (date > derniere) derniere = date;
+    if (!/vente/i.test(x.libnatmut || '')) return;
+    if (!typeDvfCompatible(b.type, x.libtypbien)) return;
+    const sb = Number(x.sbati) || 0;
+    const ok = surf && sb ? Math.abs(sb - surf) <= Math.max(4, surf * 0.12) : false;
+    if (!ok) return;
+    ventes.push({ date: date, prix: Math.round(Number(x.valeurfonc) || 0), surface: sb, type: String(x.libtypbien || '').toLowerCase(), apresMandat: !!(depuis && date >= depuis) });
+  });
+  ventes.sort((a, z) => z.date.localeCompare(a.date));
+  const apres = ventes.filter((v) => v.apresMandat);
+  return {
+    statut: apres.length ? 'vendu_probable' : 'pas_de_vente', maj: nowISO(),
+    ventes: ventes.slice(0, 6), mutationsLues: muts.length, donneesJusquau: derniere,
+    // DVF est publié avec plusieurs mois de retard : une vente récente n'y figure pas encore.
+    couvreMandat: !!(depuis && derniere && derniere >= depuis)
+  };
+}
+const PORTAILS_VERIF = MARKET_PLATEFORMES.map((p) => p.domaine).concat(['logic-immo.com', 'meilleursagents.com', 'barnes-international.com', 'daniel-feau.com', 'kretzrealestate.com', 'proprietesparisiennes.com', 'immobilier.notaires.fr']);
+async function verifierEnLigne(b) {
+  const key = process.env.EXA_API_KEY;
+  const cp = String(b.codePostal || '');
+  const arr = /^750(\d\d)$/.test(cp) ? Number(cp.slice(3)) : 0;
+  const surfR = Math.round(Number(b.surface) || 0);
+  const recherches = MARKET_PLATEFORMES.map((p) => {
+    const q = 'site:' + p.domaine + ' ' + (b.type || '') + ' ' + (surfR ? surfR + ' m² ' : '') + (b.adresse ? '"' + String(b.adresse).replace(/^\d+\s*(bis|ter)?\s*/i, '') + '" ' : '') + (cp || b.ville || '');
+    return { plateforme: p.label, url: 'https://www.google.com/search?q=' + encodeURIComponent(q.trim()) };
+  });
+  if (!key) return { statut: 'indisponible', raison: 'Clé EXA_API_KEY absente', recherches: recherches, maj: nowISO() };
+  const extrait = String(b.description || '').replace(/\s+/g, ' ').slice(0, 220);
+  const query = [b.type, b.pieces ? b.pieces + ' pièces' : '', surfR ? surfR + ' m²' : '', arr ? 'Paris ' + arr + 'e' : (b.ville || ''), extrait].filter(Boolean).join(' ');
+  const r = await fetch('https://api.exa.ai/search', { method: 'POST', headers: { 'x-api-key': key, 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(20000),
+    body: JSON.stringify({ query: query, numResults: 8, includeDomains: PORTAILS_VERIF, contents: { text: { maxCharacters: 2500 } } }) });
+  if (r.status === 429 || r.status === 402) throw Object.assign(new Error('quota Exa'), { quota: true });
+  const dj = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error('Exa ' + r.status);
+  const prix = Number((b.details && b.details.prixAffiche) || 0) || Number(b.prix) || 0;
+  const rue = radarNorm(String(b.adresse || '').replace(/^\d+\s*(bis|ter)?\s*/i, '')).replace(/^(rue|avenue|boulevard|bd|place|quai|square|villa|impasse|allee|cite|passage)\s+(de la |de l'|du |des |de )?/, '');
+  const liens = (dj.results || []).map((x) => {
+    const t = radarNorm((x.title || '') + ' ' + (x.text || '') + ' ' + (x.url || ''));
+    const plat = (MARKET_PLATEFORMES.find((p) => String(x.url || '').indexOf(p.domaine) > -1) || {}).label || String(x.url || '').replace(/^https?:\/\/(www\.)?/, '').split('/')[0];
+    const surfOk = surfR > 0 && [surfR, surfR - 1, surfR + 1].some((n) => new RegExp('\\b' + n + '([.,]\\d+)?\\s*m', 'i').test(t));
+    const lieuOk = (cp && t.indexOf(cp) > -1) || (arr && new RegExp('paris\\s*' + arr + '(e|eme|er)?\\b|\\b' + arr + '(e|eme|er)\\s*arr').test(t)) || (rue.length > 4 && t.indexOf(rue) > -1);
+    const rueOk = rue.length > 4 && t.indexOf(rue) > -1;
+    const nums = (t.match(/\d[\d\s.]{4,10}\s*(€|eur)/g) || []).map((m) => Number(m.replace(/[^\d]/g, '')));
+    const prixOk = prix > 0 && nums.some((n) => Math.abs(n - prix) / prix < 0.08);
+    const score = (surfOk ? 2 : 0) + (lieuOk ? 1 : 0) + (prixOk ? 2 : 0) + (rueOk ? 1 : 0);
+    return { url: x.url, titre: String(x.title || '').slice(0, 140), plateforme: plat, date: x.publishedDate || '', score: score, surface: surfOk, lieu: lieuOk, prix: prixOk };
+  }).filter((l) => l.lieu && l.score >= 3).sort((a, z) => z.score - a.score).slice(0, 5);
+  const fort = liens.some((l) => l.surface && l.lieu && (l.prix || l.score >= 4));
+  return { statut: fort ? 'en_ligne' : liens.length ? 'a_verifier' : 'non_trouve', liens: liens, recherches: recherches, maj: nowISO() };
+}
+async function verifTraiter() {
+  if (VERIF.enCours) return;
+  while (VERIF.file.length) {
+    const id = VERIF.file.shift();
+    VERIF.enCours = id;
+    try {
+      const b0 = readDb().biens.find((x) => x.id === id);
+      if (!b0) continue;
+      const copie = JSON.parse(JSON.stringify(b0));
+      const res = {};
+      try { res.dvf = await verifierDvf(copie); } catch (e) { res.dvf = { statut: 'erreur', raison: String(e.message || e).slice(0, 120), maj: nowISO() }; }
+      try { res.enLigne = await verifierEnLigne(copie); } catch (e) { res.enLigne = { statut: e.quota ? 'quota' : 'erreur', raison: String(e.message || e).slice(0, 120), maj: nowISO() }; }
+      const db = readDb();
+      const b = db.biens.find((x) => x.id === id);
+      if (b) {
+        if (!b.lat && copie.lat) { b.lat = copie.lat; b.lon = copie.lon; }
+        if (!b.insee && copie.insee) b.insee = copie.insee;
+        b.verifs = res;
+        writeDb(db);
+      }
+      VERIF.faits++;
+      if (res.dvf.statut === 'erreur' || res.enLigne.statut === 'erreur') VERIF.erreurs++;
+      if (res.enLigne.statut === 'quota') { VERIF.file = []; VERIF.arret = 'Crédits Exa épuisés'; }
+    } catch (e) { VERIF.erreurs++; }
+    await new Promise((r) => setTimeout(r, 1200));
+  }
+  VERIF.enCours = null;
+}
+app.post('/api/biens/verifier', requireAdmin, (req, res) => {
+  const body = req.body || {};
+  const db = readDb();
+  let ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
+  if (body.lot) ids = db.biens.filter((b) => b.importLot === String(body.lot) && (body.forcer || !b.verifs)).map((b) => b.id);
+  ids = ids.filter((id) => db.biens.some((b) => b.id === id) && VERIF.file.indexOf(id) === -1 && VERIF.enCours !== id);
+  VERIF.file = VERIF.file.concat(ids);
+  if (!VERIF.debut || (!VERIF.enCours && !VERIF.file.length)) { VERIF.debut = nowISO(); VERIF.faits = 0; VERIF.erreurs = 0; }
+  VERIF.arret = null;
+  setImmediate(() => verifTraiter().catch(() => { VERIF.enCours = null; }));
+  res.json({ ok: true, ajoutes: ids.length, enAttente: VERIF.file.length });
+});
+app.get('/api/biens/:id/verifs', requireAdmin, (req, res) => {
+  const b = readDb().biens.find((x) => x.id === req.params.id);
+  if (!b) return res.status(404).json({ error: 'Bien introuvable' });
+  res.json({ verifs: b.verifs || null, enFile: VERIF.enCours === b.id || VERIF.file.indexOf(b.id) > -1 });
+});
+app.get('/api/biens/verifier', requireAdmin, (req, res) => {
+  res.json({ enCours: !!VERIF.enCours, enAttente: VERIF.file.length, faits: VERIF.faits, erreurs: VERIF.erreurs, debut: VERIF.debut, arret: VERIF.arret || null });
+});
+
 // ---- Gestion des comptes agents (super-admin uniquement) ----
 // Au 18/11/2026, aucun agent n'est encore employé (usage solo) — ces routes
 // posent les fondations pour plus tard sans rien changer à l'usage actuel :

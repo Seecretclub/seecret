@@ -88,7 +88,7 @@
   const DPE_ORDER = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
   const adresseKey = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
-  const TYPES = ['Appartement', 'Maison', 'Duplex', 'Loft', 'Hôtel particulier', 'Terrain'];
+  const TYPES = ['Appartement', 'Maison', 'Duplex', 'Triplex', 'Loft', 'Hôtel particulier', 'Villa', 'Maison de ville', 'Maison de village', 'Propriété', 'Château', 'Immeuble', 'Péniche', 'Terrain', 'Terrain constructible', 'Parking', 'Box', 'Bureau', 'Local commercial', 'Commerce'];
   const ATOUTS = ['Terrasse', 'Jardin', 'Vue', 'Parquet d’origine', 'Cheminée', 'Verrière', 'Ascenseur', 'Cave', 'Parking', 'Dernier étage', 'Calme', 'Lumineux'];
 
   // Le parcours d'un bien, dans l'ordre (aligné sur l'onboarding vendeur).
@@ -1366,7 +1366,8 @@
             id: 'srv-' + l.id, serverId: l.id, serveurStatut: l.statut,
             type: l.projet === 'vendeur' ? 'vendeur' : l.projet === 'mixte' ? 'mixte' : 'acquereur',
             prenom: l.prenom || '', nom: l.nom || '', email: l.email || '', tel: l.tel || '',
-            statut: l.statut === 'accepte' ? 'actif' : l.statut === 'suspendu' ? 'suspendu' : 'prospect', source: l.source === 'Fichier clients' ? 'Fichier clients' : 'Candidature',
+            statut: l.statut === 'accepte' ? 'actif' : l.statut === 'suspendu' ? 'suspendu' : 'prospect', source: /^Fichier/.test(l.source || '') ? l.source : 'Candidature',
+            autresTelephones: l.autresTelephones || [], autresEmails: l.autresEmails || [], telAVerifier: !!l.telAVerifier,
             budgetMin: 0, budgetMax: l.budgetMax || 0, quartiers: l.quartiers || [],
             piecesMin: l.piecesMin || 0, surfaceMin: l.surfaceMin || 0, surfaceMax: l.surfaceMax || 0, delai: l.delai || '', typeBien: l.typeBien || '',
             apport: l.apport || 0, financement: l.financement || '', courtier: !!l.courtier, bienAVendre: !!l.bienAVendre,
@@ -1763,7 +1764,9 @@
       atouts: b.atouts || b.annexes || [], annexes: b.annexes || [], mandat: { type: 'simple', fin: '' }, cree: b.cree || nowISO(),
       exclusivite: b.exclusivite || { statut: 'scan_en_cours', liens: [] },
       validation: b.validation || 'en_attente', surSeecret: b.surSeecret !== false,
-      serveur: true, email: b.email || '', demo: !!b.demo
+      serveur: true, email: b.email || '', demo: !!b.demo,
+      refAgence: b.refAgence || '', nomProprio: b.nom || '', source: b.source || '', sourceFichier: b.sourceFichier || '', importLot: b.importLot || '',
+      details: b.details || null, mandatOrigine: b.mandatOrigine || null, accesVisites: b.accesVisites || '', verifs: b.verifs || null
     };
   }
 
@@ -4041,11 +4044,29 @@
     if (!(b.statut === 'avant-premiere' || b.statut === 'ouvert')) manque.push('le passer en Avant-première ou En vente (statut actuel : ' + ((ST_BIEN[b.statut] || {}).label || b.statut || '—') + ')');
     return manque.length ? 'Option active, mais pas encore visible : il reste à ' + manque.join(' et à ') + '.' : '';
   }
+  async function suivreVerifLot() {
+    for (;;) {
+      await new Promise((ok) => setTimeout(ok, 8000));
+      try {
+        const e = await (await fetch('/api/biens/verifier')).json();
+        state.verifEtat = e;
+        if (!e.enCours && !e.enAttente) break;
+        if (location.hash.indexOf('#/biens') === 0) render();
+      } catch (x) { break; }
+    }
+    state.verifLot = false; state.verifEtat = null;
+    try {
+      const rb = await fetch('/api/biens', { headers: { accept: 'application/json' } });
+      if (rb.ok) state.biensServeur = ((await rb.json()).biens || []).map(mapBienServeur);
+    } catch (x) { /* rien */ }
+    render(); toast('Vérification des biens terminée.', 'ok');
+  }
   function carteBien(b) {
     return '<a class="se-card se-bien" href="#/bien/' + b.id + '">' +
       '<div class="se-bien-photo">' + (photo(b) ? '<img src="' + photo(b) + '" alt=""/>' : '') + badgeBien(b.statut) + '</div>' +
-      '<div class="se-bien-body"><span class="se-sub">' + esc(b.ref) + ' · ' + esc(b.type) + (surPlateforme(b) ? ' · <span style="color:var(--color-club-violet)">Sur Seecret</span>' : '') + '</span>' +
+      '<div class="se-bien-body"><span class="se-sub">' + esc(b.refAgence || b.ref) + ' · ' + esc(b.type) + (surPlateforme(b) ? ' · <span style="color:var(--color-club-violet)">Sur Seecret</span>' : '') + '</span>' +
       '<h3>' + esc(b.titre) + '</h3><span class="se-price">' + euro(b.prix) + '</span>' +
+      (b.verifs ? '<div class="se-row" style="gap:4px;margin-top:6px">' + badgesVerifs(b) + '</div>' : '') +
       '<div class="se-bien-foot">' + esc(qLabel(b.quartier)) + ' · ' + num(b.surface) + ' m² · ' + b.pieces + ' p.</div></div></a>';
   }
   function viewBiensClub() {
@@ -5188,7 +5209,9 @@
       '<div class="se-split">' +
         '<div class="se-grid" style="gap:18px">' +
           '<div class="se-card"><h3>Identité</h3><div class="se-kv" style="margin-top:12px">' +
-            kv('Email', esc(c.email)) + kv('Téléphone', esc(c.tel)) +
+            kv('Email', esc(c.email)) + kv('Téléphone', esc(c.tel) + (c.telAVerifier ? ' <span class="se-badge muted" title="Numéro mal formé dans le fichier d’origine">à vérifier</span>' : '')) +
+            ((c.autresTelephones || []).length ? kv('Autres téléphones', (c.autresTelephones || []).map(esc).join('<br>')) : '') +
+            ((c.autresEmails || []).length ? kv('Autres emails', (c.autresEmails || []).map(esc).join('<br>')) : '') +
             kv('Civilité', c.civilite === 'homme' ? 'Homme' : c.civilite === 'femme' ? 'Femme' : '—') +
             kv('Adresse', esc(c.adresse || '—')) +
             kv('Le lead est', c.natureLead === 'sci' ? 'Une SCI' : c.natureLead === 'societe' ? 'Une société' : 'Une personne') +
@@ -5277,11 +5300,25 @@
   function viewBiens() {
     const q = (state.filtres.q || '').toLowerCase();
     const st = state.filtres.statutBien || '';
-    const list = (state.biensServeur || []).concat(state.biens).filter((b) => {
+    const mk = state.filtres.marcheBien || '';
+    const src = state.filtres.sourceBien || '';
+    const toutes = (state.biensServeur || []).concat(state.biens);
+    const sources = Array.from(new Set(toutes.map((b) => b.source).filter(Boolean)));
+    const list = toutes.filter((b) => {
       if (st && b.statut !== st) return false;
-      if (q && (b.titre + ' ' + b.ref + ' ' + qLabel(b.quartier)).toLowerCase().indexOf(q) === -1) return false;
+      if (src && b.source !== src) return false;
+      if (mk) {
+        const v = b.verifs || {};
+        if (mk === 'non_verifie' && b.verifs) return false;
+        if (mk === 'vendu' && !(v.dvf && v.dvf.statut === 'vendu_probable')) return false;
+        if (mk === 'en_ligne' && !(v.enLigne && ['en_ligne', 'a_verifier'].indexOf(v.enLigne.statut) > -1)) return false;
+        if (mk === 'libre' && !(v.enLigne && v.enLigne.statut === 'non_trouve' && v.dvf && v.dvf.statut !== 'vendu_probable')) return false;
+        if (mk === 'mandat_echu' && !(b.mandatOrigine && b.mandatOrigine.fin && b.mandatOrigine.fin < new Date().toISOString().slice(0, 10))) return false;
+      }
+      if (q && (b.titre + ' ' + b.ref + ' ' + (b.refAgence || '') + ' ' + (b.adresse || '') + ' ' + qLabel(b.quartier) + ' ' + (b.nomProprio || '')).toLowerCase().indexOf(q) === -1) return false;
       return true;
     });
+    const aVerifier = (state.biensServeur || []).filter((b) => b.importLot && !b.verifs).length;
 
     return head('Portefeuille', 'Biens',
       list.length + ' bien(s) · ' + euro(list.reduce((n, b) => n + b.prix, 0)) + ' de valeur de présentation.',
@@ -5289,7 +5326,12 @@
       '<div class="se-card pad-sm" style="margin-bottom:18px"><div class="se-filters">' +
         '<select class="se-select" data-filter="statutBien"><option value="">Tous les statuts</option>' +
           Object.keys(ST_BIEN).map((k) => '<option value="' + k + '"' + (st === k ? ' selected' : '') + '>' + ST_BIEN[k].label + '</option>').join('') +
+        '</select>' +
+        (sources.length ? '<select class="se-select" data-filter="sourceBien"><option value="">Toutes les origines</option>' + sources.map((x) => '<option' + (src === x ? ' selected' : '') + '>' + esc(x) + '</option>').join('') + '</select>' : '') +
+        '<select class="se-select" data-filter="marcheBien"><option value="">Marché : tout</option>' +
+          [['libre', 'Ni vendu ni en ligne'], ['en_ligne', 'Toujours en ligne'], ['vendu', 'Vendu (DVF)'], ['mandat_echu', 'Mandat d’origine échu'], ['non_verifie', 'Pas encore vérifié']].map((o) => '<option value="' + o[0] + '"' + (mk === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') +
         '</select><span class="se-hint">' + list.length + ' résultat(s)</span>' +
+        (aVerifier ? '<button class="se-btn ghost sm" data-act="biens-verifier-tous"' + (state.verifLot ? ' disabled' : '') + '>' + (state.verifLot ? 'Vérification en cours…' + (state.verifEtat ? ' ' + state.verifEtat.faits + ' faits, ' + state.verifEtat.enAttente + ' restants' : '') : 'Vérifier vendu / en ligne (' + aVerifier + ')') + '</button>' : '') +
       '</div></div>' +
       '<div class="se-bien-grid">' + list.map(carteBien).join('') + '</div>';
   }
@@ -5335,6 +5377,55 @@
       render(); if (okMsg) toast(okMsg, 'ok');
       return true;
     } catch (e) { toast('Enregistrement impossible : ' + (e.message || 'erreur'), 'warn'); return false; }
+  }
+
+  const DETAILS_LIB = [
+    ['prixAffiche', 'Prix affiché d’origine', 'euro'], ['honorairesAcheteur', 'Honoraires d’origine (acquéreur)', 'euro'],
+    ['surfaceCarrez', 'Surface Carrez', 'm2'], ['surfaceTotale', 'Surface totale', 'm2'], ['niveaux', 'Niveaux'],
+    ['etageTexte', 'Étage / étages de l’immeuble'], ['exposition', 'Exposition'], ['vue', 'Vue'], ['standing', 'Standing'], ['style', 'Style'],
+    ['chauffage', 'Chauffage'], ['eauChaude', 'Eau chaude'], ['eauxUsees', 'Eaux usées'], ['anneeRenovation', 'Année de rénovation'],
+    ['dpeKwh', 'Consommation énergie', 'kwh'], ['gesKg', 'Émissions GES', 'kg'], ['taxeFonciere', 'Taxe foncière', 'euro'],
+    ['lotsCopropriete', 'Lots de copropriété'], ['residence', 'Copropriété / résidence'], ['quartierOrigine', 'Quartier (fichier)'], ['disponibilite', 'Disponibilité']
+  ];
+  function carteDetailsOrigine(b) {
+    const d = b.details;
+    if (!d && !b.refAgence) return '';
+    const fmt = (v, f) => f === 'euro' ? euro(v) : f === 'm2' ? num(v) + ' m²' : f === 'kwh' ? esc(String(v)) + ' kWh/m²/an' : f === 'kg' ? esc(String(v)) + ' kg CO₂/m²/an' : esc(String(v));
+    const lignes = DETAILS_LIB.filter((x) => d && d[x[0]] !== undefined && d[x[0]] !== null && d[x[0]] !== '').map((x) => kv(x[1], fmt(d[x[0]], x[2]))).join('');
+    const liste = (titre, arr) => arr && arr.length ? '<div class="se-hint" style="margin-top:14px;text-transform:uppercase;letter-spacing:.06em;font-size:11px">' + titre + '</div><div class="se-chips" style="margin-top:6px">' + arr.map((a) => '<span class="se-chip" style="cursor:default">' + esc(typeof a === 'object' ? a.piece + (a.surface ? ' · ' + num(a.surface) + ' m²' : '') : a) + '</span>').join('') + '</div>' : '';
+    return '<div class="se-card"><h3>Informations du fichier d’origine</h3>' +
+      '<p class="se-hint" style="margin:4px 0 0">' + esc(b.source || 'Import') + (b.refAgence ? ' · réf. ' + esc(b.refAgence) : '') + (b.sourceFichier ? ' · ' + esc(b.sourceFichier) : '') + '</p>' +
+      (lignes ? '<div class="se-kv" style="margin-top:12px">' + lignes + '</div>' : '') +
+      liste('Pièces', d && d.surfacesDetail) + liste('Prestations', d && d.prestations) + liste('À proximité', d && d.proximites) +
+    '</div>';
+  }
+  const VERIF_DVF = { vendu_probable: ['Vendu (DVF)', 'alert'], pas_de_vente: ['Pas de vente DVF', 'muted'], sans_position: ['Adresse non localisée', 'muted'], erreur: ['DVF indisponible', 'muted'] };
+  const VERIF_LIGNE = { en_ligne: ['En ligne', 'warn'], a_verifier: ['Annonce possible', 'muted'], non_trouve: ['Pas trouvé en ligne', 'ok'], indisponible: ['Recherche en ligne indisponible', 'muted'], quota: ['Crédits Exa épuisés', 'muted'], erreur: ['Recherche en ligne en erreur', 'muted'] };
+  function badgesVerifs(b) {
+    const v = b.verifs;
+    if (!v) return '';
+    const bd = (m, k) => (m[k] ? '<span class="se-badge ' + m[k][1] + '">' + m[k][0] + '</span>' : '');
+    return (v.dvf ? bd(VERIF_DVF, v.dvf.statut) : '') + (v.enLigne ? bd(VERIF_LIGNE, v.enLigne.statut) : '');
+  }
+  function carteVerifsMarche(b) {
+    if (!b.serveur) return '';
+    const v = b.verifs;
+    const enCours = state.verifEnCours && state.verifEnCours[b.serverId];
+    const bouton = '<button class="se-btn ghost sm" data-act="bien-verifier" data-id="' + b.id + '"' + (enCours ? ' disabled' : '') + '>' + (enCours ? 'Vérification…' : v ? 'Relancer' : 'Vérifier') + '</button>';
+    if (!v) return '<div class="se-card"><div class="se-row" style="justify-content:space-between;gap:10px"><h3>Vendu ? Toujours en ligne ?</h3>' + bouton + '</div><p class="se-hint" style="margin-top:6px">Cherche une vente dans les données DVF (ventes publiées par l’État) et une annonce sur les portails.</p></div>';
+    const d = v.dvf || {}; const l = v.enLigne || {};
+    const ventes = (d.ventes || []).map((x) => '<div class="se-list-item"><div style="flex:1;min-width:0"><div style="font-size:13.5px"><b>' + euro(x.prix) + '</b> · ' + num(x.surface) + ' m² · ' + esc(x.type) + '</div><div class="se-hint">' + dFR(x.date) + (x.apresMandat ? ' · après le début du mandat' : ' · avant le mandat') + '</div></div></div>').join('');
+    const liens = (l.liens || []).map((x) => '<a class="se-list-item" href="' + esc(x.url) + '" target="_blank" rel="noopener" style="text-decoration:none;color:inherit"><div style="flex:1;min-width:0"><div style="font-size:13.5px">' + esc(x.plateforme) + ' · ' + [x.surface ? 'surface' : '', x.lieu ? 'lieu' : '', x.prix ? 'prix' : ''].filter(Boolean).join(' + ') + ' identiques</div><div class="se-hint" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(x.titre || x.url) + '</div></div><span>↗</span></a>').join('');
+    return '<div class="se-card"><div class="se-row" style="justify-content:space-between;gap:10px"><h3>Vendu ? Toujours en ligne ?</h3>' + bouton + '</div>' +
+      '<div class="se-row" style="gap:6px;margin-top:8px">' + badgesVerifs(b) + '</div>' +
+      '<div class="se-hint" style="margin-top:12px;text-transform:uppercase;letter-spacing:.06em;font-size:11px">Ventes DVF à cette adresse (même type, surface proche)</div>' +
+      (ventes ? '<div class="se-list" style="margin-top:6px">' + ventes + '</div>' : '<p class="se-hint" style="margin-top:6px">Aucune vente correspondante.</p>') +
+      (d.donneesJusquau ? '<p class="se-hint" style="margin-top:6px">Données DVF disponibles jusqu’au ' + dFR(d.donneesJusquau) + (d.couvreMandat === false && b.mandatOrigine && b.mandatOrigine.debut ? ' : la période du mandat n’est pas encore couverte (DVF paraît avec plusieurs mois de retard).' : '.') + '</p>' : '') +
+      '<div class="se-hint" style="margin-top:14px;text-transform:uppercase;letter-spacing:.06em;font-size:11px">Annonces trouvées</div>' +
+      (liens ? '<div class="se-list" style="margin-top:6px">' + liens + '</div>' : '<p class="se-hint" style="margin-top:6px">' + (l.statut === 'non_trouve' ? 'Aucune annonce correspondante trouvée sur les portails.' : esc(l.raison || 'Recherche non faite.')) + '</p>') +
+      ((l.recherches || []).length ? '<details style="margin-top:10px"><summary class="se-hint" style="cursor:pointer">Vérifier à la main sur chaque portail</summary><div class="se-list" style="margin-top:6px">' + l.recherches.map((x) => '<a class="se-list-item" href="' + esc(x.url) + '" target="_blank" rel="noopener" style="text-decoration:none;color:inherit"><div style="flex:1">' + esc(x.plateforme) + '</div><span>↗</span></a>').join('') + '</div></details>' : '') +
+      '<p class="se-hint" style="margin-top:10px">Vérifié le ' + dFR(d.maj || l.maj) + '.</p>' +
+    '</div>';
   }
 
   function viewBien(r) {
@@ -5419,16 +5510,24 @@
         '</div>' +
         '<div class="se-grid" style="gap:18px">' +
           '<div class="se-card"><h3>Le bien</h3><div class="se-kv" style="margin-top:12px">' +
-            kv('Référence', esc(b.ref)) + kv('Surface', num(b.surface) + ' m²') +
+            kv('Référence', esc(b.refAgence ? b.refAgence + ' (fichier)' : b.ref)) + kv('Surface', num(b.surface) + ' m²') +
             kv('Pièces', b.pieces + ' · ' + b.chambres + ' ch. · ' + b.sdb + ' sdb') +
             kv('Étage', b.etage != null ? (b.etage === 0 ? 'RDC' : esc(String(b.etage))) : '—') + kv('DPE', esc(b.dpe)) + kv('Année de construction', b.anneeConstruction || '—') + kv('Statut', badgeBien(b.statut)) +
           '</div></div>' +
-          '<div class="se-card"><h3>Mandat & propriétaire</h3><div class="se-kv" style="margin-top:12px">' +
+          carteVerifsMarche(b) +
+          '<div class="se-card"><h3>Propriétaire' + (b.mandatOrigine ? ' & mandat d’origine' : '') + '</h3><div class="se-kv" style="margin-top:12px">' +
             kv('Propriétaire', prop ? '<a href="#/client/' + prop.id + '">' + esc(nomClient(prop)) + '</a>' : '<span class="se-hint">non renseigné</span>') +
-            kv('Type de mandat', b.mandat ? (b.mandat.type === 'exclusif' ? 'Exclusif' : 'Simple') : '—') +
-            kv('Échéance', b.mandat ? dFR(b.mandat.fin) : '—') +
-            kv('Mise en ligne', dFR(b.cree)) +
-          '</div></div>' +
+            (b.mandatOrigine ? (
+              kv('Agence', esc(b.mandatOrigine.agence || '—')) +
+              kv('Type de mandat', esc(b.mandatOrigine.type || 'non précisé') + (b.mandatOrigine.numero ? ' · n° ' + esc(b.mandatOrigine.numero) : '')) +
+              kv('Début', b.mandatOrigine.debut ? dFR(b.mandatOrigine.debut) : '—') +
+              kv('Échéance', b.mandatOrigine.fin ? dFR(b.mandatOrigine.fin) + (b.mandatOrigine.fin < new Date().toISOString().slice(0, 10) ? ' <span class="se-badge open">échu</span>' : '') : '—')
+            ) : '') +
+            kv('Créé dans le CRM', dFR(b.cree)) +
+          '</div>' +
+          (b.accesVisites ? '<div class="se-divider"></div><div class="se-hint" style="text-transform:uppercase;letter-spacing:.06em;font-size:11px">Accès & notes de visite · interne</div><p style="white-space:pre-line;font-size:13.5px;line-height:1.55;margin:6px 0 0">' + esc(b.accesVisites) + '</p>' : '') +
+          '</div>' +
+          carteDetailsOrigine(b) +
           '<div class="se-card"><h3>Exclusivité</h3>' +
             '<div class="se-row" style="margin-top:8px">' + badgeExclusivite(b) + '</div>' +
             '<p class="se-muted" style="margin-top:6px">Vérifie si ce bien est déjà diffusé sur les portails immobiliers.</p>' +
@@ -7456,6 +7555,33 @@
         if (res.emailEnvoye === false) toast('Email échoué : ' + (res.emailErreur || 'SMTP'), 'warn');
         else toast('Email d’accès renvoyé au client.', 'ok');
       } catch (e) { toast('Envoi impossible : ' + (e.message || 'erreur'), 'warn'); }
+    },
+    'bien-verifier': async (el, id) => {
+      const b = bien(id);
+      if (!b || !b.serverId) return;
+      state.verifEnCours = state.verifEnCours || {};
+      state.verifEnCours[b.serverId] = true; render();
+      try {
+        const r = await fetch('/api/biens/verifier', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ids: [b.serverId] }) });
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'erreur');
+        for (let i = 0; i < 40; i++) {
+          await new Promise((ok) => setTimeout(ok, 3000));
+          const v = await (await fetch('/api/biens/' + encodeURIComponent(b.serverId) + '/verifs')).json();
+          if (!v.enFile) { b.verifs = v.verifs; break; }
+        }
+        toast('Vérification terminée.', 'ok');
+      } catch (e) { toast('Vérification impossible : ' + (e.message || 'erreur'), 'warn'); }
+      delete state.verifEnCours[b.serverId]; render();
+    },
+    'biens-verifier-tous': async () => {
+      const ids = (state.biensServeur || []).filter((b) => b.importLot && !b.verifs).map((b) => b.serverId);
+      if (!ids.length) { toast('Tous les biens importés sont déjà vérifiés.', 'ok'); return; }
+      try {
+        const r = await fetch('/api/biens/verifier', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ids: ids }) });
+        const res = await r.json();
+        toast(res.ajoutes + ' bien(s) en cours de vérification, en arrière-plan (environ ' + Math.max(1, Math.round(res.enAttente * 6 / 60)) + ' min).', 'ok');
+        state.verifLot = true; render(); suivreVerifLot();
+      } catch (e) { toast('Lancement impossible', 'warn'); }
     },
     'exclusivite-scan': async (el, id) => {
       const b = bien(id);
