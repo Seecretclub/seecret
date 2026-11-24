@@ -6904,6 +6904,24 @@ app.post('/api/biens/verifier', requireAdmin, (req, res) => {
   setImmediate(() => verifTraiter().catch(() => { VERIF.enCours = null; }));
   res.json({ ok: true, ajoutes: ids.length, enAttente: VERIF.file.length });
 });
+// Une fois : refaire le contrôle DVF (à l'adresse exacte) des biens importés
+// déjà vérifiés avec l'ancienne méthode. La recherche en ligne est conservée.
+setTimeout(() => {
+  try {
+    const db = readDb();
+    db.migrations = db.migrations || {};
+    if (db.migrations.dvfParcelle) return;
+    const ids = db.biens.filter((b) => b.importLot && b.verifs && b.verifs.dvf && b.verifs.dvf.methode !== 'parcelle').map((b) => b.id);
+    db.migrations.dvfParcelle = { le: nowISO(), biens: ids.length };
+    writeDb(db);
+    if (!ids.length) return;
+    ids.forEach((id) => { VERIF.seulDvf[id] = true; });
+    VERIF.file = VERIF.file.concat(ids.filter((id) => VERIF.file.indexOf(id) === -1));
+    VERIF.debut = nowISO(); VERIF.faits = 0; VERIF.erreurs = 0;
+    console.log('[dvf] contrôle à l’adresse exacte relancé pour ' + ids.length + ' bien(s)');
+    verifTraiter().catch(() => { VERIF.enCours = null; });
+  } catch (e) { console.error('[dvf] relance', e.message); }
+}, 15000);
 app.get('/api/biens/:id/verifs', requireAdmin, (req, res) => {
   const b = readDb().biens.find((x) => x.id === req.params.id);
   if (!b) return res.status(404).json({ error: 'Bien introuvable' });
