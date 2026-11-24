@@ -79,8 +79,9 @@
   // retombait sur le label par défaut "Brouillon" — trompeur pour un membre,
   // qui pouvait croire le bien non réel alors qu'il est bien validé.
   const STATUTS = {
-    brouillon: { label: 'Brouillon', cls: 'muted' },
-    mandat: { label: 'Mandat signé', cls: '' },
+    brouillon: { label: 'En préparation', cls: 'muted' },
+    a_valider: { label: 'En cours de validation', cls: 'warn' },
+    mandat: { label: 'En préparation', cls: 'muted' },
     'avant-premiere': { label: 'Avant-première', cls: '' },
     ouvert: { label: 'Ouvert aux visites', cls: 'open' },
     'sous-offre': { label: 'Sous offre', cls: 'offer' },
@@ -569,12 +570,12 @@
       '</div>';
     }
     if (membreValide()) {
-      const brouillon = !!(state.monBien && state.monBien.statut === 'brouillon');
+      const brouillon = !!(state.monBien && (state.monBien.statut === 'brouillon' || state.monBien.statut === 'mandat'));
       return '<div class="ed-panel" style="margin-bottom:22px;border:1px solid #e5c98a;background:#fbf6ea">' +
         '<div style="display:flex;gap:12px;align-items:flex-start">' +
           '<span style="font-size:22px">🔒</span>' +
           '<div style="flex:1;min-width:0">' +
-            '<div style="font-weight:600">' + (brouillon ? 'Votre bien est en brouillon, publiez-le.' : 'Votre bien est en cours de validation par l’agence.') + '</div>' +
+            '<div style="font-weight:600">' + (brouillon ? 'Votre fiche est en préparation : complétez-la puis demandez sa mise en ligne.' : 'Votre bien est en cours de validation par l’agence.') + '</div>' +
             '<p class="se-muted" style="margin:4px 0 0">' + (brouillon ? 'Ajoutez vos photos et informations, puis demandez sa mise en ligne.' : 'Dès qu’il sera validé, vous aurez accès au marché complet.') + '</p>' +
           '</div>' +
         '</div>' +
@@ -1626,8 +1627,10 @@
                 '<button class="se-btn block" type="button" data-act="visibilite" style="margin-top:10px">Demander l’ouverture des visites</button>'
               : demande
                 ? '<p class="se-hint" style="margin-top:10px">Demande de ' + libelleDemande + ' envoyée à votre agent, en attente de validation.</p>'
-                : b.statut === 'brouillon'
-                  ? '<p class="se-hint" style="margin-top:10px">Votre fiche est en brouillon : complétez-la puis publiez-la pour la rendre visible aux membres.</p>'
+                : (b.statut === 'brouillon' || b.statut === 'mandat')
+                  ? '<p class="se-hint" style="margin-top:10px">Votre fiche est en préparation : complétez-la puis demandez sa mise en ligne. Votre agent la vérifie avant qu’elle soit visible des membres.</p>'
+                : b.statut === 'a_valider'
+                  ? '<p class="se-hint" style="margin-top:10px">Votre agent vérifie votre fiche. Dès qu’il la valide, votre bien passe en avant-première, visible des membres.</p>'
                   : '<p class="se-hint" style="margin-top:10px">Le suivi de ce statut se fait désormais avec votre agent.</p>') +
           '</div>' +
           '<form class="ed-panel" data-form="mon-bien">' +

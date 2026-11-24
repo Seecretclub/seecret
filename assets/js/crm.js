@@ -91,15 +91,20 @@
   const TYPES = ['Appartement', 'Maison', 'Duplex', 'Loft', 'Hôtel particulier', 'Terrain'];
   const ATOUTS = ['Terrasse', 'Jardin', 'Vue', 'Parquet d’origine', 'Cheminée', 'Verrière', 'Ascenseur', 'Cave', 'Parking', 'Dernier étage', 'Calme', 'Lumineux'];
 
+  // Le parcours d'un bien, dans l'ordre (aligné sur l'onboarding vendeur).
   const ST_BIEN = {
-    brouillon: { label: 'Brouillon', cls: 'muted' },
-    mandat: { label: 'Mandat signé', cls: '' },
-    'avant-premiere': { label: 'Avant-première', cls: '' },
-    ouvert: { label: 'Ouvert aux visites', cls: 'open' },
-    'sous-offre': { label: 'Sous offre', cls: 'offer' },
-    'sous-compromis': { label: 'Sous compromis', cls: 'offer' },
-    vendu: { label: 'Vendu', cls: 'muted' }
+    brouillon: { label: 'En préparation', cls: 'muted', aide: 'Fiche en cours (vendeur ou agence) : pas visible des membres.' },
+    a_valider: { label: 'À valider', cls: 'warn', aide: 'Le vendeur a demandé la mise en ligne : vérifiez la fiche puis passez-la en Avant-première.' },
+    'avant-premiere': { label: 'Avant-première', cls: '', aide: 'Visible des membres, qui peuvent le suivre ; les visites ne sont pas encore ouvertes.' },
+    ouvert: { label: 'En vente', cls: 'open', aide: 'Visible des membres, visites ouvertes (mandat de recherche signé par l’acquéreur avant chaque visite).' },
+    'sous-offre': { label: 'Sous offre', cls: 'offer', aide: 'Une offre est acceptée ou en négociation.' },
+    'sous-compromis': { label: 'Sous compromis', cls: 'offer', aide: 'Compromis signé, en attente de l’acte.' },
+    vendu: { label: 'Vendu', cls: 'muted', aide: 'Vente conclue.' },
+    // Anciens statuts encore présents sur certains biens : affichés proprement.
+    mandat: { label: 'En préparation', cls: 'muted', ancien: true },
+    en_attente_offmarket: { label: 'Bloqué : annonce publique trouvée', cls: 'warn', ancien: true }
   };
+  const ST_BIEN_CHOIX = () => Object.keys(ST_BIEN).filter((k) => !ST_BIEN[k].ancien);
 
   const ST_CLIENT = {
     prospect: { label: 'Prospect', cls: 'warn' },
@@ -149,7 +154,7 @@
       { id: 'b2', adresse: 'Rue des Abbesses, Paris 18e', ref: 'SC-1043', titre: 'La maison au figuier', type: 'Maison', quartier: 'p18', surface: 96, pieces: 4, chambres: 2, sdb: 2, etage: 0, dpe: 'E', prix: 1270500, statut: 'avant-premiere', proprietaireId: null, photos: ['montmartre-1.jpg', 'montmartre-3.jpg'], description: 'Une verrière d’atelier qui prend la lumière du nord toute la journée, et un figuier dans la cour.', atouts: ['Jardin', 'Verrière', 'Calme'], mandat: { type: 'simple', fin: '2027-01-31' }, cree: '2026-10-06T10:00:00.000Z' },
       { id: 'b3', adresse: 'Rue de Verneuil, Paris 6e', ref: 'SC-1044', titre: 'Les deux derniers étages', type: 'Duplex', quartier: 'p6', surface: 128, pieces: 4, chambres: 3, sdb: 2, etage: 5, dpe: 'C', prix: 2604000, statut: 'ouvert', proprietaireId: 'c4', photos: ['saintgermain-1.jpg', 'saintgermain-3.jpg'], description: 'Deux niveaux qui se répondent, une terrasse plein sud, et l’adresse la plus sûre de la rive gauche.', atouts: ['Terrasse', 'Dernier étage', 'Lumineux'], mandat: { type: 'exclusif', fin: '2027-06-30' }, cree: '2026-09-18T10:00:00.000Z' },
       { id: 'b4', adresse: 'Avenue du Président Kennedy, Paris 16e', ref: 'SC-1045', titre: 'Six pièces face aux toits', type: 'Appartement', quartier: 'p16', surface: 185, pieces: 6, chambres: 4, sdb: 3, etage: 6, dpe: 'D', prix: 3412500, statut: 'avant-premiere', proprietaireId: null, photos: ['trocadero-1.jpg', 'home-5.jpg'], description: 'La rotonde du dernier étage, une vue que rien ne viendra fermer, et l’ascenseur d’époque.', atouts: ['Vue', 'Ascenseur', 'Dernier étage'], mandat: { type: 'simple', fin: '2027-04-30' }, cree: '2026-10-10T10:00:00.000Z' },
-      { id: 'b5', adresse: 'Rue des Archives, Paris 3e', ref: 'SC-1046', titre: 'L’atelier et sa verrière', type: 'Loft', quartier: 'p3', surface: 142, pieces: 3, chambres: 2, sdb: 2, etage: 4, dpe: 'C', prix: 1774500, statut: 'mandat', proprietaireId: 'c6', photos: ['marais-1.jpg', 'home-loft-bright.jpg'], description: 'Des moulures d’origine, le calme d’un dernier étage, et Paris qui se déplie par les fenêtres.', atouts: ['Verrière', 'Dernier étage', 'Calme'], mandat: { type: 'exclusif', fin: '2027-02-28' }, cree: '2026-10-12T10:00:00.000Z' },
+      { id: 'b5', adresse: 'Rue des Archives, Paris 3e', ref: 'SC-1046', titre: 'L’atelier et sa verrière', type: 'Loft', quartier: 'p3', surface: 142, pieces: 3, chambres: 2, sdb: 2, etage: 4, dpe: 'C', prix: 1774500, statut: 'brouillon', proprietaireId: 'c6', photos: ['marais-1.jpg', 'home-loft-bright.jpg'], description: 'Des moulures d’origine, le calme d’un dernier étage, et Paris qui se déplie par les fenêtres.', atouts: ['Verrière', 'Dernier étage', 'Calme'], mandat: { type: 'exclusif', fin: '2027-02-28' }, cree: '2026-10-12T10:00:00.000Z' },
       { id: 'b6', adresse: 'Rue de Grenelle, Paris 7e', ref: 'SC-1047', titre: 'Un rez-de-jardin rue de Grenelle', type: 'Appartement', quartier: 'p7', surface: 138, pieces: 5, chambres: 3, sdb: 2, etage: 0, dpe: 'D', prix: 2350000, statut: 'ouvert', proprietaireId: null, photos: ['home-jardin.jpg', 'home-1.jpg'], description: 'Un jardin de 90 m² à l’abri des regards, deux expositions, et le silence d’une cour pavée.', atouts: ['Jardin', 'Calme', 'Cheminée'], mandat: { type: 'simple', fin: '2027-05-31' }, cree: '2026-09-28T10:00:00.000Z' },
       { id: 'b7', adresse: 'Quai de Montebello, Paris 5e', ref: 'SC-1048', titre: 'Sous les toits de Notre-Dame', type: 'Appartement', quartier: 'p9', surface: 88, pieces: 3, chambres: 2, sdb: 1, etage: 5, dpe: 'E', prix: 1415000, statut: 'avant-premiere', proprietaireId: null, photos: ['home-5.jpg', 'home-3.jpg'], description: 'Une charpente apparente, une verrière plein ciel et le marché Saint-Georges à trois minutes.', atouts: ['Dernier étage', 'Lumineux'], mandat: { type: 'simple', fin: '2027-01-15' }, cree: '2026-10-14T10:00:00.000Z' },
       { id: 'b8', adresse: 'Boulogne-Billancourt', ref: 'SC-1049', titre: 'La maison des deux cèdres', type: 'Maison', quartier: 'boulogne', surface: 210, pieces: 7, chambres: 4, sdb: 3, etage: 2, dpe: 'C', prix: 2890000, statut: 'sous-offre', proprietaireId: null, photos: ['home-6.jpg', 'home-3.jpg'], description: 'Un jardin planté de deux cèdres centenaires, une véranda d’hiver et un garage double.', atouts: ['Jardin', 'Parking', 'Calme'], mandat: { type: 'exclusif', fin: '2027-07-31' }, cree: '2026-09-05T10:00:00.000Z' }
@@ -3984,7 +3989,7 @@
     if (b.surSeecret === false) return 'Option « Sur Seecret » désactivée : le bien reste dans le CRM uniquement.';
     const manque = [];
     if (b.validation !== 'valide') manque.push('valider le bien');
-    if (!(b.statut === 'avant-premiere' || b.statut === 'ouvert')) manque.push('le passer en Avant-première ou Ouvert aux visites (statut actuel : ' + ((ST_BIEN[b.statut] || {}).label || b.statut || '—') + ')');
+    if (!(b.statut === 'avant-premiere' || b.statut === 'ouvert')) manque.push('le passer en Avant-première ou En vente (statut actuel : ' + ((ST_BIEN[b.statut] || {}).label || b.statut || '—') + ')');
     return manque.length ? 'Option active, mais pas encore visible : il reste à ' + manque.join(' et à ') + '.' : '';
   }
   function carteBien(b) {
@@ -5251,7 +5256,7 @@
       (visible
         ? '<p class="se-hint" style="margin-top:10px;color:var(--color-ok)">Visible par les membres · <a href="#/biens-club">Voir dans Biens du club</a></p>'
         : '<p class="se-hint" style="margin-top:10px">' + esc(raisonHorsPlateforme(b)) + '</p>' +
-          (actif && b.validation !== 'valide' ? '<button class="se-btn soft sm" style="margin-top:8px" data-act="bien-valider" data-id="' + b.id + '">Valider ce bien</button>' : '')) +
+          (actif && !(b.statut === 'avant-premiere' || b.statut === 'ouvert') && ['brouillon', 'a_valider', 'mandat'].indexOf(b.statut) > -1 ? '<button class="se-btn soft sm" style="margin-top:8px" data-act="bien-valider" data-id="' + b.id + '">Valider et mettre en Avant-première</button>' : '')) +
     '</div>';
   }
   function photosCrm(b) {
@@ -6200,7 +6205,7 @@
   }
 
   function bienModal(b, proprietaireId) {
-    const v = b || { ref: 'SC-' + Math.floor(1000 + Math.random() * 8999), titre: '', adresse: '', type: 'Appartement', quartier: 'p11', surface: '', pieces: '', chambres: '', sdb: '', etage: '', dpe: 'D', prix: '', statut: 'mandat', proprio: proprietaireId || '', description: '', atouts: [], photos: [] };
+    const v = b || { ref: 'SC-' + Math.floor(1000 + Math.random() * 8999), titre: '', adresse: '', type: 'Appartement', quartier: 'p11', surface: '', pieces: '', chambres: '', sdb: '', etage: '', dpe: 'D', prix: '', statut: 'brouillon', proprio: proprietaireId || '', description: '', atouts: [], photos: [] };
     return '<h3>' + (b ? 'Modifier le bien' : 'Nouveau bien') + '</h3><p class="se-muted">Référence, mandat et photos. Le propriétaire (lead) est obligatoire — c’est lui qui porte le mandat.</p>' +
       '<form data-form="bien" data-id="' + (b ? b.id : '') + '"><div class="se-form-grid">' +
         (state.clients.length
@@ -6210,7 +6215,8 @@
         field('Adresse', 'adresse', v.adresse, { full: true, placeholder: '12 rue de la Verrerie, Paris 4e' }) +
         field('Type', 'type', v.type, { type: 'select', options: TYPES.map((t) => ({ value: t, label: t })) }) +
         field('Quartier', 'quartier', v.quartier, { type: 'select', options: QUARTIERS.map((q) => ({ value: q.id, label: q.label })) }) +
-        field('Statut', 'statut', v.statut, { type: 'select', options: Object.keys(ST_BIEN).map((k) => ({ value: k, label: ST_BIEN[k].label })) }) +
+        field('Statut', 'statut', v.statut === 'mandat' ? 'brouillon' : v.statut, { type: 'select', options: ST_BIEN_CHOIX().map((k, i) => ({ value: k, label: (i + 1) + '. ' + ST_BIEN[k].label })) }) +
+        '<div class="se-field full"><p class="se-hint" data-aide-statut style="margin:0">' + esc((ST_BIEN[v.statut === 'mandat' ? 'brouillon' : v.statut] || {}).aide || '') + ' Passer en Avant-première ou En vente valide le bien et le publie sur la plateforme.</p></div>' +
         '<div class="se-field" data-si-vendu' + (v.statut === 'vendu' ? '' : ' hidden') + '><label>Vendu par Seecret ?</label>' +
           '<select class="se-select" name="venduParAgence"><option value="">— Choisir —</option>' +
           '<option value="oui"' + (v.venduParAgence === true ? ' selected' : '') + '>Oui, vendu par l’agence</option>' +
@@ -6744,9 +6750,9 @@
         const r = await fetch('/api/biens/' + serverId + '/valider', { method: 'PATCH' });
         const res = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(res.error || 'Erreur');
-        if (b) b.validation = 'valide';
+        if (b) { b.validation = 'valide'; if (['brouillon', 'a_valider', 'mandat', ''].indexOf(b.statut || '') > -1) b.statut = 'avant-premiere'; if (b.surSeecret === undefined) b.surSeecret = true; }
         commit();
-        toast('Bien validé. Le marché est débloqué pour ce membre.', 'ok');
+        toast('Bien validé et mis en Avant-première : il est visible des membres.', 'ok');
         ouvrirNotifieModal(res.notif, 'Bien validé');
       } catch (e) { toast('Validation impossible : ' + (e.message || 'erreur'), 'warn'); }
     },
@@ -7634,7 +7640,7 @@
       // Bien du serveur : le statut se change dans le formulaire (enregistré
       // côté serveur), pas par un simple cycle local qui n'était pas sauvegardé.
       if (b.serverId) { modal = bienModal(b); render(); return; }
-      const order = ['brouillon', 'mandat', 'avant-premiere', 'ouvert', 'sous-offre', 'vendu'];
+      const order = ST_BIEN_CHOIX();
       b.statut = order[(order.indexOf(b.statut) + 1) % order.length];
       commit();
       toast('Statut : ' + ST_BIEN[b.statut].label);
@@ -7736,6 +7742,7 @@
       const lib = e.target.form.querySelector('[data-libelle-personne]'); if (lib) lib.textContent = soc ? 'La personne qui représente la société (c’est elle que vous contactez) :' : 'La personne :';
     }
     if (e.target.matches('form[data-form="bien"] [name="statut"]')) {
+      const aide = e.target.form.querySelector('[data-aide-statut]'); if (aide) aide.textContent = ((ST_BIEN[e.target.value] || {}).aide || '') + ' Passer en Avant-première ou En vente valide le bien et le publie sur la plateforme.';
       const bloc = e.target.form.querySelector('[data-si-vendu]');
       if (bloc) bloc.hidden = e.target.value !== 'vendu';
     }
@@ -7965,8 +7972,10 @@
           if (!r.ok) throw new Error(res.error || 'Erreur serveur');
           Object.assign(existing, obj);
           if (res.bien && Array.isArray(res.bien.historiquePrix)) existing.historiquePrix = res.bien.historiquePrix;
+          if (res.bien) { existing.validation = res.bien.validation || existing.validation; if (typeof res.bien.surSeecret === 'boolean') existing.surSeecret = res.bien.surSeecret; existing.statut = res.bien.statut || existing.statut; }
           modal = null; commit();
-          toast('Modifications enregistrées.', 'ok');
+          toast(res.notif ? 'Bien validé et publié : le vendeur est prévenu.' : 'Modifications enregistrées.', 'ok');
+          if (res.notif) ouvrirNotifieModal(res.notif, 'Bien en ligne');
         } catch (e) { toast('Erreur : ' + (e.message || 'serveur'), 'warn'); }
         return;
       }
