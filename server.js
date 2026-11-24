@@ -2012,6 +2012,8 @@ async function actualitesImmo() {
   return out.slice(0, 24);
 }
 async function appelGemini(texte, recherche) {
+  // Sans recherche Google : mêmes modèles de secours que la rédaction des fiches.
+  if (!recherche) return (await geminiGenerer({ contents: [{ role: 'user', parts: [{ text: texte }] }], generationConfig: { temperature: 0.6 } })).data;
   const resp = await fetch(GEMINI_API_BASE + '/v1beta/models/' + encodeURIComponent(GEMINI_MODEL) + ':generateContent', {
     method: 'POST', signal: AbortSignal.timeout(90000),
     headers: { 'x-goog-api-key': GEMINI_API_KEY, 'Content-Type': 'application/json' },
@@ -2244,17 +2246,61 @@ function photosPourIa(b) {
   });
   return parts;
 }
+// Modèles Gemini de secours : chaque modèle a son propre quota gratuit par
+// jour. Quand le modèle principal est saturé (429) ou surchargé (503), on
+// essaie les autres modèles « flash » disponibles sur la clé.
+let GEMINI_MODELES = null; let GEMINI_MODELES_LE = 0;
+async function geminiModeles() {
+  if (GEMINI_MODELES && Date.now() - GEMINI_MODELES_LE < 3600e3) return GEMINI_MODELES;
+  const liste = [GEMINI_MODEL];
+  try {
+    const r = await fetch(GEMINI_API_BASE + '/v1beta/models?pageSize=200', { headers: { 'x-goog-api-key': GEMINI_API_KEY }, signal: AbortSignal.timeout(10000) });
+    const d = await r.json().catch(() => ({}));
+    (d.models || []).filter((m) => (m.supportedGenerationMethods || []).indexOf('generateContent') > -1 && /flash/i.test(m.name) && !/image|tts|audio|live|thinking|exp/i.test(m.name))
+      .map((m) => String(m.name).replace(/^models\//, '')).sort((a, b) => b.localeCompare(a))
+      .forEach((n) => { if (liste.indexOf(n) === -1 && liste.length < 6) liste.push(n); });
+  } catch (e) { /* liste par défaut */ }
+  GEMINI_MODELES = liste; GEMINI_MODELES_LE = Date.now();
+  return liste;
+}
+async function geminiGenerer(corps) {
+  const modeles = await geminiModeles();
+  let derniere = null;
+  for (const m of modeles) {
+    const resp = await fetchAvecRetry(GEMINI_API_BASE + '/v1beta/models/' + encodeURIComponent(m) + ':generateContent', {
+      method: 'POST', headers: { 'x-goog-api-key': GEMINI_API_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify(corps)
+    }, 1).catch((e) => ({ ok: false, status: 0, json: async () => ({ error: { message: e.message } }) }));
+    const data = await resp.json().catch(() => ({}));
+    if (resp.ok) return { data: data, modele: m };
+    derniere = (data && data.error && data.error.message) || ('Gemini ' + resp.status);
+    if ([429, 503, 500, 404, 0].indexOf(resp.status) === -1) break; // erreur de requête : inutile d'essayer ailleurs
+  }
+  throw Object.assign(new Error(derniere || 'Gemini indisponible'), { code: 'API_ERROR' });
+}
+// Dernier recours, sans IA : un premier jet construit à partir des données du
+// bien, à retoucher par l'agent (jamais publié sans relecture).
+function editorialSansIa(b) {
+  const q = labelQuartier(b.quartier) || b.ville || 'Paris';
+  const type = String(b.type || 'appartement').toLowerCase();
+  const titre = (b.surface ? (b.pieces ? b.pieces + ' pièces' : 'Un ' + type) + ', ' + b.surface + ' m²' : 'Un ' + type) + ' · ' + q;
+  const p1 = ['Un ' + type + (b.surface ? ' de ' + b.surface + ' m²' : '') + (function () { const e = parseInt(b.etage, 10); return e === 0 ? ' en rez-de-chaussée' : e > 0 ? ' au ' + e + (e === 1 ? 'er' : 'e') + ' étage' : ''; })() + (b.ascenseur ? ' avec ascenseur' : '') + '.',
+    b.pieces ? 'Il se compose de ' + b.pieces + ' pièces' + (b.chambres ? ', dont ' + b.chambres + ' chambre' + (b.chambres > 1 ? 's' : '') : '') + (b.sdb ? ' et ' + b.sdb + ' salle' + (b.sdb > 1 ? 's' : '') + ' d’eau' : '') + '.' : '',
+    b.exterieur && b.exterieur !== 'Aucun' ? 'À l’extérieur : ' + String(b.exterieur).toLowerCase() + (b.surfaceExterieur ? ' de ' + b.surfaceExterieur + ' m²' : '') + '.' : ''].filter(Boolean).join(' ');
+  const p2 = [(b.atouts || []).length ? 'Ses atouts : ' + b.atouts.join(', ').toLowerCase() + '.' : '', b.description ? String(b.description).trim() : ''].filter(Boolean).join(' ');
+  const p3 = b.coupDeCoeur ? 'Ses propriétaires l’aiment pour ' + String(b.coupDeCoeur).trim().replace(/\.$/, '') + '.' : '';
+  return { titre: titre.slice(0, 90), texte: [p1, p2, p3].filter(Boolean).join('\n\n'), photos: 0, sansIa: true };
+}
 async function genererEditorial(b) {
-  if (!GEMINI_API_KEY) throw Object.assign(new Error('La rédaction par Célia nécessite la clé Gemini (GEMINI_API_KEY).'), { code: 'NO_KEY' });
+  if (!GEMINI_API_KEY) return editorialSansIa(b);
   const photos = photosPourIa(b);
   const parts = [{ text: 'Données du bien :\n' + donneesEditorial(b) + (photos.length ? '\n\nPhotos du bien ci-jointes : appuie-toi sur ce que tu vois (lumière, matières, style), sans inventer.' : '') }].concat(photos);
-  const resp = await fetchAvecRetry(GEMINI_API_BASE + '/v1beta/models/' + encodeURIComponent(GEMINI_MODEL) + ':generateContent', {
-    method: 'POST',
-    headers: { 'x-goog-api-key': GEMINI_API_KEY, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ system_instruction: { parts: [{ text: EDITORIAL_CONSIGNE }] }, contents: [{ role: 'user', parts: parts }], generationConfig: { responseMimeType: 'application/json', temperature: 0.8 } })
-  }, 2);
-  const data = await resp.json().catch(() => ({}));
-  if (!resp.ok) throw Object.assign(new Error((data && data.error && data.error.message) || ('Gemini ' + resp.status)), { code: 'API_ERROR' });
+  let data;
+  try {
+    data = (await geminiGenerer({ system_instruction: { parts: [{ text: EDITORIAL_CONSIGNE }] }, contents: [{ role: 'user', parts: parts }], generationConfig: { responseMimeType: 'application/json', temperature: 0.8 } })).data;
+  } catch (e) {
+    console.warn('[célia] rédaction IA impossible, premier jet sans IA :', e.message);
+    return Object.assign(editorialSansIa(b), { raison: e.message });
+  }
   const brut = (((data.candidates || [])[0] || {}).content || {}).parts || [];
   const texte = brut.map((x) => x.text || '').join('').trim().replace(/^```(?:json)?\s*|\s*```$/g, '');
   let out = null;
@@ -2272,7 +2318,7 @@ app.post('/api/biens/:id/editorial/generer', requireAdmin, async (req, res) => {
     const b2 = db2.biens.find((x) => x.id === b.id);
     b2.editorial = Object.assign({}, b2.editorial || {}, { brouillonTitre: g.titre, brouillonTexte: g.texte, genereLe: nowISO() });
     writeDb(db2);
-    res.json({ ok: true, titre: g.titre, texte: g.texte, photosAnalysees: g.photos });
+    res.json({ ok: true, titre: g.titre, texte: g.texte, photosAnalysees: g.photos, sansIa: !!g.sansIa });
   } catch (e) {
     res.status(e.code === 'NO_KEY' ? 503 : 502).json({ error: e.message || 'Rédaction impossible.' });
   }
