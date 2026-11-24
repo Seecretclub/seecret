@@ -2810,6 +2810,7 @@ app.patch('/api/leads/:id', requireAdmin, (req, res) => {
     lead.agentId = body.agentId ? String(body.agentId) : null;
   }
   ['prenom', 'nom', 'email', 'tel', 'ville', 'typeBien', 'source', 'notes', 'financement', 'natureLead', 'civilite', 'adresse', 'raisonSociale', 'siren', 'representant'].forEach((k) => { if (typeof body[k] === 'string') lead[k] = body[k]; });
+  if (['personne', 'sci', 'societe'].indexOf(lead.natureLead) === -1) lead.natureLead = 'personne';
   // (siren inclus ci-dessus : utile pour un lead société retrouvé ensuite dans les registres publics)
   ['budgetMin', 'budgetMax', 'piecesMin', 'surfaceMin', 'surfaceMax', 'apport'].forEach((k) => { if (body[k] !== undefined) lead[k] = Math.max(0, Number(body[k]) || 0); });
   if (Array.isArray(body.quartiers)) lead.quartiers = body.quartiers.map(String);
@@ -6122,8 +6123,8 @@ app.post('/api/radar/fiche/:id/prospect', requireAdmin, (req, res) => {
   const lead = {
     id: uid('l'), prenom: p.statut === 'identifie' ? (d.prenom || '') : '', nom: p.statut === 'identifie' ? (d.nom ? d.nom : p.nom) : 'Propriétaire ' + ou,
     email: ((c.emails || [])[0] || '').toLowerCase(), tel: (c.telephones || [])[0] || '', ville: 'Paris', adresse: p.societe ? p.societe.siege || '' : '', adresseBien: ou,
-    projet: 'vendeur', role: 'membre', type: p.statut === 'identifie' ? (p.estSci ? 'sci' : 'societe') : 'personne', natureLead: p.statut === 'identifie' ? 'societe' : 'personne',
-    raisonSociale: p.statut === 'identifie' ? p.nom : '', representant: d.nom ? (d.prenom + ' ' + d.nom) : '', siren: p.siren || '', dirigeants: p.dirigeants || [],
+    projet: 'vendeur', role: 'membre', type: p.statut === 'identifie' ? (p.estSci ? 'sci' : 'societe') : 'personne', natureLead: p.statut === 'identifie' ? (p.estSci ? 'sci' : 'societe') : 'personne',
+    raisonSociale: p.statut === 'identifie' ? p.nom : '', representant: d.nom ? (d.qualite || 'Gérant') : '', siren: p.siren || '', dirigeants: p.dirigeants || [],
     source: 'Radar', statut: 'prospect', pipeline: 'a_contacter', bienAVendre: true, typeBien: f.type, surfaceMin: f.surface || 0, quartiers: [f.quartier], dpe: f.dpe || '',
     notes: 'Repéré par le Radar : DPE ' + (f.dpe || '?') + ' du ' + String(f.dpeDate || '').split('-').reverse().join('/') + ', ' + f.type.toLowerCase() + ' de ' + f.surface + ' m² — ' + ou + '.' + ((c.linkedin || [])[0] ? '\nLinkedIn : ' + c.linkedin[0].url : ''),
     tags: ['Radar', 'Futur vendeur'], radarFicheId: f.id, budgetMin: 0, budgetMax: 0, creePar: req.lead.id, agentId: estAgentSimple(roleOf(req.lead)) ? req.lead.id : null, cree: nowISO()
