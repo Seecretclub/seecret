@@ -2420,6 +2420,8 @@ app.post('/api/messages/:leadId', requireAdmin, (req, res) => {
   const db = readDb();
   const lead = db.leads.find((l) => l.id === req.params.leadId);
   if (!lead || !conversationVisible(req, db, lead.id)) return res.status(404).json({ error: 'Membre introuvable.' });
+  // Un message n'arrive que dans l'espace membre (membre accepté) ou par email.
+  if (lead.statut !== 'accepte' && !String(lead.email || '').trim()) return res.status(409).json({ error: 'Ce contact n’a ni email ni espace membre : le message ne lui arriverait pas. Ajoutez son email, ou appelez-le.', code: 'SANS_CONTACT' });
   db.messages = Array.isArray(db.messages) ? db.messages : [];
   const m = { id: uid('msg'), leadId: lead.id, de: 'agent', auteur: nomComplet(req.lead) || DEFAULT_AGENT_NOM, texte: texte, at: nowISO(), luMembre: false, luAgence: true };
   db.messages.push(m);

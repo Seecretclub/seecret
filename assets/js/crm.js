@@ -5078,8 +5078,17 @@
                   '</div>').join('')
                 : '<p class="se-muted" style="margin:8px 0 0">Aucun document reçu pour l’instant.</p>') +
             '</div></div>' : '') +
-          '<div class="se-card"><h3>Message</h3><button class="se-btn ghost block" style="margin-top:10px" data-act="message-ouvrir" data-id="' + c.id + '">Ouvrir la conversation</button>' +
-          '<a class="se-btn soft block" style="margin-top:8px" href="tel:' + esc(c.tel) + '">Appeler ' + esc(c.tel) + '</a></div>' +
+          (function () {
+            const k = canauxContact(c);
+            const via = k.membre && k.email ? 'Reçu dans son espace membre et par email.' : k.membre ? 'Reçu dans son espace membre.' : 'Envoyé par email (' + esc(c.email) + ') : il n’a pas encore d’espace membre.';
+            return '<div class="se-card"><h3>Contacter</h3>' +
+              (k.message ? '<button class="se-btn ghost block" style="margin-top:10px" data-act="message-ouvrir" data-id="' + c.id + '">Écrire un message</button><p class="se-hint" style="margin:6px 0 0">' + via + '</p>' : '') +
+              (k.tel ? '<a class="se-btn soft block" style="margin-top:8px" href="tel:' + esc(c.tel) + '">Appeler ' + esc(c.tel) + '</a>' +
+                '<a class="se-btn ghost block" style="margin-top:8px" href="sms:' + esc(c.tel) + '">Envoyer un SMS</a>' : '') +
+              (!k.message && !k.tel ? blocSansContact(c) : '') +
+              (!k.message && k.tel ? '<p class="se-hint" style="margin:8px 0 0">Pas d’email ni d’espace membre : pas de message possible depuis le CRM, seulement l’appel ou le SMS.</p>' : '') +
+            '</div>';
+          })() +
         '</div>' +
       '</div>';
   }
@@ -5507,6 +5516,19 @@
   // ---- Messagerie membre ↔ agence (vraie, côté serveur) ----
   // Le paramètre de route est un id client du CRM (srv-…) ou directement
   // l'identifiant du membre côté serveur.
+  // Comment joindre ce contact ? Un message part dans l'espace membre (s'il est
+  // membre accepté) et par email (s'il en a un). Sinon : téléphone, ou rien.
+  function canauxContact(c) {
+    const membre = !!c && (c.serveurStatut === 'accepte' || c.statut === 'actif');
+    const email = !!(c && String(c.email || '').trim());
+    const tel = !!(c && String(c.tel || '').trim());
+    return { membre: membre, email: email, tel: tel, message: membre || email };
+  }
+  function blocSansContact(c) {
+    return '<div class="se-notice" style="margin-top:10px"><strong>Aucun moyen de le joindre pour l’instant.</strong> Ce contact n’a ni email, ni téléphone, ni espace membre : un message ne lui arriverait pas. ' +
+      'Ajoutez son email ou son téléphone' + (c && c.adresseBien ? ', ou écrivez-lui par courrier au ' + esc(c.adresseBien) : '') + '.' +
+      (c ? '<div style="margin-top:10px"><button class="se-btn sm" data-act="client-editer" data-id="' + esc(c.id) + '">Ajouter un email ou un téléphone</button></div>' : '') + '</div>';
+  }
   function leadDuFil(param) {
     const c = client(param);
     return (c && c.serverId) || String(param || '').replace(/^srv-/, '');
@@ -5549,10 +5571,15 @@
       '<div class="se-card" style="max-width:760px">' +
         '<div class="se-chat" data-fil-messages style="max-height:min(60vh,560px);overflow-y:auto">' +
           (fil ? (fil.length ? fil.map((m) => '<div class="se-bubble ' + (m.de === 'agent' ? 'me' : 'agent') + '">' + esc(m.texte).replace(/\n/g, '<br>') + '<time>' + (m.de === 'agent' && m.auteur ? esc(m.auteur) + ' · ' : '') + dCourt(m.at) + ' ' + tFR(m.at) + '</time></div>').join('')
-            : '<p class="se-muted">Aucun message. Écrivez le premier : le membre le recevra par email et dans son espace.</p>')
+            : '<p class="se-muted">Aucun message pour l’instant.</p>')
             : '<p class="se-muted">Chargement…</p>') +
         '</div>' +
-        '<form class="se-composer" data-form="msg" data-lead="' + esc(leadId) + '"><input class="se-input" name="texte" placeholder="Répondre au membre…" autocomplete="off" maxlength="2000"/><button class="se-btn" type="submit">Envoyer</button></form>' +
+        (function () {
+          const k = c ? canauxContact(c) : { message: true, membre: true, email: !!(conv && conv.email) };
+          if (!k.message) return blocSansContact(c) + (k.tel ? '<p class="se-hint" style="margin-top:8px">Il a un téléphone : <a href="tel:' + esc(c.tel) + '">appeler ' + esc(c.tel) + '</a> ou <a href="sms:' + esc(c.tel) + '">envoyer un SMS</a>.</p>' : '');
+          const via = k.membre && k.email ? 'Reçu dans son espace membre et par email.' : k.membre ? 'Reçu dans son espace membre.' : 'Envoyé par email : pas encore d’espace membre.';
+          return '<form class="se-composer" data-form="msg" data-lead="' + esc(leadId) + '"><input class="se-input" name="texte" placeholder="Écrire à ' + esc(nom || 'ce contact') + '…" autocomplete="off" maxlength="2000"/><button class="se-btn" type="submit">Envoyer</button></form><p class="se-hint" style="margin:6px 0 0">' + via + '</p>';
+        })() +
       '</div>';
   }
 
@@ -7987,7 +8014,7 @@
         champ.value = '';
         render();
         const n = document.querySelector('.se-composer [name="texte"]'); if (n) { n.value = ''; n.focus(); }
-        toast('Message envoyé. Le membre est prévenu par email.', 'ok');
+        { const cc = (state.clients || []).find((x) => x.serverId === leadId); const k = cc ? canauxContact(cc) : { membre: true, email: true }; toast(k.membre && k.email ? 'Message envoyé : dans son espace membre et par email.' : k.membre ? 'Message envoyé dans son espace membre.' : 'Message envoyé par email.', 'ok'); }
       } catch (err) { toast(err.message || 'Envoi impossible', 'warn'); bouton.disabled = false; }
       return;
     }
