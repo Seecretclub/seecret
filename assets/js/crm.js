@@ -4812,11 +4812,14 @@
     try {
       const r = await fetch('/api/radar/fiche/' + encodeURIComponent(id) + (enrichir ? '?enrichir=1' : ''), { credentials: 'same-origin' });
       const d = await r.json(); if (!r.ok) throw new Error(d.error || 'erreur');
-      d.enrichi = !!enrichir || !!d.fiche.enrichiLe;
+      d.enrichi = !d.enCours && (!!enrichir || !!d.fiche.enrichiLe);
       radar.fiches[id] = d;
     } catch (e) { if (!radar.fiches[id] || !radar.fiches[id].fiche) radar.fiches[id] = { erreur: e.message }; }
     render();
-    if (!enrichir && radar.fiches[id] && radar.fiches[id].fiche && !radar.fiches[id].fiche.enrichiLe) chargerFicheRadar(id, true);
+    const F = radar.fiches[id];
+    if (!enrichir && F && F.fiche && (!F.fiche.enrichiLe || !F.fiche.enrichiComplet)) chargerFicheRadar(id, true);
+    // Recherche encore en cours côté serveur : on revient chercher le résultat.
+    else if (F && F.enCours && location.hash.indexOf(encodeURIComponent(id)) > -1) setTimeout(() => chargerFicheRadar(id, true), 4000);
   }
   function rdLettre(F) {
     const x = F.fiche; const p = x.proprietaire || {}; const d = p.dirigeant; const ag = F.agent || {};
@@ -4839,7 +4842,7 @@
     if (F.erreur) return head('Radar', 'Fiche', '', retour) + '<div class="se-card"><p class="se-hint">' + esc(F.erreur) + '</p></div>';
     const x = F.fiche; const p = x.proprietaire || {}; const ch = x.chances || { signaux: [] };
     const st = x.statut || 'a_revoir';
-    const enCours = !F.enrichi ? '<div class="se-note" style="margin-bottom:14px">Recherche des informations en cours (gérant, annonces légales, ventes, contacts)… jusqu’à 25 secondes.</div>' : '';
+    const enCours = !F.enrichi ? '<div class="se-note" style="margin-bottom:14px">Recherche en cours : gérant, LinkedIn, téléphone et email, annonces légales, ventes… La fiche se complète toute seule (jusqu’à une minute la première fois).</div>' : '';
     const bouton = (v, t) => '<button class="se-btn ' + (st === v ? '' : 'ghost ') + 'sm" data-act="radar-statut" data-id="' + esc(x.id) + '" data-statut="' + v + '">' + t + '</button>';
     const actions = retour + (x.leadId ? '<a class="se-btn sm" href="#/client/srv-' + esc(x.leadId) + '">Voir dans mes prospects</a>' : '<button class="se-btn sm" data-act="radar-prospect" data-id="' + esc(x.id) + '">+ Ajouter aux prospects</button>');
     const kv = (k, v) => v ? '<div><span>' + k + '</span><b>' + v + '</b></div>' : '';
@@ -4867,7 +4870,7 @@
         (!(c.telephones || []).length && !(c.emails || []).length ? '<p class="se-hint">' + (F.enrichi ? (c.linkedin ? 'Pas de téléphone ni d’email publiés par la société : passez par LinkedIn ou le courrier.' : 'Téléphones, emails et LinkedIn trouvés automatiquement avec la clé Exa (voir « Comment ça marche ? »).') : '') + '</p>' : '') +
         (c.sourcePro ? '<p class="se-hint">Coordonnées du gérant trouvées via ' + esc(c.sourcePro) + '.</p>' : '') +
         (F.enrichi && !F.fournisseursPro ? '<p class="se-hint">Annuaires pro (Dropcontact, Société Info, Datagma, FullEnrich) : aucune clé configurée, ils ne sont pas interrogés.</p>' : '') +
-        (p.coordPro && !p.coordPro.trouve && p.coordPro.tousEpuises ? '<p class="se-hint">Annuaires pro : quotas gratuits épuisés ce mois-ci.</p>' : '') +
+        (p.coordPro && !p.coordPro.trouve && (p.coordPro.etapes || []).length ? '<p class="se-hint">Annuaires pro interrogés pour le gérant : ' + p.coordPro.etapes.map((e) => esc(e.fournisseur || e.source || '') + ' (' + ({ vide: 'rien trouvé', epuise: 'crédits épuisés', erreur: 'erreur, vérifiez la clé', non_configure: 'pas de clé', trouve: 'trouvé' }[e.statut] || esc(e.statut)) + ')').join(', ') + '.</p>' : '') +
         (F.kaspr && (c.linkedin || [])[0] ? '<button class="se-btn ghost sm" data-act="radar-kaspr" data-id="' + esc(x.id) + '" data-url="' + esc(c.linkedin[0].url) + '">Téléphone et email du gérant via Kaspr (profil LinkedIn ci-dessus)</button>' : '') +
         ((p.autresMandats || []).length ? '<div style="margin-top:12px"><span class="se-kicker">AUTRES SOCIÉTÉS DU GÉRANT · ' + p.autresMandats.length + '</span><ul class="rd-ul">' + p.autresMandats.slice(0, 10).map((m) => '<li><a href="https://annuaire-entreprises.data.gouv.fr/entreprise/' + esc(m.siren) + '" target="_blank" rel="noopener">' + esc(m.entreprise) + '</a> <span class="se-hint">' + esc([m.role, m.ville].filter(Boolean).join(' · ')) + '</span></li>').join('') + '</ul></div>' : (F.enrichi && p.dirigeant ? '<p class="se-hint">Aucun autre mandat trouvé pour ce gérant.</p>' : ''));
     } else {

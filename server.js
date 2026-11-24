@@ -5573,6 +5573,7 @@ function radarPlafonner() {
 // Une fois : oublier les sociétés enregistrées « introuvables » pendant que
 // l'annuaire nous limitait (elles seront redemandées).
 if (RS) { try { if (!RS.cacheGet.get('meta', 'soc-purge-1')) { const n = RadarSQL.prepare("DELETE FROM cache WHERE type = 'soc' AND data LIKE '%\"trouve\":false%'").run().changes; RadarSQL.prepare("DELETE FROM cache WHERE type = 'soc' AND data LIKE '%\"dirigeants\":[]%'").run(); RS.cacheSet.run('meta', 'soc-purge-1', new Date().toISOString(), '1'); console.log('[radar] ' + n + ' société(s) « introuvable(s) » à redemander à l\'annuaire'); } } catch (e) { console.error('[radar] purge sociétés :', e.message); } }
+if (RS) { try { if (!RS.cacheGet.get('meta', 'contacts-purge-1')) { RadarSQL.prepare("DELETE FROM cache WHERE type = 'contacts' AND data LIKE '%\"linkedin\":[]%' AND data NOT LIKE '%\"site\":{%'").run(); RadarSQL.prepare("DELETE FROM cache WHERE type = 'coordpro' AND data NOT LIKE '%\"trouve\":true%'").run(); RS.cacheSet.run('meta', 'contacts-purge-1', new Date().toISOString(), '1'); } } catch (e) { /* rien */ } }
 // Une fois : reconnaître de nouveau après la correction du format 2026.
 setTimeout(() => {
   try {
@@ -5656,9 +5657,9 @@ async function radarEnrichirFondInterne(arrs, per) {
   RADAR_FOND = true;
   try {
     const rows = [];
-    arrs.forEach((a) => RS.liste.all({ de: per.de, a: per.a + 'z', q: a.quartier, t: '', smin: 0 }).forEach((r) => { const f = rsLire(r); if (f && !f.enrichiLe && f.proprietaire && f.proprietaire.statut === 'identifie' && !f.proprietaire.institutionnel) rows.push(f); }));
+    arrs.forEach((a) => RS.liste.all({ de: per.de, a: per.a + 'z', q: a.quartier, t: '', smin: 0 }).forEach((r) => { const f = rsLire(r); if (f && radarAEnrichir(f) && f.proprietaire && f.proprietaire.statut === 'identifie' && !f.proprietaire.institutionnel) rows.push(f); }));
     rows.sort((a, b) => radarAnnee(b.dpeDate) - radarAnnee(a.dpeDate));
-    await enParallele(rows.slice(0, 80), 2, async (f) => { try { await radarEnrichirFiche(f); } catch (e) { /* suivante */ } });
+    await enParallele(rows.slice(0, 80), 2, async (f) => { try { await radarEnrichirUneFois(f); } catch (e) { /* suivante */ } });
     // DPE dont l'adresse n'est pas reconnue : parcelle cadastrale (IGN), puis fichier DGFiP.
     if (pmMeta()) {
       const sans = [];
@@ -5900,13 +5901,36 @@ async function radarDomiciliees(f) {
 }
 
 // Fiche complète. ?enrichir=1 : lance (et attend, 25 s max) toutes les recherches.
+// Enrichissements en cours (une seule fois par fiche, même si on la rouvre).
+const RADAR_ENRICH = new Map();
+function radarEnrichirUneFois(f) {
+  if (RADAR_ENRICH.has(f.id)) return RADAR_ENRICH.get(f.id);
+  const pr = radarEnrichirFiche(f).finally(() => RADAR_ENRICH.delete(f.id));
+  RADAR_ENRICH.set(f.id, pr);
+  return pr;
+}
+// Fiche à (re)compléter : jamais enrichie, trop ancienne, ou société sans gérant /
+// sans recherche de coordonnées (ex. annuaire indisponible lors du premier passage).
+function radarAEnrichir(f) {
+  if (!f.enrichiLe) return true;
+  const age = Date.now() - radarAnnee(f.enrichiLe);
+  if (age > 7 * 864e5) return true;
+  const p = f.proprietaire || {};
+  if (p.statut === 'identifie' && /^\d{9}$/.test(p.siren || '') && !f.enrichiComplet) return age > 10 * 60e3;
+  return false;
+}
 async function radarEnrichirFiche(f) {
   const p = f.proprietaire || {};
-  const fin = Date.now() + 25000;
+  const fin = Date.now() + 60000;
   const avant = (pr) => Promise.race([pr, new Promise((r) => setTimeout(r, Math.max(1000, fin - Date.now())))]);
   const t = [];
   if (p.statut === 'identifie' && /^\d{9}$/.test(p.siren || '')) {
-    t.push(avant(avecCache('soc', 'radarSocietes', p.siren, 30, (tmp) => radarDirigeants(tmp, p.siren)).catch(() => null)).then(() => avant(process.env.EXA_API_KEY ? avecCache('contacts', 'radarContacts', p.siren, 60, (tmp) => { tmp.radarSocietes = {}; tmp.radarSocietes[p.siren] = cacheLu('soc', p.siren) || {}; return radarContactsSociete(tmp, p.siren); }).catch(() => null) : Promise.resolve(null))));
+    t.push(avant(avecCache('soc', 'radarSocietes', p.siren, 30, (tmp) => radarDirigeants(tmp, p.siren)).catch(() => null)).then(() => {
+      const soc = cacheLu('soc', p.siren) || {};
+      // LinkedIn des gérants : seulement quand on connaît leurs noms (sinon rien à chercher, et rien à mémoriser).
+      if (!process.env.EXA_API_KEY || !(soc.dirigeants || []).some((x) => x.nom)) return null;
+      return avant(avecCache('contacts', 'radarContacts', p.siren, 60, (tmp) => { tmp.radarSocietes = {}; tmp.radarSocietes[p.siren] = soc; return radarContactsSociete(tmp, p.siren); }).catch(() => null));
+    }));
     t.push(avant(avecCache('bodacc', 'radarBodacc', p.siren, 30, (tmp) => radarBodacc(tmp, p.siren)).catch(() => null)));
   }
   if (!f.ventes && f.lat) t.push(avant(radarVentesAdresse(f).then((v) => { if (v) f.ventes = v; }).catch(() => null)));
@@ -5930,14 +5954,25 @@ async function radarEnrichirFiche(f) {
   radarAppliquerCache(f);
   const p2 = f.proprietaire || {};
   const dg = p2.dirigeant;
-  if (p2.statut === 'identifie' && dg && dg.nom && Date.now() < fin) {
+  let coordTente = false;
+  if (p2.statut === 'identifie' && dg && dg.nom) {
     const nomD = ((dg.prenoms || dg.prenom || '') + ' ' + dg.nom).trim();
+    const cleCoord = p2.siren + '|' + nomD;
     await Promise.all([
       avant(avecCache('mandats', 'x', nomD, 30, () => autresMandats(nomD, p2.siren).then((m) => ({ mandats: m }))).then((v) => { if (v) p2.autresMandats = v.mandats; }).catch(() => null)),
-      avant(avecCache('coordpro', 'x', p2.siren + '|' + nomD, 60, () => coordonneesPro(nomD, p2.nom, p2.siren).then((v) => (v && v.aucunConfigure ? null : v))).then((v) => { if (v) p2.coordPro = v; }).catch(() => null))
+      // Coordonnées pro : on ne mémorise que ce qui a été trouvé (crédits épuisés ou
+      // annuaire en panne aujourd'hui ≠ rien à trouver demain).
+      avant((async () => {
+        const deja = cacheLu('coordpro', cleCoord);
+        const v = deja && deja.trouve ? deja : await coordonneesPro(nomD, p2.nom, p2.siren);
+        if (v && !v.aucunConfigure) { p2.coordPro = v; coordTente = true; if (v.trouve && !deja) RS.cacheSet.run('coordpro', cleCoord, nowISO(), JSON.stringify(v)); }
+        if (v && v.aucunConfigure) coordTente = true;
+      })().catch(() => null))
     ]);
+    radarAppliquerCache(f);
   }
   f.enrichiLe = nowISO();
+  f.enrichiComplet = p2.statut !== 'identifie' || !/^\d{9}$/.test(p2.siren || '') || (!!p2.dirigeant && coordTente) || (!!cacheLu('soc', p2.siren) && !(cacheLu('soc', p2.siren).dirigeants || []).some((x) => x.nom));
   rsEcrire(f);
   return f;
 }
@@ -5963,15 +5998,20 @@ app.get('/api/radar/fiche/:id', requireAdmin, async (req, res) => {
   if (!RS) return res.status(503).json({ error: 'Base du Radar indisponible.' });
   let f = rsFiche(req.params.id);
   if (!f) return res.status(404).json({ error: 'Fiche introuvable.' });
-  if (req.query.enrichir === '1' && (!f.enrichiLe || Date.now() - radarAnnee(f.enrichiLe) > 7 * 864e5)) f = await radarEnrichirFiche(f);
-  else radarAppliquerCache(f);
+  let enCours = false;
+  if (req.query.enrichir === '1' && (RADAR_ENRICH.has(f.id) || radarAEnrichir(f))) {
+    const pr = radarEnrichirUneFois(f);
+    const r = await Promise.race([pr.then((x) => ({ x })), new Promise((ok) => setTimeout(() => ok(null), 20000))]);
+    if (r && r.x) f = r.x; else { enCours = true; radarAppliquerCache(f); }
+  } else radarAppliquerCache(f);
+  enCours = enCours || RADAR_ENRICH.has(f.id);
   const db = readDb();
   const memes = RS.parBan.all(f.identifiantBan || '-').map(rsLire).filter((x) => x && x.id !== f.id);
   const nbBan = 1 + memes.filter((x) => Date.now() - radarAnnee(x.dpeDate) < 365 * 864e5).length;
   const g = radarCalcul(radarContexte(db), f, nbBan);
   const p = g.proprietaire || {};
   const agent = [req.lead.prenom, req.lead.nom].filter(Boolean).join(' ');
-  res.json({ ok: true, fiche: Object.assign({}, g, { _acq: undefined }), acquereurs: g._acq,
+  res.json({ ok: true, enCours: enCours, fiche: Object.assign({}, g, { _acq: undefined }), acquereurs: g._acq,
     biensSociete: p.statut === 'identifie' ? radarBiensSociete(p.siren).slice(0, 30) : [],
     memeImmeuble: memes.slice(0, 12).map((x) => ({ id: x.id, etage: x.etage, surface: x.surface, dpeDate: x.dpeDate, dpe: x.dpe })),
     lotsImmeuble: pmMeta() ? (() => { const q = pmParserAdresse(f.adresse + ' ' + f.cp); return q.insee && q.numero ? pmLotsImmeuble(q).sort(pmTriNiveau).slice(0, 120).map((l) => ({ niveau: l.niveauLibelle, porte: l.porte, batiment: l.batiment, nom: l.nom, siren: l.siren, type: l.type, droit: l.droitLibelle })) : []; })() : [],
