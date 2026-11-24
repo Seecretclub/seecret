@@ -4678,7 +4678,7 @@ function pmBase() {
     const Database = require('better-sqlite3');
     const b = new Database(f, { readonly: true, fileMustExist: true });
     const sel = 'SELECT s.siren, s.nom, s.forme, l.droit, l.bat, l.entree, l.niveau, l.porte, l.num, l.ind, v.nature, v.nom AS voie, l.section, l.plan, s.groupe, l.insee, s.formeCode FROM lot l JOIN soc s ON s.id = l.soc JOIN voie v ON v.id = l.voie';
-    PM_BASE = { b, adr: b.prepare(sel + ' WHERE l.insee = ? AND l.num = ?').raw(true), siren: b.prepare(sel + ' WHERE l.soc IN (SELECT id FROM soc WHERE siren = ?)').raw(true) };
+    PM_BASE = { b, adr: b.prepare(sel + ' WHERE l.insee = ? AND l.num = ?').raw(true), siren: b.prepare(sel + ' WHERE l.soc IN (SELECT id FROM soc WHERE siren = ?)').raw(true), parc: b.prepare(sel + ' WHERE l.insee = ? AND l.plan IN (?, ?, ?)').raw(true) };
     return PM_BASE;
   } catch (e) { console.error('[pm-locaux] base illisible :', e.message); return null; }
 }
@@ -4688,6 +4688,37 @@ function pmLignesAdresse(insee, numero) {
   if (b) return b.adr.all(insee, String(parseInt(numero, 10) || numero)).map(pmLigneReparee);
   return pmLireBucket('insee', insee).filter((r) => String(parseInt(r[PMC.num], 10)) === numero);
 }
+// Lots d'une parcelle cadastrale (section + numéro de plan), quand l'adresse
+// du DPE ne correspond pas à celle du fichier (« 6-10 rue… », sans numéro…).
+const pmSection = (v) => String(v || '').toUpperCase().replace(/[^0-9A-Z]/g, '').replace(/^0+/, '');
+function pmLotsParcelle(insee, section, plan) {
+  const b = pmBase();
+  const n = parseInt(plan, 10);
+  if (!b || !insee || !section || !n) return [];
+  const sec = pmSection(section);
+  return b.parc.all(insee, String(n), String(n).padStart(4, '0'), String(plan)).map(pmLigneReparee)
+    .filter((r) => pmSection(r[PMC.section]) === sec).map(pmLotDepuisLigne);
+}
+// Index par parcelle ajouté une fois au fichier déjà importé (quelques secondes).
+function pmAssurerIndexParcelle() {
+  const f = path.join(PM_DIR, 'pm.db');
+  if (!fs.existsSync(f)) return;
+  try {
+    const Database = require('better-sqlite3');
+    const ro = new Database(f, { readonly: true });
+    const existe = ro.prepare("SELECT 1 FROM sqlite_master WHERE name = 'i_lot_parc'").get();
+    ro.close();
+    if (existe) return;
+    const libre = placeLibreMo();
+    if (libre !== null && libre < 80) { console.warn('[pm-locaux] index parcelle reporté : ' + libre + ' Mo libres'); return; }
+    pmFermerBase();
+    const rw = new Database(f);
+    rw.exec('CREATE INDEX IF NOT EXISTS i_lot_parc ON lot (insee, plan)');
+    rw.close();
+    console.log('[pm-locaux] index par parcelle créé');
+  } catch (e) { console.error('[pm-locaux] index parcelle :', e.message); }
+}
+setTimeout(pmAssurerIndexParcelle, 45 * 1000);
 function pmLignesSiren(siren) {
   const b = pmBase();
   if (b) return b.siren.all(siren).map(pmLigneReparee);
@@ -4862,7 +4893,7 @@ async function pmImporter(raison) {
     if (disquePlein) throw new Error(disquePlein);
     if (lotEnAttente.length) vider(lotEnAttente);
     PM_IMPORT.etape = 'Création des index…';
-    base.exec('CREATE INDEX i_lot_adr ON lot (insee, num); CREATE INDEX i_lot_soc ON lot (soc); CREATE INDEX i_soc_siren ON soc (siren);');
+    base.exec('CREATE INDEX i_lot_adr ON lot (insee, num); CREATE INDEX i_lot_soc ON lot (soc); CREATE INDEX i_soc_siren ON soc (siren); CREATE INDEX i_lot_parc ON lot (insee, plan);');
     await fermerTout();
     if (!PM_IMPORT.lignes) throw new Error('aucune ligne retenue pour les départements ' + PM_DEPTS.join(', '));
     pmFermerBase();
@@ -5015,11 +5046,15 @@ function radarFicheDepuisDpe(s, arr) {
 }
 
 // Société propriétaire (fichier DGFiP) : lot au même étage / même porte, ou immeuble entier.
-function radarProprietaire(f) {
+function radarProprietaire(f, lotsFournis) {
   if (!pmMeta()) return { statut: 'fichier_absent' };
-  const q = pmParserAdresse(f.adresse + ' ' + f.cp);
-  if (!q.insee || !q.numero) return { statut: 'non_identifie' };
-  const lots = pmLotsImmeuble(q).filter((l) => /^[PUN]$/.test(l.droit || 'P'));
+  let lots;
+  if (lotsFournis) lots = lotsFournis.filter((l) => /^[PUN]$/.test(l.droit || 'P'));
+  else {
+    const q = pmParserAdresse(f.adresse + ' ' + f.cp);
+    if (!q.insee || !q.numero) return { statut: 'non_identifie' };
+    lots = pmLotsImmeuble(q).filter((l) => /^[PUN]$/.test(l.droit || 'P'));
+  }
   if (!lots.length) return { statut: 'non_identifie', societesImmeuble: 0 };
   const sirens = Array.from(new Set(lots.map((l) => l.siren || l.nom)));
   const immeubleEntier = sirens.length === 1 && lots.length >= 3;
@@ -5045,6 +5080,14 @@ function radarProprietaire(f) {
   };
 }
 
+function radarProprietaireParcelle(f) {
+  if (!f.parcelle || !f.parcelle.section || !f.parcelle.numero) return null;
+  const lots = pmLotsParcelle(f.insee, f.parcelle.section, f.parcelle.numero);
+  if (!lots.length) return null;
+  const p = radarProprietaire(f, lots);
+  if (p.statut === 'identifie') { p.confiance = (p.confiance || '') + ' · parcelle ' + f.parcelle.section + ' ' + f.parcelle.numero; p.source = 'parcelle'; }
+  return p;
+}
 // Autres biens de la société dans le fichier (Paris) : adresses distinctes.
 function radarBiensSociete(siren) {
   if (!siren || !/^\d{9}$/.test(siren)) return [];
@@ -5551,6 +5594,23 @@ async function radarEnrichirFond(arrs, per) {
     arrs.forEach((a) => RS.liste.all({ de: per.de, a: per.a + 'z', q: a.quartier, t: '', smin: 0 }).forEach((r) => { const f = rsLire(r); if (f && !f.enrichiLe && f.proprietaire && f.proprietaire.statut === 'identifie' && !f.proprietaire.institutionnel) rows.push(f); }));
     rows.sort((a, b) => radarAnnee(b.dpeDate) - radarAnnee(a.dpeDate));
     await enParallele(rows.slice(0, 80), 2, async (f) => { try { await radarEnrichirFiche(f); } catch (e) { /* suivante */ } });
+    // DPE dont l'adresse n'est pas reconnue : parcelle cadastrale (IGN), puis fichier DGFiP.
+    if (pmMeta()) {
+      const sans = [];
+      arrs.forEach((a) => RS.liste.all({ de: per.de, a: per.a + 'z', q: a.quartier, t: '', smin: 0 }).forEach((r) => { const f = rsLire(r); if (f && f.lat && !f.parcelle && (!f.proprietaire || f.proprietaire.statut !== 'identifie')) sans.push(f); }));
+      sans.sort((a, b) => radarAnnee(b.dpeDate) - radarAnnee(a.dpeDate));
+      let n = 0;
+      await enParallele(sans.slice(0, 300), 3, async (f) => {
+        try {
+          const v = await radarParcelle(f, { sansVentes: true });
+          f.parcelle = v || { section: '', numero: '', ventesAFaire: true, introuvable: true };
+          const pp = radarProprietaireParcelle(f);
+          if (pp && pp.statut === 'identifie') { pp.millesime = (pmMeta() || {}).annee || null; pp.nbBiens = radarBiensSociete(pp.siren).length || 1; f.proprietaire = pp; n++; }
+          rsEcrire(f);
+        } catch (e) { /* suivante */ }
+      });
+      if (sans.length) console.log('[radar] parcelle : ' + n + ' propriétaire(s) trouvé(s) sur ' + Math.min(300, sans.length) + ' DPE non reconnus par l\'adresse');
+    }
   } finally { RADAR_FOND = false; }
 }
 // Les fiches de l'ancienne version (dans la base principale) passent dans radar.db.
@@ -5742,7 +5802,7 @@ function radarPermisAdresse(liste, f) {
   }).slice(0, 15);
 }
 // Parcelle cadastrale du point GPS (IGN), puis toutes les ventes DVF de la parcelle.
-async function radarParcelle(f) {
+async function radarParcelle(f, opts) {
   if (!f.lat || !f.lon) return null;
   const geom = JSON.stringify({ type: 'Point', coordinates: [f.lon, f.lat] });
   const r = await fetch('https://apicarto.ign.fr/api/cadastre/parcelle?geom=' + encodeURIComponent(geom), { headers: { Accept: 'application/json', 'User-Agent': 'Seecret/1.0' }, signal: AbortSignal.timeout(12000) });
@@ -5756,6 +5816,7 @@ async function radarParcelle(f) {
   const bbox = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)].map((v) => v.toFixed(6)).join(',');
   const idu = pr.idu || ((pr.code_dep || '') + (pr.code_com || '') + (pr.com_abs || '000') + (pr.section || '') + (pr.numero || ''));
   const out = { idu: idu, section: pr.section || '', numero: pr.numero || '', contenance: pr.contenance || null, ventes: [] };
+  if (opts && opts.sansVentes) { out.ventesAFaire = true; return out; }
   try {
     const brut = await dvfCerema({ code_insee: f.insee, in_bbox: bbox }, 3, { geo: true, budgetMs: 15000 });
     out.ventes = brut.filter((x) => (x.l_idpar || []).some((p) => String(p).slice(-6) === String(idu).slice(-6) || String(p) === idu) && Number(x.valeurfonc) > 0)
@@ -5784,7 +5845,7 @@ async function radarEnrichirFiche(f) {
     t.push(avant(avecCache('bodacc', 'radarBodacc', p.siren, 30, (tmp) => radarBodacc(tmp, p.siren)).catch(() => null)));
   }
   if (!f.ventes && f.lat) t.push(avant(radarVentesAdresse(f).then((v) => { if (v) f.ventes = v; }).catch(() => null)));
-  if (!f.parcelle && f.lat) t.push(avant(radarParcelle(f).then((v) => { if (v) f.parcelle = v; }).catch(() => null)));
+  if ((!f.parcelle || f.parcelle.ventesAFaire) && f.lat) t.push(avant(radarParcelle(f).then((v) => { if (v) f.parcelle = v; }).catch(() => null)));
   t.push(avant(radarPermisCommune(f.insee).then((l) => { f.permis = radarPermisAdresse(l, f); }).catch(() => null)));
   if (p.statut !== 'identifie') {
     t.push(avant(radarDomiciliees(f).then((dm) => {
@@ -5795,6 +5856,11 @@ async function radarEnrichirFiche(f) {
   const arr = RADAR_ARRONDISSEMENTS.find((a) => a.insee === f.insee);
   if (arr) t.push(avant(avecCache('prix', 'radarPrix', arr.insee + '|' + f.type, 30, (tmp) => radarPrixM2(tmp, arr, f.type)).catch(() => null)));
   await Promise.all(t);
+  // Adresse non reconnue dans le fichier DGFiP : on essaie la parcelle cadastrale.
+  if ((f.proprietaire || {}).statut !== 'identifie' || (f.proprietaire || {}).source === 'sirene') {
+    const pp = radarProprietaireParcelle(f);
+    if (pp && pp.statut === 'identifie') { pp.domiciliees = (f.proprietaire || {}).domiciliees; pp.millesime = (pmMeta() || {}).annee || null; pp.nbBiens = radarBiensSociete(pp.siren).length || 1; f.proprietaire = pp; }
+  }
   // Deuxième ricochet (dépend des gérants trouvés) : autres mandats et coordonnées pro.
   radarAppliquerCache(f);
   const p2 = f.proprietaire || {};
