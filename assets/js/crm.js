@@ -4378,8 +4378,13 @@
       }).join('') + '</div>' : '<div class="se-card se-empty"><div class="se-empty-title">Aucun rapprochement</div><p>Les correspondances apparaîtront dès qu\'un client et un bien matchent.</p></div>');
   }
 
+  // Candidat (demande d'adhésion) ou membre : jamais un lead ajouté par l'agence
+  // (import, fichier, saisie), qui reste un prospect sans accès à la plateforme.
+  function estCandidatOuMembre(c) {
+    return !!c && ['en_attente', 'accepte', 'suspendu', 'refuse'].indexOf(c.serveurStatut) > -1;
+  }
   function viewTracking() {
-    const enAttente = state.clients.filter((c) => c.serveurStatut === 'en_attente' || c.statut === 'prospect');
+    const enAttente = state.clients.filter((c) => c.serveurStatut === 'en_attente');
     const suspendus = state.clients.filter((c) => c.serveurStatut === 'suspendu');
     const relance = (c, motif) => {
       const tel = (c.tel || '').replace(/[^0-9]/g, '');
@@ -5222,7 +5227,7 @@
         '<h1 class="display" style="font-size:30px;margin:4px 0 2px">' + esc(nomClient(c)) + '</h1>' +
         '<div class="se-row" style="gap:8px">' + badgeClient(c.statut) + badgeTemperature(c) + badgeDemo(c) + (c.tags || []).map((t) => '<span class="se-pill">' + esc(t) + '</span>').join('') + '</div></div>' +
         '<div class="se-actions">' +
-          ((biensPossedes.some((x) => x.validation === 'en_attente')) ? '<button class="se-btn soft" data-act="bien-valider" data-id="' + biensPossedes.find((x) => x.validation === 'en_attente').id + '">Valider ce bien</button>' : '') +
+          ((estCandidatOuMembre(c) && biensPossedes.some((x) => x.validation === 'en_attente')) ? '<button class="se-btn soft" data-act="bien-valider" data-id="' + biensPossedes.find((x) => x.validation === 'en_attente').id + '">Valider ce bien</button>' : '') +
           (biensPossedes.length ? '<a class="se-btn ghost" href="#/bien/' + biensPossedes[0].id + '">Voir son Bien</a>' : '') +
           (recherches.length ? '<a class="se-btn ghost" href="#/recherche/' + recherches[0].id + '">Voir sa Recherche</a>' : '') +
           '<button class="se-btn ghost" data-act="client-editer" data-id="' + c.id + '">Modifier</button>' +
@@ -5281,7 +5286,8 @@
             (offres.length ? offres.map((o) => '<div class="se-timeline-item">Offre ' + euro(o.montant) + '<span>' + dFR(o.cree) + ' · ' + statutOffre(o.statut) + '</span></div>').join('') : '') +
             (!activites.length && !visites.length && !demandes.length && !offres.length ? '<p class="se-muted">Aucune activité.</p>' : '') +
           '</div></div>' +
-          (c.serverId ? '<div class="se-card"><h3>Accès & documents du membre</h3>' +
+          (c.serverId && !estCandidatOuMembre(c) ? '<div class="se-card"><h3>Lead ajouté par l’agence</h3><p class="se-hint" style="margin-top:8px">' + esc(c.source || 'Ajout manuel') + ' · aucune demande d’adhésion. Ce lead n’a pas accès à la plateforme et n’apparaît pas dans les candidatures.</p></div>' : '') +
+          (c.serverId && estCandidatOuMembre(c) ? '<div class="se-card"><h3>Accès & documents du membre</h3>' +
             '<div class="se-row" style="justify-content:space-between;margin-top:10px"><span class="se-hint">Accès</span>' +
               (c.serveurStatut === 'accepte' ? '<span class="se-badge open">Validé</span>' : '<span class="se-badge warn">En attente</span>') + '</div>' +
             (c.serveurStatut !== 'accepte'
