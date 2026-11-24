@@ -1820,66 +1820,120 @@
         : '');
   }
 
-  function viewTableau() {
-    const nouvelles = state.demandes.filter((d) => d.statut === 'nouvelle');
-    const taches = tachesOuvertes().slice(0, 4);
-    const visites = visitesAVenir().slice(0, 3);
-    const offres = state.offres.filter((o) => o.statut === 'recue' || o.statut === 'en_attente' || o.statut === 'contre');
-    const ilYA7J = Date.now() - 7 * 24 * 3600 * 1000;
-    const nouveauxClients = state.clients.filter((c) => c.cree && new Date(c.cree).getTime() > ilYA7J).length;
-    const alertesDoublon = (state.biensServeur || []).concat(state.biens).filter((b) => b.exclusivite && b.exclusivite.statut === 'alerte_doublon').length;
-    const tousBiensDb = (state.biensServeur || []).concat(state.biens);
-    const recherchesDb = (state.recherchesServeur || []).concat(state.recherches);
-    let matchsForts = 0;
-    recherchesDb.forEach((r) => {
+  // ---- Tableau de bord : la journée de l'agent, par ordre de priorité ----
+  // Une seule liste, chaque ligne mène à la page où l'on agit.
+  // Priorité 1 « À faire tout de suite », 2 « Aujourd'hui », 3 « Relances »,
+  // 4 « Opportunités », 5 « À venir ».
+  function matchCle(b, c) { return (b.serverId || b.id) + '|' + (c.serverId || c.id); }
+  function matchsAProposer() {
+    const faits = state.matchsProposes || {};
+    const tousBiens = (state.biensServeur || []).concat(state.biens);
+    const recherches = (state.recherchesServeur || []).concat(state.recherches);
+    const out = []; const vus = {};
+    recherches.forEach((r) => {
       const c = client(r.clientId);
       if (!c || c.type === 'vendeur') return;
-      tousBiensDb.filter((b) => b.statut !== 'vendu' && b.statut !== 'brouillon').forEach((b) => {
-        if (correspond(b, c) && scoreBien(b, c) >= 70) matchsForts++;
+      tousBiens.filter((b) => b.statut === 'avant-premiere' || b.statut === 'ouvert').forEach((b) => {
+        const k = matchCle(b, c);
+        if (vus[k] || faits[k] || !correspond(b, c)) return;
+        const score = scoreBien(b, c);
+        if (score >= 70) { vus[k] = 1; out.push({ bien: b, client: c, score: score }); }
       });
     });
+    return out.sort((a, b) => b.score - a.score);
+  }
+  function journeeAgent() {
+    const items = [];
+    const auj = new Date(); auj.setHours(0, 0, 0, 0);
+    const demain = new Date(auj.getTime() + 86400000);
+    const dans7 = new Date(auj.getTime() + 8 * 86400000);
+    const jour = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
+    const add = (o) => items.push(o);
+    const clientDe = (d) => d.clientId ? client(d.clientId) : (d.leadId ? state.clients.find((x) => x.serverId === d.leadId) : null);
 
-    return head('Bonjour ' + state.agent.prenom, 'Votre journée',
-      'Ce qui demande une décision, et ce qui arrive ensuite.', '') +
-      blocTableauPeriode() +
-      '<div class="se-grid cols-4" style="margin-bottom:18px">' +
-        '<a class="se-card se-stat se-stat-link" href="#/clients"><span class="se-kicker">Nouveaux clients</span><span class="se-num">' + nouveauxClients + '</span><span class="se-sub">7 derniers jours</span></a>' +
-        '<a class="se-card se-stat se-stat-link" href="#/demandes"><span class="se-kicker">Demandes</span><span class="se-num">' + nouvelles.length + '</span><span class="se-sub">en attente</span></a>' +
-        '<a class="se-card se-stat se-stat-link" href="#/rapprochements"><span class="se-kicker">Matchs suggérés</span><span class="se-num">' + matchsForts + '</span><span class="se-sub">≥ 70 %</span></a>' +
-        '<a class="se-card se-stat se-stat-link" href="#/biens"><span class="se-kicker">Alertes doublon</span><span class="se-num">' + alertesDoublon + '</span><span class="se-sub">à résoudre</span></a>' +
+    // Visites
+    visitesAVenir().forEach((v) => {
+      const b = bien(v.bienId); const c = client(v.clientId); const d = jour(v.date);
+      const qui = nomClient(c) + (b ? ' · ' + (b.titre || '') : '');
+      if (d < auj) add({ prio: 1, cat: 'visite', titre: 'Visite passée à clôturer', detail: dCourt(v.date) + ' · ' + qui, lien: '#/visites', quand: v.date });
+      else if (d.getTime() === auj.getTime()) add({ prio: 1, cat: 'visite', titre: 'Visite aujourd’hui à ' + (v.heure || '—'), detail: qui + (v.statut !== 'confirmee' ? ' · pas encore confirmée' : ''), lien: '#/visites', quand: v.date + 'T' + (v.heure || '00:00') });
+      else if (d < dans7) add({ prio: v.statut === 'confirmee' ? 5 : 2, cat: 'visite', titre: (v.statut === 'confirmee' ? 'Visite le ' : 'Visite à confirmer le ') + dCourt(v.date) + ' à ' + (v.heure || '—'), detail: qui, lien: '#/visites', quand: v.date });
+    });
+    // Demandes venues de la plateforme
+    state.demandes.filter((d) => d.statut === 'nouvelle').forEach((d) => {
+      const c = clientDe(d); const b = d.bienId ? bienParServeur(d.bienId) : null;
+      const nom = d.nom || (c ? nomClient(c) : 'Visiteur');
+      const lien = '#/demande/' + d.id;
+      if (d.type === 'visite') add({ prio: 1, cat: 'demande', titre: 'Demande de visite à traiter', detail: nom + (b ? ' · ' + b.titre : '') + (d.mandat && d.mandat.statut === 'signe' ? ' · mandat signé' : ' · mandat de recherche à signer'), lien: lien, quand: d.cree });
+      else if (d.type === 'offre') add({ prio: 1, cat: 'demande', titre: 'Offre reçue', detail: nom + (b ? ' · ' + b.titre : ''), lien: lien, quand: d.cree });
+      else if (d.type === 'candidature') add({ prio: 2, cat: 'demande', titre: 'Nouvelle candidature au club', detail: nom, lien: lien, quand: d.cree });
+      else if (d.type === 'modification' || d.type === 'statut') add({ prio: 2, cat: 'modif', titre: d.type === 'statut' ? 'Demande de changement de statut' : 'Demande de modification d’un bien', detail: nom + (b ? ' · ' + b.titre : ''), lien: lien, quand: d.cree });
+      else add({ prio: 2, cat: 'demande', titre: 'Nouveau message depuis la plateforme', detail: nom + (d.message ? ' · « ' + String(d.message).slice(0, 70) + ' »' : ''), lien: lien, quand: d.cree });
+    });
+    // Offres en cours
+    state.offres.filter((o) => o.statut === 'recue' || o.statut === 'en_attente' || o.statut === 'contre').forEach((o) => {
+      const b = bien(o.bienId); const c = client(o.clientId);
+      add({ prio: 1, cat: 'demande', titre: o.statut === 'contre' ? 'Contre-offre en attente' : 'Offre à présenter au vendeur', detail: nomClient(c) + (b ? ' · ' + b.titre : '') + (o.montant ? ' · ' + euro(o.montant) : ''), lien: '#/offres', quand: o.date || o.cree });
+    });
+    // Messages des membres non lus
+    (state.conversations || []).filter((c) => c.nonLus).forEach((c) => add({ prio: 2, cat: 'demande', titre: c.nonLus + ' message' + (c.nonLus > 1 ? 's' : '') + ' non lu' + (c.nonLus > 1 ? 's' : ''), detail: c.nom + (c.dernier ? ' · « ' + String(c.dernier.texte || '').slice(0, 70) + ' »' : ''), lien: '#/messages/' + c.leadId, quand: c.dernier && c.dernier.at }));
+    // Pièces à vérifier
+    Object.keys(state.docsParLead || {}).forEach((sid) => {
+      const n = (state.docsParLead[sid] || []).filter((d) => d.statut === 'a_verifier').length;
+      if (!n) return;
+      const c = state.clients.find((x) => x.serverId === sid);
+      add({ prio: 2, cat: 'demande', titre: n > 1 ? n + ' pièces à vérifier' : 'Pièce à vérifier', detail: c ? nomClient(c) : 'Membre', lien: c ? '#/client/' + c.id : '#/notifications', quand: null });
+    });
+    // Produits à valider (le vendeur attend la mise en ligne)
+    (state.biensServeur || []).filter((b) => b.statut === 'a_valider').forEach((b) => add({ prio: 2, cat: 'modif', titre: 'Bien à valider pour la mise en ligne', detail: (b.titre || b.adresse || 'Bien') + (b.proprietaireId ? ' · ' + nomClient(client(b.proprietaireId)) : ''), lien: '#/bien/' + b.id, quand: b.cree }));
+    // Tâches
+    tachesOuvertes().forEach((t) => {
+      const c = t.clientId ? client(t.clientId) : null;
+      const e = t.echeance ? jour(t.echeance) : null;
+      const lien = c ? '#/client/' + c.id : '#/taches';
+      if (e && e < auj) add({ prio: 1, cat: 'tache', titre: t.titre, detail: 'En retard depuis le ' + dCourt(t.echeance) + (c ? ' · ' + nomClient(c) : ''), lien: lien, quand: t.echeance });
+      else if (e && e < demain) add({ prio: 2, cat: 'tache', titre: t.titre, detail: 'Aujourd’hui' + (c ? ' · ' + nomClient(c) : ''), lien: lien, quand: t.echeance });
+      else if (e && e < dans7) add({ prio: 5, cat: 'tache', titre: t.titre, detail: 'Le ' + dCourt(t.echeance) + (c ? ' · ' + nomClient(c) : ''), lien: lien, quand: t.echeance });
+      else if (!e) add({ prio: 4, cat: 'tache', titre: t.titre, detail: 'Sans échéance' + (c ? ' · ' + nomClient(c) : ''), lien: lien, quand: null });
+    });
+    // Relances
+    state.clients.forEach((c) => {
+      if (cadenceDue(c)) add({ prio: 3, cat: 'relance', titre: 'Relance à envoyer', detail: nomClient(c) + ' · ' + (cadenceLabel(c) || 'cadence due'), lien: '#/client/' + c.id, quand: c.cadence && c.cadence.prochaine });
+      else if (c.pipeline === 'a_relancer') add({ prio: 3, cat: 'relance', titre: 'Lead à relancer', detail: nomClient(c) + (c.adresseBien ? ' · ' + c.adresseBien : ''), lien: '#/client/' + c.id, quand: c.cree });
+    });
+    // Matchs pas encore proposés
+    matchsAProposer().slice(0, 15).forEach((m) => add({ prio: 4, cat: 'match', titre: 'Proposer ' + (m.bien.titre || 'un bien') + ' à ' + nomClient(m.client), detail: 'Correspondance ' + m.score + ' % · ' + euro(m.bien.prix), lien: '#/rapprochements', quand: null, score: m.score }));
+
+    const ordreQuand = (x) => (x.quand ? new Date(x.quand).getTime() : 9e15);
+    return items.sort((a, b) => a.prio - b.prio || (b.score || 0) - (a.score || 0) || ordreQuand(a) - ordreQuand(b));
+  }
+  const JOURNEE_SECTIONS = [[1, 'À faire tout de suite'], [2, 'Aujourd’hui'], [3, 'Relances'], [4, 'Opportunités'], [5, 'Cette semaine']];
+  const JOURNEE_CATS = { visite: ['Visites', 'calendar'], demande: ['Demandes', 'inbox'], modif: ['Modifications', 'building'], tache: ['Tâches', 'check'], relance: ['Relances', 'chat'], match: ['Matchs', 'tag'] };
+  function viewTableau() {
+    const items = journeeAgent();
+    const filtre = state.filtres.journee || '';
+    const vus = filtre ? items.filter((x) => x.cat === filtre) : items;
+    const compte = (cat) => items.filter((x) => x.cat === cat).length;
+    const urgents = items.filter((x) => x.prio === 1).length;
+    const dateJour = new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
+    const ligne = (x) => {
+      const ic = JOURNEE_CATS[x.cat] || ['', 'check'];
+      return '<a class="se-journee-ligne p' + x.prio + '" href="' + x.lien + '"><span class="se-journee-ico">' + (ICONS[ic[1]] || '') + '</span>' +
+        '<span class="se-journee-txt"><b>' + esc(x.titre) + '</b><span>' + esc(x.detail || '') + '</span></span>' +
+        '<span class="se-journee-cat">' + esc(ic[0]) + '</span><span class="se-journee-fleche" aria-hidden="true">›</span></a>';
+    };
+    return head('Bonjour ' + state.agent.prenom, dateJour.charAt(0).toUpperCase() + dateJour.slice(1),
+        items.length ? (urgents ? urgents + ' chose' + (urgents > 1 ? 's' : '') + ' à faire tout de suite, ' : '') + items.length + ' au total, de la plus urgente à la moins urgente. Cliquez sur une ligne pour agir.' : 'Rien à traiter pour l’instant.', '') +
+      '<div class="se-journee-filtres">' +
+        '<a href="#" data-act="filtre" data-id="journee:" class="' + (filtre ? '' : 'actif') + '">Tout <span>' + items.length + '</span></a>' +
+        Object.keys(JOURNEE_CATS).map((k) => compte(k) ? '<a href="#" data-act="filtre" data-id="journee:' + k + '" class="' + (filtre === k ? 'actif' : '') + '">' + JOURNEE_CATS[k][0] + ' <span>' + compte(k) + '</span></a>' : '').join('') +
       '</div>' +
-
-      '<div class="se-split">' +
-        '<div class="se-grid" style="gap:18px">' +
-          '<div class="se-card">' +
-            '<div class="se-row" style="justify-content:space-between;margin-bottom:8px"><h3>À traiter</h3><a class="se-btn ghost sm" href="#/demandes">Tout voir</a></div>' +
-            (nouvelles.length ? nouvelles.map(mailItem).join('') : '<p class="se-muted" style="margin:8px 0 0">Rien en attente. Bonne journée.</p>') +
-          '</div>' +
-          '<div class="se-card">' +
-            '<div class="se-row" style="justify-content:space-between;margin-bottom:8px"><h3>Tâches</h3><a class="se-btn ghost sm" href="#/taches">Gérer</a></div>' +
-            (taches.length ? taches.map(taskRow).join('') : '<p class="se-muted" style="margin:8px 0 0">Aucune tâche en cours.</p>') +
-          '</div>' +
-        '</div>' +
-        '<div class="se-grid" style="gap:18px">' +
-          '<div class="se-card">' +
-            '<h3>Agenda</h3>' +
-            (visites.length ? '<div class="se-list" style="margin-top:8px">' + visites.map((v) => {
-              const b = bien(v.bienId);
-              const c = client(v.clientId);
-              return '<div class="se-list-item"><div style="flex:1"><div style="font-size:13.5px">' + esc(b ? b.titre : 'Bien') + '</div>' +
-                '<div class="se-hint">' + dCourt(v.date) + ' · ' + v.heure + ' · ' + esc(nomClient(c)) + '</div></div>' +
-                '<span class="se-badge ' + (v.statut === 'confirmee' ? 'open' : 'warn') + '">' + (v.statut === 'confirmee' ? 'Confirmée' : 'À confirmer') + '</span></div>';
-            }).join('') + '</div>' : '<p class="se-muted" style="margin-top:8px">Pas de visite programmée.</p>') +
-          '</div>' +
-          '<div class="se-card">' +
-            '<h3>Derniers biens</h3>' +
-            '<div class="se-list" style="margin-top:8px">' +
-              state.biens.slice(0, 4).map((b) => '<a class="se-rowlink" href="#/bien/' + b.id + '"><img class="se-thumb" src="' + photo(b) + '" alt="" style="width:40px;height:40px;flex:0 0 40px"/>' +
-                '<div style="flex:1;min-width:0"><div style="font-size:13.5px">' + esc(b.titre) + '</div><div class="se-sub">' + esc(b.ref) + ' · ' + euro(b.prix) + '</div></div>' + badgeBien(b.statut) + '</a>').join('') +
-            '</div>' +
-          '</div>' +
-        '</div>' +
-      '</div>';
+      (vus.length ? JOURNEE_SECTIONS.map(([p, titre]) => {
+        const l = vus.filter((x) => x.prio === p);
+        return l.length ? '<section class="se-journee-section"><h3 class="se-journee-titre p' + p + '">' + titre + ' <span>' + l.length + '</span></h3><div class="se-journee-liste">' + l.slice(0, p === 4 ? 12 : 60).map(ligne).join('') +
+          (p === 4 && l.length > 12 ? '<a class="se-journee-plus" href="#/rapprochements">Voir les ' + l.length + ' opportunités →</a>' : '') + '</div></section>' : '';
+      }).join('') : '<div class="se-card se-empty"><div class="se-empty-title">Tout est à jour</div><p>Aucune demande, tâche ou relance en attente.</p></div>') +
+      '<details class="se-journee-stats"><summary>Activité de la période</summary>' + blocTableauPeriode() + '</details>';
   }
 
   /* -------------------------------- demandes ------------------------------ */
@@ -4214,8 +4268,10 @@
           '<div class="se-hint">' + esc(b.adresse || b.ref || '') + ' · ' + euro(b.prix) + ' net · ' + euro(haiPour(b, c)) + ' HAI · ' + (b.surface || 0) + ' m² · ' + (b.pieces || 0) + ' p.</div></div>' +
           '<div class="se-row" style="gap:8px;margin-top:12px">' +
             '<a class="se-btn ghost sm" href="#/bien/' + b.id + '">Voir le bien</a>' +
-            (wa ? '<a class="se-btn soft sm" href="' + wa + '" target="_blank" rel="noopener">Proposer (WhatsApp)</a>' : '') +
-            (mailto ? '<a class="se-btn ghost sm" href="' + mailto + '">Proposer (Email)</a>' : '') +
+            (wa ? '<a class="se-btn soft sm" href="' + wa + '" target="_blank" rel="noopener" data-match-propose="' + esc(matchCle(b, c)) + '">Proposer (WhatsApp)</a>' : '') +
+            (mailto ? '<a class="se-btn ghost sm" href="' + mailto + '" data-match-propose="' + esc(matchCle(b, c)) + '">Proposer (Email)</a>' : '') +
+            ((state.matchsProposes || {})[matchCle(b, c)] ? '<span class="se-badge open">Proposé le ' + dCourt(state.matchsProposes[matchCle(b, c)]) + '</span>'
+              : '<button class="se-btn ghost sm" data-act="match-fait" data-id="' + esc(matchCle(b, c)) + '">Déjà proposé / à ignorer</button>') +
           '</div>' +
         '</div>';
       }).join('') + '</div>' : '<div class="se-card se-empty"><div class="se-empty-title">Aucun rapprochement</div><p>Les correspondances apparaîtront dès qu\'un client et un bien matchent.</p></div>');
@@ -6378,6 +6434,7 @@
       if (e.target.closest('[data-stop]') && !e.target.hasAttribute('data-act')) return;
       modal = null; modalLarge = false; state.__previewMsg = undefined; render();
     },
+    'match-fait': (el, id) => { state.matchsProposes = state.matchsProposes || {}; state.matchsProposes[id] = new Date().toISOString(); commit(); toast('Retiré des matchs à réaliser.', 'ok'); },
     'filtre': (el) => {
       const [key, val] = el.getAttribute('data-id').split(':');
       state.filtres[key] = val;
@@ -7595,6 +7652,10 @@
     const p = window.TriPhotos.reordonner(b.photos || [], e.detail.de, e.detail.vers);
     enregistrerBien(b, { photos: p }, e.detail.vers === 0 ? 'Nouvelle photo principale.' : 'Ordre des photos enregistré.');
   });
+  document.addEventListener('click', (e) => {
+    const a = e.target.closest && e.target.closest('[data-match-propose]');
+    if (a) { state.matchsProposes = state.matchsProposes || {}; state.matchsProposes[a.getAttribute('data-match-propose')] = new Date().toISOString(); save(); setTimeout(render, 300); }
+  }, true);
   document.addEventListener('change', (e) => {
     const t = e.target;
     if (!t || !t.hasAttribute) return;
