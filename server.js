@@ -6941,6 +6941,77 @@ app.get('/api/biens/verifier', requireAdmin, (req, res) => {
   res.json({ enCours: !!VERIF.enCours, enAttente: VERIF.file.length, faits: VERIF.faits, erreurs: VERIF.erreurs, debut: VERIF.debut, arret: VERIF.arret || null });
 });
 
+// ---- Sauvegarde complète du serveur (super-admin) ----
+// Archive .tar.gz envoyée en flux : la base (copie cohérente faite dans le
+// dossier temporaire du conteneur, pas sur le volume) + toutes les photos et
+// documents. Les bases Radar / propriétaires (rechargeables) sont exclues.
+function tarEntete(nom, taille, mtime) {
+  const h = Buffer.alloc(512, 0);
+  const ecrire = (txt, off, len) => h.write(String(txt).slice(0, len), off, len, 'utf8');
+  ecrire(nom, 0, 100);
+  ecrire('0000644\0', 100, 8); ecrire('0000000\0', 108, 8); ecrire('0000000\0', 116, 8);
+  ecrire(taille.toString(8).padStart(11, '0') + '\0', 124, 12);
+  ecrire(Math.floor(mtime / 1000).toString(8).padStart(11, '0') + '\0', 136, 12);
+  ecrire('        ', 148, 8); ecrire('0', 156, 1); ecrire('ustar\0', 257, 6); ecrire('00', 263, 2);
+  let somme = 0; for (let i = 0; i < 512; i++) somme += h[i];
+  ecrire(somme.toString(8).padStart(6, '0') + '\0 ', 148, 8);
+  return h;
+}
+function listerFichiers(dossier, prefixe) {
+  const out = [];
+  if (!fs.existsSync(dossier)) return out;
+  fs.readdirSync(dossier, { withFileTypes: true }).forEach((e) => {
+    const p = path.join(dossier, e.name);
+    if (e.isDirectory()) out.push(...listerFichiers(p, prefixe + e.name + '/'));
+    else if (e.isFile()) out.push({ chemin: p, nom: prefixe + e.name });
+  });
+  return out;
+}
+app.get('/api/admin/sauvegarde', requireSuperadmin, async (req, res) => {
+  const tmp = fs.mkdtempSync(path.join(require('os').tmpdir(), 'sauv-'));
+  const jour = new Date().toISOString().slice(0, 10);
+  try {
+    const fichiers = [];
+    const base = path.join(DATA_DIR, 'seecret.db');
+    if (fs.existsSync(base)) {
+      const Database = require('better-sqlite3');
+      const src = new Database(base, { readonly: true });
+      await src.backup(path.join(tmp, 'seecret.db'));
+      src.close();
+      fichiers.push({ chemin: path.join(tmp, 'seecret.db'), nom: 'seecret.db' });
+    } else if (fs.existsSync(path.join(DATA_DIR, 'data.json'))) {
+      fichiers.push({ chemin: path.join(DATA_DIR, 'data.json'), nom: 'data.json' });
+    }
+    fs.writeFileSync(path.join(tmp, 'LISEZMOI.txt'), 'Sauvegarde Seecret du ' + jour + '\n\nseecret.db : toute la base (leads, biens, recherches, messages, activité…), lisible avec n’importe quel outil SQLite.\nuploads/ : photos des biens, vidéos et documents des membres.\n\nPour restaurer : remettre ces fichiers dans le dossier de données (DATA_DIR) du serveur.\nCe fichier contient des données personnelles : à conserver en lieu sûr, jamais sur GitHub.\n');
+    fichiers.push({ chemin: path.join(tmp, 'LISEZMOI.txt'), nom: 'LISEZMOI.txt' });
+    fichiers.push(...listerFichiers(UPLOADS_DIR, 'uploads/'));
+    res.setHeader('Content-Type', 'application/gzip');
+    res.setHeader('Content-Disposition', 'attachment; filename="seecret-sauvegarde-' + jour + '.tar.gz"');
+    const gz = require('zlib').createGzip({ level: 6 });
+    gz.pipe(res);
+    const ecrire = (buf) => new Promise((ok) => { if (gz.write(buf)) ok(); else gz.once('drain', ok); });
+    for (const f of fichiers) {
+      let st; try { st = fs.statSync(f.chemin); } catch (e) { continue; }
+      const nom = f.nom.length > 99 ? f.nom.slice(0, 60) + '…' + f.nom.slice(-35) : f.nom;
+      await ecrire(tarEntete(nom, st.size, st.mtimeMs));
+      await new Promise((ok, ko) => {
+        const rs = fs.createReadStream(f.chemin);
+        rs.on('data', (c) => { if (!gz.write(c)) { rs.pause(); gz.once('drain', () => rs.resume()); } });
+        rs.on('end', ok); rs.on('error', ko);
+      });
+      const reste = st.size % 512;
+      if (reste) await ecrire(Buffer.alloc(512 - reste, 0));
+    }
+    await ecrire(Buffer.alloc(1024, 0));
+    gz.end();
+  } catch (e) {
+    if (!res.headersSent) res.status(500).json({ error: 'Sauvegarde impossible : ' + e.message });
+    else res.end();
+  } finally {
+    res.on('finish', () => { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (e) { /* rien */ } });
+  }
+});
+
 // ---- Gestion des comptes agents (super-admin uniquement) ----
 // Au 18/11/2026, aucun agent n'est encore employé (usage solo) — ces routes
 // posent les fondations pour plus tard sans rien changer à l'usage actuel :
