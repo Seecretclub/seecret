@@ -44,6 +44,61 @@ const PORT = process.env.PORT || 3000;
 const DATA_DIR = process.env.DATA_DIR || __dirname;
 fs.mkdirSync(DATA_DIR, { recursive: true });
 const DATA_FILE = path.join(DATA_DIR, 'data.json');
+
+// ---- Place sur le volume ----
+// Le volume Railway gratuit fait 500 Mo. Quand il est plein, SQLite ne peut
+// plus ouvrir la base des membres : on vérifie la place AVANT de l'ouvrir.
+function placeLibreMo(dossier) {
+  try { const st = fs.statfsSync(dossier || DATA_DIR); return Math.round(st.bavail * st.bsize / 1048576); } catch (e) { return null; }
+}
+function tailleMo(chemin) {
+  let total = 0;
+  try {
+    const st = fs.lstatSync(chemin);
+    if (st.isDirectory()) fs.readdirSync(chemin).forEach((n) => { total += tailleMo(path.join(chemin, n)) * 1048576; });
+    else total = st.size;
+  } catch (e) { /* ignoré */ }
+  return Math.round(total / 1048576 * 10) / 10;
+}
+function etatDisque() {
+  const parts = {};
+  try { fs.readdirSync(DATA_DIR).forEach((n) => { parts[n] = tailleMo(path.join(DATA_DIR, n)); }); } catch (e) { /* ignoré */ }
+  return { libreMo: placeLibreMo(), parts: parts };
+}
+(function libererPlaceSiPlein() {
+  const avant = etatDisque();
+  console.log('[disque] place libre : ' + avant.libreMo + ' Mo · ' + Object.keys(avant.parts).sort((a, b) => avant.parts[b] - avant.parts[a]).map((n) => n + ' ' + avant.parts[n] + ' Mo').join(', '));
+  if (avant.libreMo === null || avant.libreMo >= 50) return;
+  console.warn('[disque] presque plein : on libère la place des données qui se rechargent seules.');
+  // 1. Import inachevé du fichier des propriétaires (dossier temporaire).
+  try { fs.rmSync(path.join(DATA_DIR, 'pm-locaux.tmp'), { recursive: true, force: true }); } catch (e) { /* ignoré */ }
+  // 2. Radar : on garde les fiches travaillées (suivi, notes, prospect), on vide les DPE téléchargés.
+  const fichier = path.join(DATA_DIR, 'radar.db');
+  if (fs.existsSync(fichier)) {
+    let gardees = [];
+    try {
+      const Database = require('better-sqlite3');
+      const sql = new Database(fichier, { readonly: true });
+      gardees = sql.prepare('SELECT id, quartier, date, type, surface, ban, data FROM fiches').all().filter((r) => {
+        try { const f = JSON.parse(r.data); return (f.statut && f.statut !== 'a_revoir') || f.leadId || (f.historique || []).length || f.rappel; } catch (e) { return false; }
+      });
+      sql.close();
+    } catch (e) { console.error('[disque] lecture radar.db :', e.message); }
+    ['', '-wal', '-shm'].forEach((x) => { try { fs.unlinkSync(fichier + x); } catch (e) { /* ignoré */ } });
+    if (gardees.length) {
+      try {
+        const Database = require('better-sqlite3');
+        const sql = new Database(fichier);
+        sql.exec('CREATE TABLE IF NOT EXISTS fiches (id TEXT PRIMARY KEY, quartier TEXT, date TEXT, type TEXT, surface REAL, ban TEXT, data TEXT)');
+        const ins = sql.prepare('INSERT OR REPLACE INTO fiches VALUES (@id, @quartier, @date, @type, @surface, @ban, @data)');
+        sql.transaction((l) => l.forEach((r) => ins.run(r)))(gardees);
+        sql.close();
+      } catch (e) { console.error('[disque] réécriture radar.db :', e.message); }
+    }
+    console.warn('[disque] Radar vidé, ' + gardees.length + ' fiche(s) suivie(s) gardée(s).');
+  }
+  console.log('[disque] place libre après : ' + placeLibreMo() + ' Mo');
+})();
 // Base de données : SQLite (seecret.db sur le volume), voir stockage.js.
 // Au premier démarrage, data.json est importé puis renommé data.json.importe.
 // Filet de sécurité : si SQLite ne peut pas démarrer (module natif absent,
@@ -4704,6 +4759,8 @@ async function pmImporter(raison) {
       return;
     }
     fs.rmSync(tmpDir, { recursive: true, force: true });
+    const libre = placeLibreMo();
+    if (libre !== null && libre < 150) throw new Error('disque du site presque plein (' + libre + ' Mo libres) : import reporté');
     fs.mkdirSync(path.join(tmpDir, 'insee'), { recursive: true });
     fs.mkdirSync(path.join(tmpDir, 'siren'), { recursive: true });
     const communes = {};
@@ -5321,9 +5378,30 @@ function radarCouvert(arr, per) {
   const age = Date.now() - radarAnnee(r.maj);
   return per.recent ? age < 6 * 3600e3 : (per.annee && Number(per.annee) < new Date().getFullYear() ? true : age < 24 * 3600e3);
 }
+// Place gardée libre sur le volume, et nombre maximum de DPE stockés : au-delà,
+// les plus anciens jamais travaillés sont retirés (ils se rechargent au besoin).
+const RADAR_MARGE_MO = Number(process.env.RADAR_MARGE_MO) || 120;
+const RADAR_MAX_FICHES = Number(process.env.RADAR_MAX_FICHES) || 40000;
+function radarPlafonner() {
+  try {
+    const n = RS.cpt.get().n;
+    const libre = placeLibreMo();
+    const enTrop = Math.max(n - RADAR_MAX_FICHES, libre !== null && libre < RADAR_MARGE_MO ? Math.ceil(n * 0.25) : 0);
+    if (enTrop <= 0) return;
+    const ids = RadarSQL.prepare('SELECT id, data FROM fiches ORDER BY date ASC').all().filter((r) => {
+      try { const f = JSON.parse(r.data); return !((f.statut && f.statut !== 'a_revoir') || f.leadId || (f.historique || []).length || f.rappel); } catch (e) { return true; }
+    }).slice(0, enTrop).map((r) => r.id);
+    const del = RadarSQL.prepare('DELETE FROM fiches WHERE id = ?');
+    RadarSQL.transaction((l) => l.forEach((id) => del.run(id)))(ids);
+    RadarSQL.pragma('wal_checkpoint(TRUNCATE)');
+    console.warn('[radar] ' + ids.length + ' DPE anciens retirés pour garder de la place (' + placeLibreMo() + ' Mo libres).');
+  } catch (e) { console.error('[radar] plafond :', e.message); }
+}
 async function radarCharger(cle, arrs, per) {
   if (RADAR_CHARGEMENTS[cle] && RADAR_CHARGEMENTS[cle].enCours) return;
   const job = RADAR_CHARGEMENTS[cle] = { enCours: true, faits: 0, total: arrs.length, lus: 0, erreurs: [] };
+  const libre = placeLibreMo();
+  if (libre !== null && libre < RADAR_MARGE_MO) { job.enCours = false; job.erreurs.push('Disque du site presque plein (' + libre + ' Mo libres) : chargement des DPE suspendu.'); return; }
   const annee = (pmMeta() || {}).annee || null;
   // Les périodes récentes chargent 31 jours d'un coup (aujourd'hui, semaine et mois en même temps).
   const crit = per.recent ? { depuis: radarPeriode('mois').de, jusqua: '' } : { depuis: per.de, jusqua: per.a };
@@ -5356,6 +5434,7 @@ async function radarCharger(cle, arrs, per) {
     job.faits++;
   });
   job.enCours = false;
+  radarPlafonner();
   console.log('[radar] chargement ' + cle + ' : ' + job.lus + ' DPE');
   radarEnrichirFond(arrs, per);
 }
