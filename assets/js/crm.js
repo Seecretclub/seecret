@@ -1319,6 +1319,7 @@
             notes: l.notes || '', tags: Array.isArray(l.tags) ? l.tags.slice() : [], agent: 'Gabriel Taieb', cree: l.cree || nowISO(),
             documents: l.documents || 0, documentsValides: l.documentsValides || 0,
             pipeline: l.pipeline || '', adresseBien: l.adresseBien || '', siren: l.siren || '', parcelle: l.parcelle || '', dirigeants: l.dirigeants || [],
+            natureLead: l.natureLead || (l.type === 'sci' ? 'sci' : l.type === 'societe' ? 'societe' : 'personne'), civilite: l.civilite || '', adresse: l.adresse || '', raisonSociale: l.raisonSociale || '', representant: l.representant || '',
             agentId: l.agentId || null, demo: !!l.demo
           });
         }
@@ -5126,9 +5127,9 @@
             kv('Email', esc(c.email)) + kv('Téléphone', esc(c.tel)) +
             kv('Civilité', c.civilite === 'homme' ? 'Homme' : c.civilite === 'femme' ? 'Femme' : '—') +
             kv('Adresse', esc(c.adresse || '—')) +
-            kv('Nature', c.natureLead === 'societe' ? 'Société' : 'Personne physique') +
-            (c.natureLead === 'societe' ? (
-              kv('Raison sociale', esc(c.raisonSociale || '—')) + kv('SIREN', esc(c.siren || '—')) + kv('Représentant', esc(c.representant || '—'))
+            kv('Le lead est', c.natureLead === 'sci' ? 'Une SCI' : c.natureLead === 'societe' ? 'Une société' : 'Une personne') +
+            (estSocieteLead(c) ? (
+              kv('Raison sociale', esc(c.raisonSociale || '—')) + kv('SIREN', c.siren ? '<a href="https://annuaire-entreprises.data.gouv.fr/entreprise/' + esc(c.siren) + '" target="_blank" rel="noopener">' + esc(c.siren) + '</a>' : '—') + kv('Représentée par', esc([nomClient(c), c.representant ? '(' + c.representant + ')' : ''].filter(Boolean).join(' ') || '—'))
             ) : '') +
             kv('Financement', esc(c.financement || '—')) + kv('Apport', c.apport ? euro(c.apport) : '—') + kv('Courtier', c.courtier ? 'Oui' : 'Non') +
             kv('Source', esc(c.source)) + kv('Agent', esc(c.agent || '—')) +
@@ -6164,20 +6165,25 @@
       '</div>';
   }
 
+  function estSocieteLead(c) { return !!c && (c.natureLead === 'societe' || c.natureLead === 'sci'); }
   function clientModal(c) {
     const v = c || { type: 'acquereur', natureLead: 'personne', civilite: '', prenom: '', nom: '', email: '', tel: '', adresse: '', raisonSociale: '', siren: '', representant: '', statut: 'prospect', source: 'Candidature', notes: '', agent: state.agent.prenom + ' ' + state.agent.nom };
     return '<h3>' + (c ? 'Modifier le lead' : 'Nouveau lead') + '</h3><p class="se-muted">L’identité du lead. Ce qu’il recherche se renseigne à part, dans sa (ou ses) recherche(s).</p>' +
       '<form data-form="client" data-id="' + (c ? c.id : '') + '"><div class="se-form-grid">' +
         field('Type', 'type', v.type, { type: 'select', options: [{ value: 'acquereur', label: 'Acquéreur' }, { value: 'vendeur', label: 'Vendeur' }, { value: 'mixte', label: 'Acheteur & vendeur' }] }) +
         field('Statut', 'statut', v.statut, { type: 'select', options: Object.keys(ST_CLIENT).map((k) => ({ value: k, label: ST_CLIENT[k].label })) }) +
-        field('Nature du lead', 'natureLead', v.natureLead || 'personne', { type: 'select', options: [{ value: 'personne', label: 'Personne physique' }, { value: 'societe', label: 'Société (SCI, SARL immobilière…)' }] }) +
+        field('Le lead est', 'natureLead', estSocieteLead(v) ? (v.natureLead === 'sci' ? 'sci' : 'societe') : 'personne', { type: 'select', options: [{ value: 'personne', label: 'Une personne' }, { value: 'sci', label: 'Une SCI' }, { value: 'societe', label: 'Une société (SARL, SAS…)' }] }) +
+        // Société : son identité, puis la personne qui la représente (toujours renseignée).
+        '<div class="se-field full se-bloc-societe" data-si-societe' + (estSocieteLead(v) ? '' : ' hidden') + '><div class="se-form-grid">' +
+          field('Raison sociale', 'raisonSociale', v.raisonSociale || '', { placeholder: 'SCI Les Tilleuls' }) +
+          field('SIREN', 'siren', v.siren || '', { placeholder: '552032534' }) +
+          field('Qualité du représentant', 'representant', v.representant || '', { full: true, placeholder: 'Gérant, associé, président…' }) +
+        '</div></div>' +
+        '<div class="se-field full"><p class="se-hint" data-libelle-personne style="margin:4px 0 0">' + (estSocieteLead(v) ? 'La personne qui représente la société (c’est elle que vous contactez) :' : 'La personne :') + '</p></div>' +
         field('Civilité', 'civilite', v.civilite || '', { type: 'select', options: [{ value: '', label: 'Non précisée' }, { value: 'homme', label: 'Homme' }, { value: 'femme', label: 'Femme' }] }) +
         field('Prénom', 'prenom', v.prenom) + field('Nom', 'nom', v.nom) +
         field('Email', 'email', v.email, { type: 'email' }) + field('Téléphone', 'tel', v.tel) +
         field('Adresse', 'adresse', v.adresse || '', { full: true, placeholder: '12 rue de la Paix, 75002 Paris' }) +
-        field('Raison sociale (si société)', 'raisonSociale', v.raisonSociale || '', { placeholder: 'SCI Les Tilleuls' }) +
-        field('SIREN (si société)', 'siren', v.siren || '', { placeholder: '552032534' }) +
-        field('Représentant / dirigeant (si société)', 'representant', v.representant || '', { full: true, placeholder: 'Nom du gérant qui agit au nom de la société sur Seecret' }) +
         field('Source', 'source', v.source, { type: 'select', options: ['Candidature', 'Site web', 'Instagram', 'Recommandation', 'Bouche à oreille', 'Portail'].map((s) => ({ value: s, label: s })) }) +
         field('Notes', 'notes', v.notes, { type: 'textarea', full: true, placeholder: 'Ce qu’il faut retenir de ce lead…' }) +
       '</div><div class="se-modal-foot"><button class="se-btn ghost" type="button" data-act="modal-close">Annuler</button><button class="se-btn" type="submit">' + (c ? 'Enregistrer' : 'Créer le lead') + '</button></div></form>';
@@ -7713,6 +7719,11 @@
       } catch (err) { toast(err.message || 'Envoi impossible', 'warn'); }
       state.panoEnvoi = null; render();
       return;
+    }
+    if (e.target.matches('form[data-form="client"] [name="natureLead"]')) {
+      const soc = e.target.value !== 'personne';
+      const bloc = e.target.form.querySelector('[data-si-societe]'); if (bloc) bloc.hidden = !soc;
+      const lib = e.target.form.querySelector('[data-libelle-personne]'); if (lib) lib.textContent = soc ? 'La personne qui représente la société (c’est elle que vous contactez) :' : 'La personne :';
     }
     if (e.target.matches('form[data-form="bien"] [name="statut"]')) {
       const bloc = e.target.form.querySelector('[data-si-vendu]');
