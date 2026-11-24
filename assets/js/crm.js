@@ -1440,7 +1440,8 @@
       radar: viewRadar,
       'radar-fiche': viewRadarFiche,
       import: viewImport,
-      reseau: viewReseau,
+      // L'ancien onglet Réseau vit maintenant dans Leads › À prospecter.
+      reseau: () => { state.filtres.leadType = 'prospecter'; setTimeout(() => { location.replace('#/clients'); }, 0); return ''; },
       pipeline: viewPipeline,
       notifications: viewNotifications,
       client: viewClient,
@@ -1527,7 +1528,7 @@
     return '<nav class="se-tabbar">' +
       tab('tableau', r.name, 'home', 'Accueil') +
       tab('clients', r.name, 'users', 'Leads') +
-      tab('reseau', r.name, 'chat', 'Pipeline', (state.clients.filter((c) => (c.pipeline || 'a_contacter') === 'a_contacter' && (c.type === 'vendeur' || c.type === 'mixte' || c.pipeline)).length) || '') +
+      tab('pipeline', r.name, 'chat', 'Pipeline') +
       tab('biens', r.name, 'building', 'Biens') +
       '<a href="#" class="se-tab" data-act="more">' + ICONS.grid + '<span>Plus</span></a>' +
     '</nav>';
@@ -1545,7 +1546,6 @@
         '<div class="se-nav-label">Prospection</div>' +
         '<nav class="se-nav">' +
           nav('clients', r.name, 'users', 'Leads') +
-          nav('reseau', r.name, 'chat', 'Réseau', (state.clients.filter((c) => (c.pipeline || 'a_contacter') === 'a_contacter' && (c.type === 'vendeur' || c.type === 'mixte' || c.pipeline)).length) || '') +
           nav('biens', r.name, 'building', 'Produits') +
           nav('recherches', r.name, 'search', 'Recherches') +
           nav('radar', r.name, 'search', 'Radar') +
@@ -4529,7 +4529,11 @@
     return tel ? 'https://wa.me/' + tel + '?text=' + encodeURIComponent(cadenceMessage(c)) : '';
   }
 
-  function viewReseau() {
+  function aProspecter() {
+    return state.clients.filter((c) => c.type === 'vendeur' || c.type === 'mixte' || c.projet === 'prospect' ||
+      c.source === 'Immo Data Robot' || c.type === 'societe' || c.type === 'sci' || c.type === 'personne' || c.pipeline);
+  }
+  function viewReseau(dansLeads) {
     const tab = state.filtres.reseauTab || 'a_contacter';
     const q = (state.filtres.reseauQ || '').toLowerCase();
     const typeF = state.filtres.reseauType || '';
@@ -4566,9 +4570,7 @@
       '</div>';
     };
 
-    return head('Prospection', 'Réseau',
-        tous.length + ' lead(s) dans le fichier agence · ' + parStatut(tab).length + ' dans cet onglet.',
-        '<a class="se-btn ghost sm" href="#/pipeline">Vue pipeline</a>') +
+    return (dansLeads ? '<div class="se-note" style="margin-bottom:14px"><b>À prospecter</b> : les propriétaires que vous démarchez (Radar, Immo Data Robot, fichier importé…), du premier message jusqu’à la conversion. Chaque colonne est une étape ; le message WhatsApp est prêt et la relance se programme toute seule (J+15, J+45). Un lead « Converti » devient un lead normal : on crée son produit, puis ses recherches et son suivi.</div>' : head('Prospection', 'À prospecter', tous.length + ' lead(s) · ' + parStatut(tab).length + ' dans cet onglet.', '')) +
       (nbDues
         ? '<div class="se-row" style="margin-bottom:10px">' +
             '<a href="#" data-act="filtre" data-id="reseauCadenceDue:' + (dueSeulement ? '' : '1') + '" class="se-btn sm' + (dueSeulement ? '' : ' ghost') + '" style="border-color:var(--color-alert);color:' + (dueSeulement ? '#fff' : 'var(--color-alert)') + ';background:' + (dueSeulement ? 'var(--color-alert)' : 'transparent') + '">' +
@@ -5040,14 +5042,22 @@
       return true;
     });
     const count = (lt) => state.clients.filter((c) => lt === 'plateforme' ? isPlateforme(c) : !isPlateforme(c)).length;
+    const nbProspecter = aProspecter().filter((c) => ['converti', 'ecarte', 'hors_cible'].indexOf(c.pipeline || 'a_contacter') === -1).length;
+    const ongletsLeads = '<div class="se-tabs" style="margin-bottom:18px">' +
+        '<a href="#" data-act="filtre" data-id="leadType:plateforme" class="' + (leadType === 'plateforme' ? 'active' : '') + '">Leads Plateforme<span>' + count('plateforme') + '</span></a>' +
+        '<a href="#" data-act="filtre" data-id="leadType:manuel" class="' + (leadType === 'manuel' ? 'active' : '') + '">Leads Manuels<span>' + count('manuel') + '</span></a>' +
+        '<a href="#" data-act="filtre" data-id="leadType:prospecter" class="' + (leadType === 'prospecter' ? 'active' : '') + '">À prospecter<span>' + nbProspecter + '</span></a>' +
+      '</div>';
+    if (leadType === 'prospecter') {
+      return head('Prospection', 'Leads', 'Propriétaires à démarcher, étape par étape.',
+        '<a class="se-btn ghost sm" href="#/import">Importer un fichier</a><a class="se-btn ghost sm" href="#/pipeline">Vue pipeline</a><button class="se-btn ghost sm" data-act="client-nouveau">' + ICONS.plus + ' Nouveau lead</button>') +
+        ongletsLeads + viewReseau(true);
+    }
 
     return head('Prospection', 'Leads',
       list.length + ' lead(s) · ' + count('plateforme') + ' plateforme · ' + count('manuel') + ' manuel(s).',
       '<a class="se-btn ghost sm" href="#/import">Importer un fichier</a><a class="se-btn ghost sm" href="#/pipeline">Pipeline de relance</a><button class="se-btn ghost sm" data-act="client-nouveau">' + ICONS.plus + ' Nouveau lead</button>') +
-      '<div class="se-tabs" style="margin-bottom:18px">' +
-        '<a href="#" data-act="filtre" data-id="leadType:plateforme" class="' + (leadType === 'plateforme' ? 'active' : '') + '">Leads Plateforme<span>' + count('plateforme') + '</span></a>' +
-        '<a href="#" data-act="filtre" data-id="leadType:manuel" class="' + (leadType === 'manuel' ? 'active' : '') + '">Leads Manuels<span>' + count('manuel') + '</span></a>' +
-      '</div>' +
+      ongletsLeads +
       '<div class="se-card pad-sm" style="margin-bottom:18px"><div class="se-filters">' +
         '<select class="se-select" data-filter="typeClient"><option value="">Tous</option>' +
           '<option value="acquereur"' + (type === 'acquereur' ? ' selected' : '') + '>Acquéreurs</option>' +
