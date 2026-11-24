@@ -1792,7 +1792,7 @@
       validation: b.validation || 'en_attente', surSeecret: b.surSeecret !== false,
       serveur: true, email: b.email || '', demo: !!b.demo,
       refAgence: b.refAgence || '', nomProprio: b.nom || '', source: b.source || '', sourceFichier: b.sourceFichier || '', importLot: b.importLot || '',
-      notesLibres: b.notesLibres || '', details: b.details || null, mandatOrigine: b.mandatOrigine || null, accesVisites: b.accesVisites || '', verifs: b.verifs || null
+      notesLibres: b.notesLibres || '', suiviAgence: b.suiviAgence || null, details: b.details || null, mandatOrigine: b.mandatOrigine || null, accesVisites: b.accesVisites || '', verifs: b.verifs || null
     };
   }
 
@@ -4117,7 +4117,7 @@
       '<div class="se-bien-photo">' + (photo(b) ? '<img src="' + photo(b) + '" alt=""/>' : '') + badgeBien(b.statut) + '</div>' +
       '<div class="se-bien-body"><span class="se-sub">' + esc(b.refAgence || b.ref) + ' · ' + esc(b.type) + (surPlateforme(b) ? ' · <span style="color:var(--color-club-violet)">Sur Seecret</span>' : '') + '</span>' +
       '<h3>' + esc(b.titre) + '</h3><span class="se-price">' + euro(b.prix) + '</span>' +
-      (b.verifs ? '<div class="se-row" style="gap:4px;margin-top:6px">' + badgesVerifs(b) + '</div>' : '') +
+      (b.verifs || b.suiviAgence ? '<div class="se-row" style="gap:4px;margin-top:6px">' + badgesVerifs(b) + '</div>' : '') +
       '<div class="se-bien-foot">' + esc(qLabel(b.quartier)) + ' · ' + num(b.surface) + ' m² · ' + b.pieces + ' p.</div></div></a>';
   }
   function viewBiensClub() {
@@ -5370,6 +5370,8 @@
         if (mk === 'vendu' && !(v.dvf && v.dvf.statut === 'vendu_probable')) return false;
         if (mk === 'en_ligne' && !(v.enLigne && ['en_ligne', 'a_verifier'].indexOf(v.enLigne.statut) > -1)) return false;
         if (mk === 'libre' && !(v.enLigne && v.enLigne.statut === 'non_trouve' && v.dvf && v.dvf.statut !== 'vendu_probable')) return false;
+        if (mk === 'retire_agence' && !(b.suiviAgence && b.suiviAgence.statut === 'retire')) return false;
+        if (mk === 'baisse_agence' && !(b.suiviAgence && b.suiviAgence.derniereBaisse)) return false;
         if (mk === 'mandat_echu' && !(b.mandatOrigine && b.mandatOrigine.fin && b.mandatOrigine.fin < new Date().toISOString().slice(0, 10))) return false;
       }
       if (q && (b.titre + ' ' + b.ref + ' ' + (b.refAgence || '') + ' ' + (b.adresse || '') + ' ' + qLabel(b.quartier) + ' ' + (b.nomProprio || '')).toLowerCase().indexOf(q) === -1) return false;
@@ -5387,7 +5389,7 @@
         '</select>' +
         (sources.length ? '<select class="se-select" data-filter="sourceBien"><option value="">Toutes les origines</option>' + sources.map((x) => '<option' + (src === x ? ' selected' : '') + '>' + esc(x) + '</option>').join('') + '</select>' : '') +
         '<select class="se-select" data-filter="marcheBien"><option value="">Marché : tout</option>' +
-          [['libre', 'Ni vendu ni en ligne'], ['en_ligne', 'Toujours en ligne'], ['vendu', 'Vendu (DVF)'], ['mandat_echu', 'Mandat d’origine échu'], ['non_verifie', 'Pas encore vérifié']].map((o) => '<option value="' + o[0] + '"' + (mk === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') +
+          [['retire_agence', 'Retiré du site de l’agence'], ['baisse_agence', 'Prix baissé par l’agence'], ['libre', 'Ni vendu ni en ligne'], ['en_ligne', 'Toujours en ligne'], ['vendu', 'Vendu (DVF)'], ['mandat_echu', 'Mandat d’origine échu'], ['non_verifie', 'Pas encore vérifié']].map((o) => '<option value="' + o[0] + '"' + (mk === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') +
         '</select><span class="se-hint">' + list.length + ' résultat(s)</span>' +
         (aVerifier ? '<button class="se-btn ghost sm" data-act="biens-verifier-tous"' + (state.verifLot ? ' disabled' : '') + '>' + (state.verifLot ? 'Vérification en cours…' + (state.verifEtat ? ' ' + state.verifEtat.faits + ' faits, ' + state.verifEtat.enAttente + ' restants' : '') : 'Vérifier vendu / en ligne (' + aVerifier + ')') + '</button>' : '') +
       '</div></div>' +
@@ -5460,11 +5462,31 @@
   }
   const VERIF_DVF = { vendu_probable: ['Vendu (DVF)', 'alert'], pas_de_vente: ['Pas de vente DVF', 'muted'], sans_position: ['Adresse non localisée', 'muted'], erreur: ['DVF indisponible', 'muted'] };
   const VERIF_LIGNE = { en_ligne: ['En ligne', 'warn'], a_verifier: ['Annonce possible', 'muted'], non_trouve: ['Pas trouvé en ligne', 'ok'], indisponible: ['Recherche en ligne indisponible', 'muted'], quota: ['Crédits Exa épuisés', 'muted'], erreur: ['Recherche en ligne en erreur', 'muted'] };
+  function badgeSuiviAgence(b) {
+    const s = b.suiviAgence;
+    if (!s) return '';
+    if (s.statut === 'retire') return '<span class="se-badge alert" title="Annonce disparue du site de l’agence d’origine">Retiré du site agence</span>';
+    if (s.derniereBaisse) return '<span class="se-badge warn">Prix baissé</span>';
+    return '';
+  }
   function badgesVerifs(b) {
     const v = b.verifs;
-    if (!v) return '';
+    if (!v) return badgeSuiviAgence(b);
     const bd = (m, k) => (m[k] ? '<span class="se-badge ' + m[k][1] + '">' + m[k][0] + '</span>' : '');
-    return (v.dvf ? bd(VERIF_DVF, v.dvf.statut) : '') + (v.enLigne ? bd(VERIF_LIGNE, v.enLigne.statut) : '');
+    return badgeSuiviAgence(b) + (v.dvf ? bd(VERIF_DVF, v.dvf.statut) : '') + (v.enLigne ? bd(VERIF_LIGNE, v.enLigne.statut) : '');
+  }
+  function carteSuiviAgence(b) {
+    const s = b.suiviAgence;
+    if (!s) return '';
+    const agence = (b.mandatOrigine && b.mandatOrigine.agence) || 'l’agence d’origine';
+    const prixFichier = Number(b.details && b.details.prixAffiche) || 0;
+    const etat = s.statut === 'retire'
+      ? '<div class="se-note" style="margin-top:10px;border-color:var(--color-alert)"><b>Annonce retirée du site ' + esc(agence) + '</b>' + (s.retireLe ? ' le ' + dFR(s.retireLe) : ' (avant le ' + dFR(s.retireAvant) + ')') + ' : vendu, sous compromis ou mandat terminé. Bon moment pour appeler le vendeur.</div>'
+      : '<div class="se-note" style="margin-top:10px">Toujours en vente chez ' + esc(agence) + ' à <b>' + euro(s.prix) + '</b>' + (prixFichier && s.prix && s.prix !== prixFichier ? ' (fichier : ' + euro(prixFichier) + ')' : '') + '.</div>';
+    const hist = (s.historique || []).slice().reverse().map((h) => '<div class="se-list-item"><div style="flex:1"><div style="font-size:13.5px">' + esc(h.evenement) + (h.ancien ? ' : ' + euro(h.ancien) + ' → ' + euro(h.nouveau) : '') + '</div><div class="se-hint">' + dFR(h.date) + '</div></div></div>').join('');
+    return '<div class="se-card"><h3>Suivi de l’annonce d’origine</h3>' + etat +
+      (hist ? '<div class="se-list" style="margin-top:8px">' + hist + '</div>' : '') +
+      '<p class="se-hint" style="margin-top:8px">Vérifié chaque jour sur le site de l’agence · dernier passage le ' + dFR(s.verifieLe) + '.</p></div>';
   }
   function carteVerifsMarche(b) {
     if (!b.serveur) return '';
@@ -5577,6 +5599,7 @@
             kv('Pièces', b.pieces + ' · ' + b.chambres + ' ch. · ' + b.sdb + ' sdb') +
             kv('Étage', b.etage != null ? (b.etage === 0 ? 'RDC' : esc(String(b.etage))) : '—') + kv('DPE', esc(b.dpe)) + kv('Année de construction', b.anneeConstruction || '—') + kv('Statut', badgeBien(b.statut)) +
           '</div></div>' +
+          carteSuiviAgence(b) +
           carteVerifsMarche(b) +
           '<div class="se-card"><h3>Propriétaire' + (b.mandatOrigine ? ' & mandat d’origine' : '') + '</h3><div class="se-kv" style="margin-top:12px">' +
             kv('Propriétaire', prop ? '<a href="#/client/' + prop.id + '">' + esc(nomClient(prop)) + '</a>' : '<span class="se-hint">non renseigné</span>') +
