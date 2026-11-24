@@ -6544,6 +6544,99 @@ function nettoyerDetails(d) {
   });
   return out;
 }
+// Titre éditorial « logique » d'un bien importé, sans IA, à partir de ses données.
+const normTitre = (x) => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+const NB_PIECES = ['', 'Studio', 'Deux pièces', 'Trois pièces', 'Quatre pièces', 'Cinq pièces', 'Six pièces', 'Sept pièces', 'Huit pièces'];
+function texteEditorialImport(b) {
+  let t = String(b.description || '').replace(/\r/g, '').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+  // En-tête d'annonce collé au texte : « PARIS XIVème : » / « Denfert Rochereau : »
+  t = t.replace(/^[^.:\n]{3,40}\s:\s+/, (m) => (/\b[A-ZÉÈ]{4,}\b/.test(m) && !/\d{2,}\s*m|pi[eè]ces/i.test(m) ? '' : m));
+  if (t.length > 2500) { const c = t.slice(0, 2500); const p = c.lastIndexOf('. '); t = (p > 1500 ? c.slice(0, p + 1) : c).trim(); }
+  return t;
+}
+function titreEditorialImport(b) {
+  const d = normTitre(b.description); const det = b.details || {};
+  const type = normTitre(b.type); const p = Number(b.pieces) || 0;
+  let nom;
+  if (/atelier d.?artiste/.test(d)) nom = 'Atelier d’artiste';
+  else if (/hotel particulier/.test(type)) nom = 'Hôtel particulier';
+  else if (/chateau/.test(type)) nom = 'Château';
+  else if (/propriete/.test(type) || (/maison|villa/.test(type) && /\bpropriete\b/.test(d.slice(0, 200)))) nom = 'Propriété';
+  else if (/villa/.test(type)) nom = 'Villa';
+  else if (/maison de ville/.test(type)) nom = 'Maison de ville';
+  else if (/maison de village/.test(type)) nom = 'Maison de village';
+  else if (/maison/.test(type)) nom = 'Maison' + (p >= 5 ? ' familiale' : '');
+  else if (/peniche/.test(type)) nom = 'Péniche';
+  else if (/immeuble/.test(type)) nom = 'Immeuble';
+  else if (/terrain/.test(type)) nom = 'Terrain';
+  else if (/parking|box/.test(type)) nom = /box/.test(type) ? 'Box' : 'Parking';
+  else if (/bureau/.test(type)) nom = 'Bureaux';
+  else if (/local|commerce/.test(type)) nom = 'Local commercial';
+  else if (/loft/.test(type) || /\bloft\b/.test(d.slice(0, 120))) nom = 'Loft';
+  else if (/duplex|triplex/.test(type)) nom = (p > 1 && p < NB_PIECES.length ? NB_PIECES[p] : 'Appartement') + ' en ' + (/triplex/.test(type) ? 'triplex' : 'duplex');
+  else if (/penthouse/.test(d)) nom = 'Penthouse';
+  else nom = p >= 1 && p < NB_PIECES.length ? NB_PIECES[p] : 'Appartement';
+  // Un trait distinctif, du plus parlant au plus courant.
+  const ext = normTitre(b.exterieur);
+  const traits = [
+    [/piscine (de la residence|en copropriete|de la copropriete|commune)/.test(d) || (b.details && (b.details.prestations || []).some((x) => /piscine en copropri/i.test(x))), 'dans une résidence avec piscine'],
+    [/(avec|sa|une|belle|grande) piscine|piscine (privative|chauffee|exterieure|interieure)/.test(d) && !/piscine (municipale|olympique)/.test(d), 'avec piscine'],
+    [/vue (sur la |sur )?tour eiffel/.test(d), 'avec vue sur la tour Eiffel'],
+    [/vue (sur la |sur )?seine/.test(d), 'avec vue sur la Seine'],
+    [/rooftop|toit.terrasse/.test(d), 'avec toit-terrasse'],
+    [/terrasse/.test(ext) || /(une|sa|belle|grande|vaste|large|agreable) terrasse/.test(d), 'avec terrasse'],
+    [/jardin/.test(ext) || /\bjardin (privatif|prive)/.test(d), 'avec jardin'],
+    [/dernier etage/.test(d), 'au dernier étage'],
+    [/art deco/.test(d), 'Art déco'],
+    [/haussmann/.test(d), 'haussmannien'],
+    [/balcon/.test(ext) || /(un|son|petit|grand|beau|joli) balcon/.test(d), 'avec balcon'],
+    [/traversant/.test(d), 'traversant'],
+    [/plein sud/.test(d) || /^sud$/.test(normTitre(det.exposition)), 'plein sud'],
+    [/vue degagee|sans vis.a.vis/.test(d), 'sans vis-à-vis'],
+    [/calme/.test(d) && /lumineu/.test(d), 'calme et lumineux'],
+    [/renove|refait a neuf/.test(d), 'rénové'],
+    [/a renover|travaux a prevoir|rafraichir/.test(d), 'à rénover']
+  ];
+  const tr = (traits.find((x) => x[0]) || [])[1] || '';
+  // accorde « rénové / lumineux » au féminin pour maison, villa, propriété
+  const fem = /^(Maison|Villa|Propriété|Péniche)/.test(nom);
+  const trait = fem ? tr.replace(/^rénové$/, 'rénovée').replace('calme et lumineux', 'calme et lumineuse').replace('haussmannien', 'haussmannienne').replace('traversant', 'traversante') : tr;
+  // Le lieu : la rue à Paris et en proche banlieue, sinon la ville.
+  const rue = String(b.adresse || '').split(/\s+[—–-]\s+|\n/)[0].replace(/^\s*\d+[\s,]*(bis|ter|b)?\b\s*,?\s*/i, '').trim();
+  const ville = String(b.ville || '').replace(/\s*\d+(er|e|ème|eme)\b.*/i, '').trim();
+  const estParis = /^75/.test(String(b.codePostal || ''));
+  let lieu = '';
+  if (rue && /^(rue|avenue|boulevard|bd|place|quai|square|villa|impasse|allée|allee|cité|cite|passage|cour|chemin|route|sente|hameau)\b/i.test(rue)) {
+    lieu = rue.replace(/^bd\b/i, 'boulevard');
+    lieu = lieu.toLowerCase().replace(/(^|[\s-])([a-zà-ÿ])/g, (m, a, c) => a + c.toUpperCase())
+      .replace(/(\s)(De|Du|Des|La|Le|Les|Et|Sur|Sous|Aux?)(?=\s)/g, (m, a, w) => a + w.toLowerCase()).replace(/(\s)([DL])'/g, (m, a, w) => a + w.toLowerCase() + "'").replace(/([dl])'([a-zà-ÿ])/g, (m, a, c) => a + "'" + c.toUpperCase());
+    lieu = lieu.charAt(0).toLowerCase() + lieu.slice(1);
+    if (!estParis && ville) lieu += ', ' + ville;
+  } else lieu = ville ? 'à ' + ville : '';
+  let titre = [nom, trait].filter(Boolean).join(' ') + (lieu ? (lieu.startsWith('à ') ? ' ' : ', ') + lieu : '');
+  if (titre.length > 90) titre = [nom, trait].filter(Boolean).join(' ') + (ville ? ' à ' + ville : '');
+  if (titre.length > 90) titre = nom + (ville ? ' à ' + ville : '');
+  return titre.slice(0, 90);
+}
+
+function editorialImport(b) {
+  return { titre: titreEditorialImport(b), texte: texteEditorialImport(b), publie: false, modifieLe: nowISO(), auteur: 'Import', publieLe: null, source: 'description du fichier' };
+}
+// Reprend le descriptif des biens importés dans « Texte de la fiche » avec un titre.
+// Sans écraser un texte déjà saisi (sauf ecraser: true). Rien n'est publié.
+app.post('/api/import/editorial', requireAdmin, (req, res) => {
+  const body = req.body || {};
+  const db = readDb();
+  let faits = 0, gardes = 0;
+  db.biens.filter((b) => b.importLot && (!body.lot || b.importLot === String(body.lot))).forEach((b) => {
+    const e = b.editorial || {};
+    if (!body.ecraser && (e.titre || e.texte)) { gardes++; return; }
+    b.editorial = Object.assign({}, e, editorialImport(b));
+    faits++;
+  });
+  if (faits) writeDb(db);
+  res.json({ ok: true, faits: faits, gardes: gardes });
+});
 app.post('/api/import/fiches-vendeurs', requireAdmin, (req, res) => {
   const items = Array.isArray(req.body && req.body.items) ? req.body.items.slice(0, 120) : [];
   const simulation = !!(req.body && req.body.simulation);
@@ -6616,6 +6709,7 @@ app.post('/api/import/fiches-vendeurs', requireAdmin, (req, res) => {
           surSeecret: false, source: 'Fichier De Ferla', sourceFichier: str(b.sourceFichier, 120), importLot: lot,
           agent: nomComplet(req.lead) || DEFAULT_AGENT_NOM, cree: nowISO()
         });
+        bien.editorial = editorialImport(bien);
         if (!simulation) db.biens.push(bien);
       }
       // Photo du bien (JPEG/PNG en base64), si le bien n'en a pas encore.
