@@ -6799,14 +6799,14 @@ async function geocoderNumero(b) {
 }
 async function verifierDvf(b) {
   const g = await geocoderNumero(b);
-  if (!g) return { statut: 'sans_position', raison: 'Adresse sans numéro ou introuvable : pas de contrôle DVF fiable.', maj: nowISO() };
+  if (!g) return { statut: 'sans_position', methode: 'parcelle', raison: 'Adresse sans numéro ou introuvable : pas de contrôle DVF fiable.', maj: nowISO() };
   b.lat = g.lat; b.lon = g.lon; b.insee = g.insee;
   // Parcelle cadastrale du numéro, puis les ventes de cette parcelle seulement.
   const geom = JSON.stringify({ type: 'Point', coordinates: [g.lon, g.lat] });
   const rp = await fetch('https://apicarto.ign.fr/api/cadastre/parcelle?geom=' + encodeURIComponent(geom), { headers: { Accept: 'application/json', 'User-Agent': 'Seecret/1.0' }, signal: AbortSignal.timeout(12000) });
   if (!rp.ok) throw new Error('Cadastre ' + rp.status);
   const ft = ((await rp.json().catch(() => ({}))).features || [])[0];
-  if (!ft) return { statut: 'sans_position', raison: 'Parcelle cadastrale introuvable.', adresseBan: g.label, maj: nowISO() };
+  if (!ft) return { statut: 'sans_position', methode: 'parcelle', raison: 'Parcelle cadastrale introuvable.', adresseBan: g.label, maj: nowISO() };
   const pr = ft.properties || {};
   const idu = String(pr.idu || ((pr.code_dep || '') + (pr.code_com || '') + (pr.com_abs || '000') + (pr.section || '') + (pr.numero || '')));
   const xs = []; const ys = [];
@@ -6916,16 +6916,14 @@ app.post('/api/biens/verifier', requireAdmin, (req, res) => {
   setImmediate(() => verifTraiter().catch(() => { VERIF.enCours = null; }));
   res.json({ ok: true, ajoutes: ids.length, enAttente: VERIF.file.length });
 });
-// Une fois : refaire le contrôle DVF (à l'adresse exacte) des biens importés
-// déjà vérifiés avec l'ancienne méthode. La recherche en ligne est conservée.
+// Refaire le contrôle DVF (à l'adresse exacte) des biens importés encore
+// vérifiés avec l'ancienne méthode. La recherche en ligne est conservée.
 setTimeout(() => {
   try {
     const db = readDb();
     db.migrations = db.migrations || {};
-    if (db.migrations.dvfParcelle) return;
-    const ids = db.biens.filter((b) => b.importLot && b.verifs && b.verifs.dvf && b.verifs.dvf.methode !== 'parcelle').map((b) => b.id);
-    db.migrations.dvfParcelle = { le: nowISO(), biens: ids.length };
-    writeDb(db);
+    // À chaque démarrage : reprend là où un redéploiement a interrompu la file.
+    const ids = db.biens.filter((b) => b.importLot && b.verifs && b.verifs.dvf && b.verifs.dvf.methode !== 'parcelle' && b.verifs.dvf.statut !== 'erreur_definitive').map((b) => b.id);
     if (!ids.length) return;
     ids.forEach((id) => { VERIF.seulDvf[id] = true; });
     VERIF.file = VERIF.file.concat(ids.filter((id) => VERIF.file.indexOf(id) === -1));
