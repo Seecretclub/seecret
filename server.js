@@ -4650,8 +4650,33 @@ function pmScoreVoie(motsA, motsB) {
   return 0;
 }
 
+// Base compacte (pm.db) ; l'ancien format ndjson reste lu s'il est encore là.
+let PM_BASE = null;
+function pmBase() {
+  if (PM_BASE) return PM_BASE;
+  const f = path.join(PM_DIR, 'pm.db');
+  if (!fs.existsSync(f)) return null;
+  try {
+    const Database = require('better-sqlite3');
+    const b = new Database(f, { readonly: true, fileMustExist: true });
+    const sel = 'SELECT s.siren, s.nom, s.forme, l.droit, l.bat, l.entree, l.niveau, l.porte, l.num, l.ind, v.nature, v.nom AS voie, l.section, l.plan, s.groupe, l.insee, s.formeCode FROM lot l JOIN soc s ON s.id = l.soc JOIN voie v ON v.id = l.voie';
+    PM_BASE = { b, adr: b.prepare(sel + ' WHERE l.insee = ? AND (l.num = ? OR CAST(l.num AS INTEGER) = ?)').raw(true), siren: b.prepare(sel + ' WHERE l.soc IN (SELECT id FROM soc WHERE siren = ?)').raw(true) };
+    return PM_BASE;
+  } catch (e) { console.error('[pm-locaux] base illisible :', e.message); return null; }
+}
+function pmFermerBase() { try { if (PM_BASE) PM_BASE.b.close(); } catch (e) { /* rien */ } PM_BASE = null; }
+function pmLignesAdresse(insee, numero) {
+  const b = pmBase();
+  if (b) return b.adr.all(insee, numero, Number(numero) || -1);
+  return pmLireBucket('insee', insee).filter((r) => String(parseInt(r[PMC.num], 10)) === numero);
+}
+function pmLignesSiren(siren) {
+  const b = pmBase();
+  if (b) return b.siren.all(siren);
+  return pmLireBucket('siren', siren.slice(0, 2)).filter((r) => r[PMC.siren] === siren);
+}
 function pmLotsImmeuble(q) {
-  const rows = pmLireBucket('insee', q.insee).filter((r) => String(parseInt(r[PMC.num], 10)) === q.numero);
+  const rows = pmLignesAdresse(q.insee, q.numero);
   if (!rows.length) return [];
   let meilleur = 0;
   const notes = rows.map((r) => { const sc = pmScoreVoie(q.mots, pmMotsVoie(r[PMC.voie], '')); if (sc > meilleur) meilleur = sc; return sc; });
@@ -4749,8 +4774,8 @@ async function pmImporter(raison) {
   if (PM_IMPORT.enCours) return;
   Object.assign(PM_IMPORT, { enCours: true, etape: 'Recherche du dernier millésime DGFiP…', erreur: '', lignes: 0, debut: nowISO() });
   const tmpDir = PM_DIR + '.tmp';
-  const flux = {};
-  const fermerTout = () => Promise.all(Object.values(flux).map((w) => new Promise((ok) => w.end(ok))));
+  let base = null;
+  const fermerTout = () => { try { if (base) base.close(); } catch (e) { /* déjà fermée */ } base = null; return Promise.resolve(); };
   try {
     const { annee, fichiers } = await pmTrouverFichiers();
     const meta = pmMeta();
@@ -4761,15 +4786,33 @@ async function pmImporter(raison) {
     fs.rmSync(tmpDir, { recursive: true, force: true });
     const libre = placeLibreMo();
     if (libre !== null && libre < 150) throw new Error('disque du site presque plein (' + libre + ' Mo libres) : import reporté');
-    fs.mkdirSync(path.join(tmpDir, 'insee'), { recursive: true });
-    fs.mkdirSync(path.join(tmpDir, 'siren'), { recursive: true });
+    fs.mkdirSync(tmpDir, { recursive: true });
     const communes = {};
     let nbEcrits = 0; let disquePlein = '';
-    const ecrire = (dossier, nom, ligne) => {
+    // Format compact : chaque local une seule fois ; sociétés et rues écrites
+    // une fois puis désignées par un numéro (≈ 4 fois moins de place).
+    const Database = require('better-sqlite3');
+    base = new Database(path.join(tmpDir, 'pm.db'));
+    base.pragma('journal_mode = OFF'); base.pragma('synchronous = OFF');
+    base.exec('CREATE TABLE soc (id INTEGER PRIMARY KEY, siren TEXT, nom TEXT, forme TEXT, groupe TEXT, formeCode TEXT);' +
+      'CREATE TABLE voie (id INTEGER PRIMARY KEY, nature TEXT, nom TEXT);' +
+      'CREATE TABLE lot (insee TEXT, num TEXT, ind TEXT, voie INTEGER, soc INTEGER, droit TEXT, bat TEXT, entree TEXT, niveau TEXT, porte TEXT, section TEXT, plan TEXT);');
+    const insSoc = base.prepare('INSERT INTO soc VALUES (?, ?, ?, ?, ?, ?)');
+    const insVoie = base.prepare('INSERT INTO voie VALUES (?, ?, ?)');
+    const insLot = base.prepare('INSERT INTO lot VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    const socIds = new Map(); const voieIds = new Map();
+    let lotEnAttente = [];
+    const vider = base.transaction((l) => l.forEach((r) => insLot.run(r)));
+    const ecrireLigne = (row) => {
       if (disquePlein) return;
-      const cle = dossier + '/' + nom;
-      if (!flux[cle]) flux[cle] = fs.createWriteStream(path.join(tmpDir, dossier, nom + '.ndjson'));
-      flux[cle].write(ligne);
+      const kS = row[PMC.siren] + '|' + row[PMC.nom] + '|' + row[PMC.forme];
+      let idS = socIds.get(kS);
+      if (!idS) { idS = socIds.size + 1; socIds.set(kS, idS); insSoc.run(idS, row[PMC.siren], row[PMC.nom], row[PMC.forme], row[PMC.groupe], row[PMC.formeCode]); }
+      const kV = row[PMC.nature] + '|' + row[PMC.voie];
+      let idV = voieIds.get(kV);
+      if (!idV) { idV = voieIds.size + 1; voieIds.set(kV, idV); insVoie.run(idV, row[PMC.nature], row[PMC.voie]); }
+      lotEnAttente.push([row[PMC.insee], row[PMC.num], row[PMC.indice], idV, idS, row[PMC.droit], row[PMC.bat], row[PMC.entree], row[PMC.niveau], row[PMC.porte], row[PMC.section], row[PMC.plan]]);
+      if (lotEnAttente.length >= 5000) { vider(lotEnAttente); lotEnAttente = []; }
       // Garde-fou : on arrête l'import avant de remplir le disque.
       if (++nbEcrits % 5000 === 0) { const l = placeLibreMo(); if (l !== null && l < 100) disquePlein = 'import arrêté : il ne restait que ' + l + ' Mo sur le disque du site'; }
     };
@@ -4790,9 +4833,7 @@ async function pmImporter(raison) {
         const siren = c[19].trim();
         const row = [siren, c[23].trim(), c[22].trim(), c[17].trim(), c[7].trim(), c[8].trim(), c[9].trim(), c[10].trim(),
           String(parseInt(c[11], 10) || c[11].trim()), c[12].trim(), c[15].trim(), c[16].trim(), c[5].trim(), c[6].trim(), c[20].trim(), insee, c[21].trim()];
-        const json = JSON.stringify(row) + '\n';
-        ecrire('insee', insee, json);
-        if (siren) ecrire('siren', (/^\d{2}/.test(siren) ? siren.slice(0, 2) : 'XX'), json);
+        ecrireLigne(row);
         communes[insee] = c[3].trim();
         PM_IMPORT.lignes++;
       }, tmpZip);
@@ -4801,12 +4842,17 @@ async function pmImporter(raison) {
     }
     fs.rmSync(tmpZip, { recursive: true, force: true });
     if (disquePlein) throw new Error(disquePlein);
+    if (lotEnAttente.length) vider(lotEnAttente);
+    PM_IMPORT.etape = 'Création des index…';
+    base.exec('CREATE INDEX i_lot_adr ON lot (insee, num); CREATE INDEX i_lot_soc ON lot (soc); CREATE INDEX i_soc_siren ON soc (siren);');
     await fermerTout();
     if (!PM_IMPORT.lignes) throw new Error('aucune ligne retenue pour les départements ' + PM_DEPTS.join(', '));
-    fs.writeFileSync(path.join(tmpDir, 'meta.json'), JSON.stringify({ annee, importeLe: nowISO(), lignes: PM_IMPORT.lignes, departements: PM_DEPTS, communes, source: fichiers.map((f) => f.url) }, null, 1));
+    pmFermerBase();
+    fs.writeFileSync(path.join(tmpDir, 'meta.json'), JSON.stringify({ format: 'sqlite', annee, importeLe: nowISO(), lignes: PM_IMPORT.lignes, departements: PM_DEPTS, communes, source: fichiers.map((f) => f.url) }, null, 1));
     fs.rmSync(PM_DIR, { recursive: true, force: true });
     fs.renameSync(tmpDir, PM_DIR);
     PM_CACHE.clear();
+    setTimeout(() => { try { radarReidentifier(); } catch (e) { console.error('[radar] ré-identification :', e.message); } }, 1000);
     Object.assign(PM_IMPORT, { enCours: false, etape: 'Import terminé : ' + PM_IMPORT.lignes.toLocaleString('fr-FR') + ' locaux de sociétés indexés (millésime ' + annee + ').' });
     console.log('[pm-locaux] ' + PM_IMPORT.etape);
   } catch (e) {
@@ -4872,7 +4918,7 @@ app.get('/api/robot/pm/siren/:siren', requireAdmin, (req, res) => {
   if (!/^\d{9}$/.test(siren)) return res.status(400).json({ error: 'SIREN à 9 chiffres requis.' });
   const meta = pmMeta();
   if (!meta) return res.json({ ok: true, disponible: false, import: PM_IMPORT, biens: [] });
-  const lots = pmLireBucket('siren', siren.slice(0, 2)).filter((r) => r[PMC.siren] === siren).map(pmLotDepuisLigne);
+  const lots = pmLignesSiren(siren).map(pmLotDepuisLigne);
   const parAdresse = {};
   lots.forEach((l) => {
     const k = l.insee + '|' + l.adresse;
@@ -4984,7 +5030,7 @@ function radarProprietaire(f) {
 // Autres biens de la société dans le fichier (Paris) : adresses distinctes.
 function radarBiensSociete(siren) {
   if (!siren || !/^\d{9}$/.test(siren)) return [];
-  const lots = pmLireBucket('siren', siren.slice(0, 2)).filter((r) => r[PMC.siren] === siren).map(pmLotDepuisLigne);
+  const lots = pmLignesSiren(siren).map(pmLotDepuisLigne);
   const par = {};
   lots.forEach((l) => { const k = l.insee + '|' + l.adresse; par[k] = par[k] || { adresse: l.adresse, insee: l.insee, lots: 0, niveaux: [] }; par[k].lots++; if (l.niveauLibelle && par[k].niveaux.indexOf(l.niveauLibelle) === -1) par[k].niveaux.push(l.niveauLibelle); });
   return Object.values(par).sort((a, b) => b.lots - a.lots);
@@ -5403,6 +5449,23 @@ function radarPlafonner() {
     RadarSQL.pragma('wal_checkpoint(TRUNCATE)');
     console.warn('[radar] ' + ids.length + ' DPE anciens retirés pour garder de la place (' + placeLibreMo() + ' Mo libres).');
   } catch (e) { console.error('[radar] plafond :', e.message); }
+}
+// Après un import du fichier des propriétaires : on reconnaît les sociétés
+// propriétaires de tous les DPE déjà stockés, sans rien retélécharger.
+function radarReidentifier() {
+  if (!RS) return;
+  const annee = (pmMeta() || {}).annee || null;
+  const rows = RadarSQL.prepare('SELECT data FROM fiches').all();
+  let n = 0;
+  const maj = RadarSQL.transaction((l) => l.forEach((r) => {
+    const f = rsLire(r); if (!f) return;
+    if (f.proprietaire && f.proprietaire.statut === 'identifie' && f.proprietaire.millesime === annee) return;
+    const p = radarProprietaire(f);
+    if (p.statut === 'identifie') { p.nbBiens = radarBiensSociete(p.siren).length || 1; n++; }
+    p.millesime = annee; f.proprietaire = p; rsEcrire(f);
+  }));
+  maj(rows);
+  console.log('[radar] ' + n + ' propriétaire(s) société identifié(s) sur ' + rows.length + ' DPE stockés.');
 }
 async function radarCharger(cle, arrs, per) {
   if (RADAR_CHARGEMENTS[cle] && RADAR_CHARGEMENTS[cle].enCours) return;
