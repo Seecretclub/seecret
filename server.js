@@ -1728,6 +1728,27 @@ app.post('/api/membre/onboarding', requireAuth, (req, res) => {
   res.json({ ok: true, onboarding: req.lead.onboarding });
 });
 
+// Une fois : biens validés dans le CRM et « Sur Seecret » activé, mais restés
+// invisibles des membres (créés directement en Avant-première sans validation,
+// ou validés mais laissés en préparation). Aucun email n'est envoyé.
+setTimeout(() => {
+  try {
+    const db = readDb();
+    db.migrations = db.migrations || {};
+    if (db.migrations.visibilite3) return;
+    const ids = [];
+    (db.biens || []).forEach((b) => {
+      if (b.importLot || b.surSeecret !== true) return;
+      const enLigne = b.statut === 'avant-premiere' || b.statut === 'ouvert';
+      if (enLigne && b.validation !== 'valide') { b.validation = 'valide'; b.valideAt = b.valideAt || nowISO(); ids.push(b.id); }
+      else if (b.validation === 'valide' && ['brouillon', 'a_valider', ''].indexOf(b.statut || '') > -1) { b.statut = 'avant-premiere'; ids.push(b.id); }
+    });
+    db.migrations.visibilite3 = { le: nowISO(), biens: ids };
+    writeDb(db);
+    if (ids.length) console.log('[biens] ' + ids.length + ' bien(s) validé(s) rendus visibles sur la plateforme');
+  } catch (e) { console.error('[biens] migration visibilité', e.message); }
+}, 4000);
+
 // Une fois : statuts des biens alignés sur le parcours vendeur.
 // « Mandat signé » disparaît (le seul mandat est le mandat de recherche de
 // l'acquéreur) ; un bien publié par le vendeur mais pas encore validé passe
@@ -2883,7 +2904,7 @@ app.patch('/api/biens/:id/valider', requireAdmin, (req, res) => {
   bien.valideAt = nowISO();
   // Valider un bien en préparation / à valider le met en avant-première.
   if (['brouillon', 'a_valider', 'mandat', ''].indexOf(bien.statut || '') > -1) bien.statut = 'avant-premiere';
-  if (bien.surSeecret === undefined) bien.surSeecret = true;
+  bien.surSeecret = true;
   let notif = null;
   if (bien.leadId) {
     const lead = db.leads.find((l) => l.id === bien.leadId);
@@ -2973,9 +2994,9 @@ app.post('/api/biens', requireAdmin, (req, res) => {
     photos: Array.isArray(body.photos) ? body.photos.map(String).slice(0, 12) : [],
     atouts: Array.isArray(body.atouts) ? body.atouts.map(String) : [],
     exclusivite: { statut: 'scan_en_cours', liens: [] },
-    validation: 'en_attente', statut: String(body.statut || 'brouillon'), statutDemande: null,
+    validation: ['avant-premiere', 'ouvert'].indexOf(String(body.statut || '')) > -1 ? 'valide' : 'en_attente', statut: String(body.statut || 'brouillon'), statutDemande: null,
     // Créé depuis le CRM : pas sur la plateforme tant que l'agent n'active pas « Sur Seecret ».
-    surSeecret: body.surSeecret === true,
+    surSeecret: body.surSeecret === true || (body.surSeecret !== false && ['avant-premiere', 'ouvert'].indexOf(String(body.statut || '')) > -1),
     agent: nomComplet(req.lead) || DEFAULT_AGENT_NOM, cree: nowISO()
   };
   db.biens.push(bien);
@@ -3033,6 +3054,13 @@ app.patch('/api/biens/:id', requireAdmin, (req, res) => {
   if (Array.isArray(body.atouts)) bien.atouts = body.atouts.map(String);
   if (Array.isArray(body.photos)) bien.photos = body.photos.map(String).slice(0, 12);
   if (typeof body.surSeecret === 'boolean') bien.surSeecret = body.surSeecret;
+  // « Sur Seecret » activé par l'agent : il veut le bien visible. S'il est déjà
+  // validé mais encore en préparation, il passe en Avant-première ; s'il est
+  // déjà en Avant-première / En vente sans validation, il devient validé.
+  if (body.surSeecret === true && !bien.importLot) {
+    if (bien.validation === 'valide' && ['brouillon', 'a_valider', ''].indexOf(bien.statut || '') > -1) bien.statut = 'avant-premiere';
+    if ((bien.statut === 'avant-premiere' || bien.statut === 'ouvert') && bien.validation !== 'valide') { bien.validation = 'valide'; bien.valideAt = nowISO(); }
+  }
   // Pipeline Propositions → Offres (étape 4 du plan de fusion) : étape avant
   // l'offre écrite, post-visite — à_présenter / présentée / réponse_reçue.
   if (['a_presenter', 'presentee', 'reponse_recue', ''].indexOf(body.etapeProposition) > -1) {

@@ -1333,6 +1333,31 @@
     } catch (e) { /* non bloquant */ }
   }
 
+  // Biens restés seulement dans ce navigateur (créés quand le propriétaire
+  // n'était pas encore synchronisé) : impossibles à publier. On les envoie au
+  // serveur dès que leur propriétaire y existe, puis la copie serveur fait foi.
+  // Les biens d'exemple (b1…b8) ne sont jamais envoyés.
+  async function rattraperBiensLocaux() {
+    const surServeur = new Set((state.biensServeur || []).map((b) => b.id));
+    const avant = state.biens.length;
+    state.biens = state.biens.filter((b) => !(b.serverId && surServeur.has(b.serverId)));
+    let envoyes = 0;
+    for (const b of state.biens.slice()) {
+      if (b.serverId || /^b\d+$/.test(b.id) || b.demo) continue;
+      const proprio = client(b.proprietaireId);
+      if (!proprio || !proprio.serverId) continue;
+      try {
+        const r = await fetch('/api/biens', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(Object.assign({}, b, { proprietaireId: proprio.serverId })) });
+        const res = await r.json().catch(() => ({}));
+        if (!r.ok || !res.bien) continue;
+        state.biensServeur.push(mapBienServeur(res.bien));
+        state.biens = state.biens.filter((x) => x !== b);
+        envoyes++;
+      } catch (e) { /* on réessaiera au prochain chargement */ }
+    }
+    if (envoyes) toast(envoyes + ' bien(s) qui n’existai(en)t que sur cet appareil ont été enregistrés : ils peuvent maintenant être publiés.', 'ok');
+    if (envoyes || state.biens.length !== avant) commit();
+  }
   async function syncServeur() {
     try {
       const [rl, rd, rt, rb, rr, ra, ro] = await Promise.all([
@@ -1390,6 +1415,7 @@
         }
       } catch (e) { /* barème par défaut */ }
       state.biensServeur = rb.ok ? ((await rb.json()).biens || []).map(mapBienServeur) : [];
+      if (rb.ok) await rattraperBiensLocaux();
       try {
         const rm = await fetch('/api/messages', { headers: { accept: 'application/json' } });
         if (rm.ok) state.conversations = (await rm.json()).conversations || [];
