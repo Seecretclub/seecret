@@ -6732,7 +6732,7 @@ app.post('/api/import/fiches-vendeurs', requireAdmin, (req, res) => {
 
 // ---- Vérifications marché d'un bien : vendu (DVF) ? toujours en ligne (portails) ? ----
 // Tâche de fond, un bien à la fois, pour ne pas saturer le Cerema ni Exa.
-const VERIF = { file: [], enCours: null, faits: 0, debut: null, erreurs: 0 };
+const VERIF = { file: [], enCours: null, faits: 0, debut: null, erreurs: 0, seulDvf: {} };
 function insseeDepuisCp(cp) {
   const c = String(cp || '');
   if (/^750(\d\d)$/.test(c)) return c === '75016' || c === '75116' ? '75116' : '751' + c.slice(3);
@@ -6746,14 +6746,33 @@ const typeDvfCompatible = (type, lib) => {
   if (/bureau|local|commerce|immeuble/.test(t)) return /activite|mixte|indetermine|appartement|maison/.test(l);
   return /appartement/.test(l);
 };
+// Géocodage à l'adresse exacte (BAN) : on n'utilise jamais la position du
+// fichier d'origine, souvent celle du quartier.
+async function geocoderNumero(b) {
+  const q = [b.adresse, b.codePostal, b.ville].filter(Boolean).join(' ');
+  if (!q || !/^\s*\d/.test(String(b.adresse || ''))) return null;
+  const r = await fetch('https://api-adresse.data.gouv.fr/search/?limit=1&q=' + encodeURIComponent(q) + (b.codePostal ? '&postcode=' + encodeURIComponent(b.codePostal) : ''), { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(8000) });
+  if (!r.ok) throw new Error('BAN ' + r.status);
+  const f = ((await r.json()).features || [])[0];
+  if (!f || (f.properties || {}).type !== 'housenumber' || (f.properties.score || 0) < 0.6) return null;
+  return { lon: f.geometry.coordinates[0], lat: f.geometry.coordinates[1], insee: f.properties.citycode, label: f.properties.label };
+}
 async function verifierDvf(b) {
-  if (!b.lat || !b.lon) await normaliserAdresse(b);
-  if (!b.lat || !b.lon) return { statut: 'sans_position', maj: nowISO() };
-  const d = 0.00025; // ~25 m autour de l'adresse : la parcelle et ses voisines
-  const bbox = [b.lon - d, b.lat - d, b.lon + d, b.lat + d].map((x) => x.toFixed(6)).join(',');
-  const insee = b.insee || insseeDepuisCp(b.codePostal);
-  const params = Object.assign({ in_bbox: bbox }, insee ? { code_insee: insee } : {});
-  const muts = await dvfCerema(params, 4, { geo: true, budgetMs: 25000 });
+  const g = await geocoderNumero(b);
+  if (!g) return { statut: 'sans_position', raison: 'Adresse sans numéro ou introuvable : pas de contrôle DVF fiable.', maj: nowISO() };
+  b.lat = g.lat; b.lon = g.lon; b.insee = g.insee;
+  // Parcelle cadastrale du numéro, puis les ventes de cette parcelle seulement.
+  const geom = JSON.stringify({ type: 'Point', coordinates: [g.lon, g.lat] });
+  const rp = await fetch('https://apicarto.ign.fr/api/cadastre/parcelle?geom=' + encodeURIComponent(geom), { headers: { Accept: 'application/json', 'User-Agent': 'Seecret/1.0' }, signal: AbortSignal.timeout(12000) });
+  if (!rp.ok) throw new Error('Cadastre ' + rp.status);
+  const ft = ((await rp.json().catch(() => ({}))).features || [])[0];
+  if (!ft) return { statut: 'sans_position', raison: 'Parcelle cadastrale introuvable.', adresseBan: g.label, maj: nowISO() };
+  const pr = ft.properties || {};
+  const idu = String(pr.idu || ((pr.code_dep || '') + (pr.code_com || '') + (pr.com_abs || '000') + (pr.section || '') + (pr.numero || '')));
+  const xs = []; const ys = [];
+  JSON.stringify(ft.geometry.coordinates).replace(/\[(-?[\d.]+),(-?[\d.]+)\]/g, (m, x, y) => { xs.push(+x); ys.push(+y); return m; });
+  const bbox = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)].map((v) => v.toFixed(6)).join(',');
+  const muts = await dvfCerema({ code_insee: g.insee, in_bbox: bbox }, 4, { geo: true, budgetMs: 25000 });
   const depuis = (b.mandatOrigine && b.mandatOrigine.debut) || '';
   const surf = Number(b.surface) || 0;
   let derniere = '';
@@ -6761,18 +6780,21 @@ async function verifierDvf(b) {
   muts.forEach((x) => {
     const date = String(x.datemut || '');
     if (date > derniere) derniere = date;
+    if (!(x.l_idpar || []).some((p) => String(p) === idu)) return;
     if (!/vente/i.test(x.libnatmut || '')) return;
     if (!typeDvfCompatible(b.type, x.libtypbien)) return;
     const sb = Number(x.sbati) || 0;
-    const ok = surf && sb ? Math.abs(sb - surf) <= Math.max(4, surf * 0.12) : false;
-    if (!ok) return;
-    ventes.push({ date: date, prix: Math.round(Number(x.valeurfonc) || 0), surface: sb, type: String(x.libtypbien || '').toLowerCase(), apresMandat: !!(depuis && date >= depuis) });
+    const prix = Math.round(Number(x.valeurfonc) || 0);
+    // Prix symbolique (cession familiale, euro symbolique) : écarté.
+    if (prix < 20000 || (sb && prix / sb < 1000)) return;
+    if (!(surf && sb && Math.abs(sb - surf) <= Math.max(4, surf * 0.12))) return;
+    ventes.push({ date: date, prix: prix, surface: sb, type: String(x.libtypbien || '').toLowerCase(), apresMandat: !!(depuis && date >= depuis) });
   });
   ventes.sort((a, z) => z.date.localeCompare(a.date));
   const apres = ventes.filter((v) => v.apresMandat);
   return {
-    statut: apres.length ? 'vendu_probable' : 'pas_de_vente', maj: nowISO(),
-    ventes: ventes.slice(0, 6), mutationsLues: muts.length, donneesJusquau: derniere,
+    statut: apres.length ? 'vendu_probable' : 'pas_de_vente', maj: nowISO(), methode: 'parcelle',
+    adresseBan: g.label, parcelle: idu, ventes: ventes.slice(0, 6), mutationsLues: muts.length, donneesJusquau: derniere,
     // DVF est publié avec plusieurs mois de retard : une vente récente n'y figure pas encore.
     couvreMandat: !!(depuis && derniere && derniere >= depuis)
   };
@@ -6822,11 +6844,13 @@ async function verifTraiter() {
       const copie = JSON.parse(JSON.stringify(b0));
       const res = {};
       try { res.dvf = await verifierDvf(copie); } catch (e) { res.dvf = { statut: 'erreur', raison: String(e.message || e).slice(0, 120), maj: nowISO() }; }
-      try { res.enLigne = await verifierEnLigne(copie); } catch (e) { res.enLigne = { statut: e.quota ? 'quota' : 'erreur', raison: String(e.message || e).slice(0, 120), maj: nowISO() }; }
+      if (VERIF.seulDvf[id] && b0.verifs && b0.verifs.enLigne) res.enLigne = b0.verifs.enLigne;
+      else { try { res.enLigne = await verifierEnLigne(copie); } catch (e) { res.enLigne = { statut: e.quota ? 'quota' : 'erreur', raison: String(e.message || e).slice(0, 120), maj: nowISO() }; } }
+      delete VERIF.seulDvf[id];
       const db = readDb();
       const b = db.biens.find((x) => x.id === id);
       if (b) {
-        if (!b.lat && copie.lat) { b.lat = copie.lat; b.lon = copie.lon; }
+        if (res.dvf && res.dvf.adresseBan && copie.lat) { b.lat = copie.lat; b.lon = copie.lon; }
         if (!b.insee && copie.insee) b.insee = copie.insee;
         b.verifs = res;
         writeDb(db);
@@ -6843,7 +6867,8 @@ app.post('/api/biens/verifier', requireAdmin, (req, res) => {
   const body = req.body || {};
   const db = readDb();
   let ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
-  if (body.lot) ids = db.biens.filter((b) => b.importLot === String(body.lot) && (body.forcer || !b.verifs)).map((b) => b.id);
+  if (body.lot) ids = db.biens.filter((b) => b.importLot === String(body.lot) && (body.forcer || body.seulDvf || !b.verifs)).map((b) => b.id);
+  if (body.seulDvf) ids.forEach((id) => { VERIF.seulDvf[id] = true; });
   ids = ids.filter((id) => db.biens.some((b) => b.id === id) && VERIF.file.indexOf(id) === -1 && VERIF.enCours !== id);
   VERIF.file = VERIF.file.concat(ids);
   if (!VERIF.debut || (!VERIF.enCours && !VERIF.file.length)) { VERIF.debut = nowISO(); VERIF.faits = 0; VERIF.erreurs = 0; }

@@ -5451,7 +5451,8 @@
     return '<div class="se-card"><div class="se-row" style="justify-content:space-between;gap:10px"><h3>Vendu ? Toujours en ligne ?</h3>' + bouton + '</div>' +
       '<div class="se-row" style="gap:6px;margin-top:8px">' + badgesVerifs(b) + '</div>' +
       '<div class="se-hint" style="margin-top:12px;text-transform:uppercase;letter-spacing:.06em;font-size:11px">Ventes DVF à cette adresse (même type, surface proche)</div>' +
-      (ventes ? '<div class="se-list" style="margin-top:6px">' + ventes + '</div>' : '<p class="se-hint" style="margin-top:6px">Aucune vente correspondante.</p>') +
+      (ventes ? '<div class="se-list" style="margin-top:6px">' + ventes + '</div>' : '<p class="se-hint" style="margin-top:6px">' + esc(d.raison || 'Aucune vente correspondante.') + '</p>') +
+      (d.adresseBan ? '<p class="se-hint" style="margin-top:4px">Contrôlé sur la parcelle du ' + esc(d.adresseBan) + (d.parcelle ? ' (' + esc(d.parcelle.slice(-6)) + ')' : '') + '.</p>' : '') +
       (d.donneesJusquau ? '<p class="se-hint" style="margin-top:6px">Données DVF disponibles jusqu’au ' + dFR(d.donneesJusquau) + (d.couvreMandat === false && b.mandatOrigine && b.mandatOrigine.debut ? ' : la période du mandat n’est pas encore couverte (DVF paraît avec plusieurs mois de retard).' : '.') + '</p>' : '') +
       '<div class="se-hint" style="margin-top:14px;text-transform:uppercase;letter-spacing:.06em;font-size:11px">Annonces trouvées</div>' +
       (liens ? '<div class="se-list" style="margin-top:6px">' + liens + '</div>' : '<p class="se-hint" style="margin-top:6px">' + (l.statut === 'non_trouve' ? 'Aucune annonce correspondante trouvée sur les portails.' : esc(l.raison || 'Recherche non faite.')) + '</p>') +
