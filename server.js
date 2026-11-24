@@ -4682,7 +4682,7 @@ function pmBase() {
     return PM_BASE;
   } catch (e) { console.error('[pm-locaux] base illisible :', e.message); return null; }
 }
-function pmFermerBase() { try { if (PM_BASE) PM_BASE.b.close(); } catch (e) { /* rien */ } PM_BASE = null; }
+function pmFermerBase() { try { if (PM_BASE) PM_BASE.b.close(); } catch (e) { /* rien */ } PM_BASE = null; if (typeof RADAR_BIENS_CACHE !== 'undefined') RADAR_BIENS_CACHE.clear(); }
 function pmLignesAdresse(insee, numero) {
   const b = pmBase();
   if (b) return b.adr.all(insee, String(parseInt(numero, 10) || numero)).map(pmLigneReparee);
@@ -5089,8 +5089,24 @@ function radarProprietaireParcelle(f) {
   return p;
 }
 // Autres biens de la société dans le fichier (Paris) : adresses distinctes.
+// Une requête groupée (adresse → nombre de lots, étages) au lieu de relire
+// tous les lots : les gros bailleurs en ont des dizaines de milliers.
+const RADAR_BIENS_CACHE = new Map();
 function radarBiensSociete(siren) {
   if (!siren || !/^\d{9}$/.test(siren)) return [];
+  if (RADAR_BIENS_CACHE.has(siren)) return RADAR_BIENS_CACHE.get(siren);
+  const b = pmBase();
+  if (b) {
+    if (!b.biens) b.biens = b.b.prepare("SELECT l.insee, l.num, l.ind, v.nature, v.nom, COUNT(*) AS n, GROUP_CONCAT(DISTINCT l.niveau) AS niv FROM lot l JOIN voie v ON v.id = l.voie WHERE l.soc IN (SELECT id FROM soc WHERE siren = ?) GROUP BY l.insee, l.num, l.ind, l.voie ORDER BY n DESC");
+    const res = b.biens.all(siren).map((r) => ({
+      adresse: pmTexte([String(parseInt(r.num, 10) || r.num || ''), r.ind || '', r.nature || '', r.nom || ''].filter(Boolean).join(' ').replace(/\s+/g, ' ')),
+      insee: r.insee, lots: r.n,
+      niveaux: String(r.niv || '').split(',').filter(Boolean).sort().map(pmNiveauLibelle).filter(Boolean)
+    }));
+    if (RADAR_BIENS_CACHE.size > 2000) RADAR_BIENS_CACHE.clear();
+    RADAR_BIENS_CACHE.set(siren, res);
+    return res;
+  }
   const lots = pmLignesSiren(siren).map(pmLotDepuisLigne);
   const par = {};
   lots.forEach((l) => { const k = l.insee + '|' + l.adresse; par[k] = par[k] || { adresse: l.adresse, insee: l.insee, lots: 0, niveaux: [] }; par[k].lots++; if (l.niveauLibelle && par[k].niveaux.indexOf(l.niveauLibelle) === -1) par[k].niveaux.push(l.niveauLibelle); });
