@@ -4712,7 +4712,14 @@
     radar.chargement = false; render();
     if (radar.data && (radar.data.chargement || (radar.data.proprietaires.import || {}).enCours)) setTimeout(() => { if (parseRoute().name === 'radar' && radar.page === 1) chargerRadar(true); }, 3000);
   }
-  function rdRelancer() { radar.page = 1; radar.lignes = []; chargerRadar(); }
+  function rdCritJson() { const c = {}; Object.keys(RD_CRIT()).forEach((k) => { c[k] = radar[k]; }); c.siren = radar.siren; return JSON.stringify(c); }
+  function rdRelancer() { radar.applique = rdCritJson(); radar.page = 1; radar.lignes = []; chargerRadar(); }
+  // Les critères ne partent qu'au clic sur « Rechercher » : on signale ceux pas encore appliqués.
+  function rdMajBouton() {
+    const enAttente = radar.applique && rdCritJson() !== radar.applique;
+    document.querySelectorAll('[data-rd-attente]').forEach((el) => { el.hidden = !enAttente; });
+    document.querySelectorAll('[data-act="radar-rechercher"]').forEach((el) => { el.classList.toggle('rd-a-lancer', !!enAttente); });
+  }
   function rdProprio(p, liens) {
     p = p || {};
     if (p.statut === 'identifie') {
@@ -4742,11 +4749,13 @@
   }
   function viewRadar() {
     const D = radar.data;
-    if (!D && !radar.chargement && !radar.erreur) chargerRadar();
+    if (!D && !radar.chargement && !radar.erreur) rdRelancer();
     const intro = head('Prospection', 'Radar des futurs vendeurs', 'Chaque ligne est un DPE : un logement qui va être vendu ou loué. Cliquez une ligne : la fiche réunit le propriétaire, ses raisons de vendre, comment le contacter et vos clients intéressés.', '<button class="se-btn ghost sm" data-act="radar-aide">' + (radar.aide ? 'Fermer' : 'Comment ça marche ?') + '</button>');
     if (!D) return intro + '<div class="se-card"><p class="se-hint">' + (radar.erreur ? 'Radar indisponible : ' + esc(radar.erreur) : 'Chargement…') + '</p></div>';
     const U = D.une || {};
-    const une = '<a href="#" class="rd-une" data-act="radar-une"><b>Aujourd’hui : ' + num(U.jour) + ' DPE</b> correspondent à vos clients (membres du club ou leads du CRM)<span>Cette semaine : ' + num(U.semaine) + ' sur ' + num(U.semaineTotal) + ' DPE à Paris · voir la liste →</span></a>';
+    const derniere = U.derniere && U.derniere < new Date().toISOString().slice(0, 10) ? U.derniere : '';
+    const une = '<a href="#" class="rd-une" data-act="radar-une"><b>' + (derniere ? 'Dernière publication ADEME (' + rdDate(derniere) + ')' : 'Aujourd’hui') + ' : ' + num(U.jour) + ' DPE</b> correspondent à vos clients (membres du club ou leads du CRM)<span>' + (derniere ? 'Dernière semaine publiée' : 'Cette semaine') + ' : ' + num(U.semaine) + ' sur ' + num(U.semaineTotal) + ' DPE à Paris · voir la liste →</span>' +
+      (derniere ? '<span class="rd-une-note">L’ADEME met en ligne les DPE avec une à deux semaines de retard : « Aujourd’hui » et « Cette semaine » partent donc du ' + rdDate(derniere) + '.</span>' : '') + '</a>';
     const P = D.proprietaires || {}; const imp = P.import || {};
     const pm = P.disponible ? '' : '<div class="se-note rd-pm" style="margin-bottom:14px">' + (imp.enCours ? '<span><b>Chargement du fichier des propriétaires</b> · ' + esc(imp.etape || '') + '</span>' : '<span>Pour reconnaître les propriétaires (SCI, sociétés), chargez une fois le fichier officiel DGFiP' + (imp.erreur ? ' (dernier essai : ' + esc(imp.erreur) + ')' : '') + '.</span><button class="se-btn sm" data-act="radar-pm-importer">Charger le fichier (Paris)</button>') + '</div>';
     const aide = radar.aide ? '<div class="se-card rd-aide"><h3>Comment fonctionne le Radar</h3><ol>' +
@@ -4779,7 +4788,9 @@
         sel('tri', ['Tri', [['chances', 'Plus de chances de vendre'], ['recent', 'DPE le plus récent'], ['ancien', 'DPE le plus ancien'], ['clients', 'Plus de clients intéressés'], ['surface', 'Plus grande surface']]]) +
       '</div>' +
       '<div class="rd-form-actions"><label class="rd-toggle"><input type="checkbox" data-rdf="dernierEtage"' + (radar.dernierEtage ? ' checked' : '') + '/> Dernier étage</label><label class="rd-toggle"><input type="checkbox" data-rdf="contact"' + (radar.contact ? ' checked' : '') + '/> Contact trouvé (tél., email ou LinkedIn)</label>' +
-        (modifie ? '<button class="se-btn ghost sm" data-act="radar-reset">Effacer les critères</button>' : '') + '</div></div>';
+        (modifie ? '<button class="se-btn ghost sm" data-act="radar-reset">Effacer les critères</button>' : '') +
+        '<span class="rd-attente" data-rd-attente' + (radar.applique && rdCritJson() !== radar.applique ? '' : ' hidden') + '>Critères modifiés : lancez la recherche</span>' +
+        '<button class="se-btn rd-rechercher' + (radar.applique && rdCritJson() !== radar.applique ? ' rd-a-lancer' : '') + '" data-act="radar-rechercher"' + (radar.chargement ? ' disabled' : '') + '>' + (radar.chargement ? 'Recherche…' : 'Rechercher') + '</button></div></div>';
     const ch = D.chargement;
     const charg = ch ? '<div class="se-card rd-job"><b>Chargement des DPE ' + esc(D.periode.libelle) + '…</b><div class="rd-barre" style="margin-top:8px"><i style="width:' + Math.round(ch.faits / Math.max(1, ch.total) * 100) + '%"></i></div><div class="se-hint" style="margin-top:6px">' + ch.faits + '/' + ch.total + ' arrondissement' + (ch.total > 1 ? 's' : '') + ' · ' + num(ch.lus) + ' DPE lus. La liste se complète toute seule.</div></div>' : '';
     const entete = '<div class="rd-resultats"><b>' + num(D.total) + ' DPE ' + esc(D.periode.libelle) + '</b><span class="se-hint">' + esc(radar.secteurs.length ? radar.secteurs.map((q) => qLib(q).replace('Paris ', '')).join(', ') : 'tout Paris') + (radar.client ? ' · qui intéressent un client' : '') + '</span></div>' +
@@ -6443,7 +6454,8 @@
       if (d) { d.statut = 'nouvelle'; commit(); toast('Demande relancée.', 'ok'); }
     },
     'radar-aide': () => { radar.aide = !radar.aide; render(); },
-    'radar-periode': (el, id) => { radar.periode = id; rdRelancer(); },
+    'radar-periode': (el, id) => { radar.periode = id; render(); },
+    'radar-rechercher': () => { rdRelancer(); },
     'radar-vue': (el, id) => { radar.vue = id; render(); },
     'radar-vers-secteur': (el, id) => { radar.secteurs = [id]; radar.vue = 'liste'; rdRelancer(); },
     'radar-siren': (el, id) => { radar.siren = id || ''; radar.sirenNom = el.getAttribute('data-nom') || ''; radar.vue = 'liste'; rdRelancer(); },
@@ -6459,9 +6471,9 @@
       } catch (e) { toast(e.message, 'warn'); }
       render();
     },
-    'radar-secteur': (el, id) => { radar.secteurs = id === 'tout' ? [] : (radar.secteurs.indexOf(id) > -1 ? radar.secteurs.filter((x) => x !== id) : radar.secteurs.concat([id])); rdRelancer(); },
-    'radar-classe': (el, id) => { radar.classes = radar.classes.indexOf(id) > -1 ? radar.classes.filter((x) => x !== id) : radar.classes.concat([id]).sort(); rdRelancer(); },
-    'radar-reset': () => { const p = radar.periode, t = radar.tri; Object.assign(radar, RD_CRIT(), { periode: p, tri: t }); rdRelancer(); },
+    'radar-secteur': (el, id) => { radar.secteurs = id === 'tout' ? [] : (radar.secteurs.indexOf(id) > -1 ? radar.secteurs.filter((x) => x !== id) : radar.secteurs.concat([id])); render(); },
+    'radar-classe': (el, id) => { radar.classes = radar.classes.indexOf(id) > -1 ? radar.classes.filter((x) => x !== id) : radar.classes.concat([id]).sort(); render(); },
+    'radar-reset': () => { const p = radar.periode, t = radar.tri; Object.assign(radar, RD_CRIT(), { periode: p, tri: t }); render(); },
     'radar-une': () => { radar.periode = 'semaine'; radar.client = '1'; radar.tri = 'recent'; rdRelancer(); },
     'radar-plus': () => { radar.page += 1; chargerRadar(true); },
     'radar-pm-importer': async () => {
@@ -7482,7 +7494,7 @@
     enregistrerBien(b, { photos: p }, e.detail.vers === 0 ? 'Nouvelle photo principale.' : 'Ordre des photos enregistré.');
   });
   document.addEventListener('change', async (e) => {
-    if (e.target.hasAttribute('data-rdf')) { const k = e.target.getAttribute('data-rdf'); radar[k] = e.target.type === 'checkbox' ? e.target.checked : e.target.value; rdRelancer(); return; }
+    if (e.target.hasAttribute('data-rdf')) { const k = e.target.getAttribute('data-rdf'); radar[k] = e.target.type === 'checkbox' ? e.target.checked : e.target.value; rdMajBouton(); return; }
     if (e.target.hasAttribute('data-import-fichier')) {
       const f = e.target.files && e.target.files[0];
       if (!f) return;
@@ -8034,7 +8046,11 @@
     }
   });
 
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target.hasAttribute && e.target.hasAttribute('data-rdf') && e.target.tagName === 'INPUT') { e.preventDefault(); radar[e.target.getAttribute('data-rdf')] = e.target.value; rdRelancer(); }
+  });
   document.addEventListener('input', (e) => {
+    if (e.target.hasAttribute && e.target.hasAttribute('data-rdf') && e.target.type !== 'checkbox') { radar[e.target.getAttribute('data-rdf')] = e.target.value; rdMajBouton(); return; }
     if (e.target.hasAttribute && e.target.hasAttribute('data-visite-piece')) {
       const carte = e.target.closest('[data-visite]');
       const l = state.visiteEdition && state.visiteEdition[carte.getAttribute('data-visite')];

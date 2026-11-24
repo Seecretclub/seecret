@@ -4619,10 +4619,12 @@ async function pmTrouverFichiers() {
   const r = await fetch(PM_ATTACHMENTS, { headers: { Accept: 'application/json', 'User-Agent': 'Seecret/1.0' }, signal: AbortSignal.timeout(30000) });
   if (!r.ok) throw new Error('liste des fichiers DGFiP indisponible (HTTP ' + r.status + ')');
   const texte = await r.text();
-  const re = /fichier_des_locaux_situation_(\d{4})_dpts?_(\d+)_a_(\d+)_zip/gi;
+  // Deux formats publiés : par tranches (…_2023_dpts_01_a_19_zip) jusqu'en 2023,
+  // puis un fichier national par an (…_2025_zip, fichiers_des_locaux_situation_2026zip).
+  const re = /fichiers?_des_locaux_situation_(\d{4})(?:_dpts?_(\d+)_a_(\d+))?_?zip/gi;
   const vus = {};
   let m;
-  while ((m = re.exec(texte))) vus[m[0].toLowerCase()] = { id: m[0].toLowerCase(), annee: +m[1], de: +m[2], a: +m[3] };
+  while ((m = re.exec(texte))) vus[m[0].toLowerCase()] = { id: m[0].toLowerCase(), annee: +m[1], de: m[2] ? +m[2] : 0, a: m[3] ? +m[3] : 999 };
   const tous = Object.values(vus);
   if (!tous.length) throw new Error('aucun fichier « locaux » trouvé dans la liste DGFiP');
   const annee = Math.max.apply(null, tous.map((f) => f.annee));
@@ -4869,7 +4871,9 @@ async function radarDpeArrondissement(arr, c, max) {
 function radarFicheDepuisDpe(s, arr) {
   const comp = analyserComplementAdresse([s.complement_adresse_logement, s.complement_adresse_batiment].filter(Boolean).join(' '));
   let etage = (s.numero_etage_appartement != null && s.numero_etage_appartement !== '') ? parseInt(s.numero_etage_appartement, 10) : null;
-  if (etage == null && comp.etage) etage = comp.etage === 'RDC' ? 0 : parseInt(comp.etage, 10);
+  // L'ADEME met souvent 0 par défaut : le complément (« Etage 5 », « 6ème étage ») fait foi.
+  if ((etage == null || etage === 0) && comp.etage && comp.etage !== 'RDC') etage = parseInt(comp.etage, 10);
+  if (etage == null && comp.etage === 'RDC') etage = 0;
   if (etage == null) { const e = etageDepuisAdresseBrute(s.adresse_brut); if (e) etage = e === 'RDC' ? 0 : parseInt(e, 10); }
   const geo = String(s._geopoint || '').split(',').map(Number);
   return {
@@ -5268,11 +5272,14 @@ const RS = RadarSQL ? {
   parBan: RadarSQL.prepare('SELECT id, data FROM fiches WHERE ban = ?'),
   liste: RadarSQL.prepare('SELECT data FROM fiches WHERE date >= @de AND date <= @a AND (@q = \'\' OR quartier = @q) AND (@t = \'\' OR type = @t) AND surface >= @smin ORDER BY date DESC LIMIT 20000'),
   cpt: RadarSQL.prepare('SELECT COUNT(*) AS n FROM fiches'),
+  derniere: RadarSQL.prepare('SELECT MAX(date) AS d FROM fiches'),
   couvGet: RadarSQL.prepare('SELECT maj FROM couverture WHERE cle = ?'),
   couvSet: RadarSQL.prepare('INSERT INTO couverture (cle, maj) VALUES (?, ?) ON CONFLICT(cle) DO UPDATE SET maj = excluded.maj'),
   cacheGet: RadarSQL.prepare('SELECT maj, data FROM cache WHERE type = ? AND cle = ?'),
   cacheSet: RadarSQL.prepare('INSERT INTO cache (type, cle, maj, data) VALUES (?, ?, ?, ?) ON CONFLICT(type, cle) DO UPDATE SET maj = excluded.maj, data = excluded.data')
 } : null;
+// Une fois : recharger les DPE déjà stockés pour corriger les étages (0 par défaut).
+if (RS) { try { if (!RS.cacheGet.get('meta', 'etage-v2')) { RadarSQL.exec('DELETE FROM couverture'); RS.cacheSet.run('meta', 'etage-v2', new Date().toISOString(), '1'); } } catch (e) { /* rien */ } }
 const rsLire = (row) => { try { return JSON.parse(row.data); } catch (e) { return null; } };
 function rsEcrire(f) { RS.put.run({ id: f.id, quartier: f.quartier, date: String(f.dpeDate || '').slice(0, 10), type: f.type, surface: f.surface || 0, ban: f.identifiantBan || '', data: JSON.stringify(f) }); }
 function rsFiche(id) { const r = RS.get.get(id); return r ? rsLire(r) : null; }
@@ -5287,11 +5294,19 @@ function avecCache(type, champ, cle, maxJours, fn) {
 const cacheLu = (type, cle) => { const r = RS && RS.cacheGet.get(type, cle); try { return r ? JSON.parse(r.data) : null; } catch (e) { return null; } };
 
 // ---- Périodes de DPE ----
+// L'ADEME publie avec une à deux semaines de retard : « aujourd'hui » et
+// « cette semaine » partent de la dernière date publiée, pas du calendrier.
+function radarDernierePublication() {
+  try { const r = RS && RS.derniere.get(); return r && r.d ? r.d : null; } catch (e) { return null; }
+}
 function radarPeriode(code) {
   const j = (n) => new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
   const today = j(0);
-  if (code === 'aujourdhui') return { de: j(1), a: today, recent: true, libelle: 'aujourd’hui' };
-  if (code === 'semaine') return { de: j(7), a: today, recent: true, libelle: 'cette semaine' };
+  const der = radarDernierePublication();
+  const ref = der && der < today ? der : null;
+  const jr = (n) => new Date(Date.parse(ref) - n * 864e5).toISOString().slice(0, 10);
+  if (code === 'aujourdhui') return ref ? { de: ref, a: today, recent: true, libelle: 'le ' + ref.split('-').reverse().join('/') + ' (dernière publication ADEME)', reference: ref } : { de: j(1), a: today, recent: true, libelle: 'aujourd’hui' };
+  if (code === 'semaine') return ref ? { de: jr(6), a: today, recent: true, libelle: 'la dernière semaine publiée', reference: ref } : { de: j(7), a: today, recent: true, libelle: 'cette semaine' };
   if (code === 'mois' || !code) return { de: j(31), a: today, recent: true, libelle: 'ce mois-ci' };
   if (code === '3mois') return { de: j(92), a: today, recent: false, libelle: 'ces 3 derniers mois' };
   if (/^\d{4}$/.test(code)) return { de: code + '-01-01', a: code + '-12-31', recent: false, annee: code, libelle: 'en ' + code };
@@ -5468,7 +5483,7 @@ app.get('/api/radar/liste', requireAdmin, (req, res) => {
   const semaine = radarPeriode('semaine').de; const hier = radarPeriode('aujourdhui').de;
   const avecClient = (g) => g.acquereurs.club + g.acquereurs.leads > 0;
   const recents = RS.liste.all({ de: semaine, a: per.a + 'z', q: '', t: '', smin: 0 }).map(rsLire).filter(Boolean).map((f) => radarCalcul(ctx, f, 1));
-  const une = { jour: recents.filter((g) => String(g.dpeDate) >= hier && avecClient(g)).length, semaine: recents.filter(avecClient).length, semaineTotal: recents.length };
+  const une = { jour: recents.filter((g) => String(g.dpeDate) >= hier && avecClient(g)).length, semaine: recents.filter(avecClient).length, semaineTotal: recents.length, derniere: radarDernierePublication() };
   if (Q.client === '1') liste = liste.filter(avecClient);
   if (Q.client === 'club') liste = liste.filter((g) => g.acquereurs.club > 0);
   if (Q.client === 'leads') liste = liste.filter((g) => g.acquereurs.leads > 0);
