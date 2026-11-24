@@ -597,3 +597,6 @@ body.se-maps-open { overflow: hidden; }
 .rd-attente{font-size:13px;color:var(--se-accent,#b08d57);font-weight:600}
 .rd-une-note{display:block;font-size:12px;opacity:.75;margin-top:4px}
 @media (max-width:640px){.rd-form-actions .rd-rechercher{margin-left:0;width:100%;order:10}.rd-attente{width:100%}}
+
+/* Contact impossible : explication claire */
+.se-notice{background:var(--color-sand, #f4efe6);border:1px solid rgba(20,18,16,.12);border-radius:12px;padding:12px 14px;font-size:13.5px;line-height:1.5}
