@@ -58,27 +58,39 @@ const DATA_DIR = process.env.DATA_DIR || __dirname;
 // par seconde au maximum. Au-delà il répond 429 (ou une page d'erreur) et on
 // croyait à tort qu'une société n'avait pas de gérant. On espace les appels
 // (4 par seconde) et on réessaie après une limite.
-let SIRENE_FILE = Promise.resolve();
+// Deux files : ce que l'agent ouvre passe avant l'enrichissement en arrière-plan.
+const { AsyncLocalStorage } = require('async_hooks');
+const ARRIERE_PLAN = new AsyncLocalStorage();
+const SIRENE_FILES = { haute: [], basse: [] };
 let SIRENE_DERNIER = 0;
 let SIRENE_ALERTE = 0;
-function sireneFetch(url, opts) {
-  const tour = SIRENE_FILE.then(async () => {
-    for (let essai = 0; essai < 4; essai++) {
-      const attente = SIRENE_DERNIER + 260 - Date.now();
-      if (attente > 0) await new Promise((r) => setTimeout(r, attente));
-      SIRENE_DERNIER = Date.now();
-      // Délai compté à partir de l'envoi réel (pas pendant l'attente dans la file).
-      const o = Object.assign({ headers: { Accept: 'application/json', 'User-Agent': 'Seecret/1.0 (contact@seecret.fr)' } }, opts || {}, { signal: AbortSignal.timeout(15000) });
-      const r = await fetch(url, o);
-      if (r.status !== 429 && r.status < 500) return r;
-      if (Date.now() - SIRENE_ALERTE > 60000) { SIRENE_ALERTE = Date.now(); console.warn('[sirene] réponse ' + r.status + ', nouvel essai'); }
-      const ra = parseInt(r.headers.get('retry-after') || '', 10);
-      await new Promise((res) => setTimeout(res, (ra > 0 ? ra * 1000 : 1500 * (essai + 1))));
-    }
-    return fetch(url, Object.assign({}, opts || {}, { signal: AbortSignal.timeout(15000) }));
-  });
-  SIRENE_FILE = tour.catch(() => null);
-  return tour;
+let SIRENE_POMPE = null;
+function sirenePomper() {
+  if (SIRENE_POMPE) return;
+  const suivant = () => {
+    SIRENE_POMPE = null;
+    const t = SIRENE_FILES.haute.shift() || SIRENE_FILES.basse.shift();
+    if (!t) return;
+    const attente = Math.max(0, SIRENE_DERNIER + 260 - Date.now());
+    SIRENE_POMPE = setTimeout(() => { SIRENE_DERNIER = Date.now(); t(); SIRENE_POMPE = null; sirenePomper(); }, attente);
+  };
+  suivant();
+}
+function sireneCreneau(fond) { return new Promise((r) => { SIRENE_FILES[fond ? 'basse' : 'haute'].push(r); sirenePomper(); }); }
+async function sireneFetch(url, opts) {
+  const fond = !!(ARRIERE_PLAN.getStore() || {}).fond;
+  for (let essai = 0; essai < 4; essai++) {
+    await sireneCreneau(fond);
+    // Délai compté à partir de l'envoi réel (pas pendant l'attente dans la file).
+    const o = Object.assign({ headers: { Accept: 'application/json', 'User-Agent': 'Seecret/1.0 (contact@seecret.fr)' } }, opts || {}, { signal: AbortSignal.timeout(15000) });
+    const r = await fetch(url, o);
+    if (r.status !== 429 && r.status < 500) return r;
+    if (Date.now() - SIRENE_ALERTE > 60000) { SIRENE_ALERTE = Date.now(); console.warn('[sirene] réponse ' + r.status + ', nouvel essai'); }
+    const ra = parseInt(r.headers.get('retry-after') || '', 10);
+    await new Promise((res) => setTimeout(res, (ra > 0 ? ra * 1000 : 1500 * (essai + 1))));
+  }
+  await sireneCreneau(fond);
+  return fetch(url, Object.assign({}, opts || {}, { signal: AbortSignal.timeout(15000) }));
 }
 fs.mkdirSync(DATA_DIR, { recursive: true });
 const DATA_FILE = path.join(DATA_DIR, 'data.json');
@@ -5636,6 +5648,9 @@ async function radarCharger(cle, arrs, per) {
 let RADAR_FOND = false;
 async function radarEnrichirFond(arrs, per) {
   if (RADAR_FOND) return;
+  return ARRIERE_PLAN.run({ fond: true }, () => radarEnrichirFondInterne(arrs, per));
+}
+async function radarEnrichirFondInterne(arrs, per) {
   RADAR_FOND = true;
   try {
     const rows = [];
