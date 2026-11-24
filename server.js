@@ -53,6 +53,33 @@ const PORT = process.env.PORT || 3000;
   if (trouve) process.env[nom] = String(process.env[trouve]).trim();
 });
 const DATA_DIR = process.env.DATA_DIR || __dirname;
+
+// Annuaire des entreprises (recherche-entreprises.api.gouv.fr) : environ 7 appels
+// par seconde au maximum. Au-delà il répond 429 (ou une page d'erreur) et on
+// croyait à tort qu'une société n'avait pas de gérant. On espace les appels
+// (4 par seconde) et on réessaie après une limite.
+let SIRENE_FILE = Promise.resolve();
+let SIRENE_DERNIER = 0;
+let SIRENE_ALERTE = 0;
+function sireneFetch(url, opts) {
+  const tour = SIRENE_FILE.then(async () => {
+    for (let essai = 0; essai < 4; essai++) {
+      const attente = SIRENE_DERNIER + 260 - Date.now();
+      if (attente > 0) await new Promise((r) => setTimeout(r, attente));
+      SIRENE_DERNIER = Date.now();
+      // Délai compté à partir de l'envoi réel (pas pendant l'attente dans la file).
+      const o = Object.assign({ headers: { Accept: 'application/json', 'User-Agent': 'Seecret/1.0 (contact@seecret.fr)' } }, opts || {}, { signal: AbortSignal.timeout(15000) });
+      const r = await fetch(url, o);
+      if (r.status !== 429 && r.status < 500) return r;
+      if (Date.now() - SIRENE_ALERTE > 60000) { SIRENE_ALERTE = Date.now(); console.warn('[sirene] réponse ' + r.status + ', nouvel essai'); }
+      const ra = parseInt(r.headers.get('retry-after') || '', 10);
+      await new Promise((res) => setTimeout(res, (ra > 0 ? ra * 1000 : 1500 * (essai + 1))));
+    }
+    return fetch(url, Object.assign({}, opts || {}, { signal: AbortSignal.timeout(15000) }));
+  });
+  SIRENE_FILE = tour.catch(() => null);
+  return tour;
+}
 fs.mkdirSync(DATA_DIR, { recursive: true });
 const DATA_FILE = path.join(DATA_DIR, 'data.json');
 
@@ -3962,7 +3989,7 @@ app.get('/api/robot/dirigeants', requireAdmin, async (req, res) => {
   const siren = String(req.query.siren || '').trim();
   if (!siren) return res.status(400).json({ error: 'SIREN requis.' });
   try {
-    const r = await fetch('https://recherche-entreprises.api.gouv.fr/search?q=' + encodeURIComponent(siren), { signal: AbortSignal.timeout(15000) });
+    const r = await sireneFetch('https://recherche-entreprises.api.gouv.fr/search?q=' + encodeURIComponent(siren), { signal: AbortSignal.timeout(15000) });
     const data = await r.json().catch(() => ({}));
     const results = data.results || [];
     const exact = results.find((x) => String(x.siren) === siren) || results[0];
@@ -3988,7 +4015,7 @@ function normaliserNom(s) {
 async function autresMandats(nom, exclureSiren) {
   const cible = normaliserNom(nom);
   {
-    const r = await fetch('https://recherche-entreprises.api.gouv.fr/search?q=' + encodeURIComponent(nom) + '&page=1&per_page=15', { signal: AbortSignal.timeout(15000) });
+    const r = await sireneFetch('https://recherche-entreprises.api.gouv.fr/search?q=' + encodeURIComponent(nom) + '&page=1&per_page=15', { signal: AbortSignal.timeout(15000) });
     const data = await r.json().catch(() => ({}));
     const results = data.results || [];
     const mandats = [];
@@ -5118,9 +5145,11 @@ async function radarDirigeants(db, siren) {
   db.radarSocietes = db.radarSocietes || {};
   const c = db.radarSocietes[siren];
   if (c && Date.now() - radarAnnee(c.maj) < 30 * 864e5) return c;
-  const r = await fetch('https://recherche-entreprises.api.gouv.fr/search?q=' + siren + '&per_page=1', { headers: { Accept: 'application/json', 'User-Agent': 'Seecret/1.0 (contact@seecret.fr)' }, signal: AbortSignal.timeout(15000) });
+  const r = await sireneFetch('https://recherche-entreprises.api.gouv.fr/search?q=' + siren + '&per_page=1', { headers: { Accept: 'application/json', 'User-Agent': 'Seecret/1.0 (contact@seecret.fr)' }, signal: AbortSignal.timeout(15000) });
   if (r.status === 429) throw Object.assign(new Error('SIRENE 429'), { limite: true });
-  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error('SIRENE ' + r.status);
+  const d = await r.json().catch(() => null);
+  if (!d || !Array.isArray(d.results)) throw new Error('SIRENE réponse illisible');
   const e = (d.results || []).find((x) => String(x.siren) === siren) || null;
   const an = new Date().getFullYear();
   const out = {
@@ -5527,6 +5556,9 @@ function radarPlafonner() {
     console.warn('[radar] ' + ids.length + ' DPE anciens retirés pour garder de la place (' + placeLibreMo() + ' Mo libres).');
   } catch (e) { console.error('[radar] plafond :', e.message); }
 }
+// Une fois : oublier les sociétés enregistrées « introuvables » pendant que
+// l'annuaire nous limitait (elles seront redemandées).
+if (RS) { try { if (!RS.cacheGet.get('meta', 'soc-purge-1')) { const n = RadarSQL.prepare("DELETE FROM cache WHERE type = 'soc' AND data LIKE '%\"trouve\":false%'").run().changes; RadarSQL.prepare("DELETE FROM cache WHERE type = 'soc' AND data LIKE '%\"dirigeants\":[]%'").run(); RS.cacheSet.run('meta', 'soc-purge-1', new Date().toISOString(), '1'); console.log('[radar] ' + n + ' société(s) « introuvable(s) » à redemander à l\'annuaire'); } } catch (e) { console.error('[radar] purge sociétés :', e.message); } }
 // Une fois : reconnaître de nouveau après la correction du format 2026.
 setTimeout(() => {
   try {
@@ -6002,7 +6034,7 @@ async function societesAdresse(adresse) {
     // une courte pause si elle répond 429 ou 5xx.
     let r = null;
     for (let essai = 0; essai < 4; essai++) {
-      r = await fetch('https://recherche-entreprises.api.gouv.fr/search?' + p.toString(), { headers: { Accept: 'application/json', 'User-Agent': 'Seecret/1.0 (contact@seecret.fr)' }, signal: AbortSignal.timeout(15000) });
+      r = await sireneFetch('https://recherche-entreprises.api.gouv.fr/search?' + p.toString(), { headers: { Accept: 'application/json', 'User-Agent': 'Seecret/1.0 (contact@seecret.fr)' }, signal: AbortSignal.timeout(15000) });
       if (r.status !== 429 && r.status < 500) break;
       await new Promise((ok) => setTimeout(ok, 800 * (essai + 1)));
     }
