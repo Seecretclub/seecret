@@ -41,6 +41,17 @@ const PORT = process.env.PORT || 3000;
 // sans ça, data.json et uploads/ vivent sur le disque éphémère du conteneur
 // et sont perdus à chaque redéploiement. En local, DATA_DIR vaut __dirname
 // comme avant (rien ne change pour le développement).
+// Noms de clés acceptés tels que saisis dans Railway (ex. DATAGMA_API au lieu de DATAGMA_API_KEY).
+[['DATAGMA_API_KEY', ['DATAGMA_API', 'DATAGMA_KEY', 'DATAGMA']],
+  ['DROPCONTACT_API_KEY', ['DROP_CONTACT_API', 'DROPCONTACT_API', 'DROP_CONTACT_API_KEY', 'DROPCONTACT_KEY', 'DROPCONTACT']],
+  ['FULLENRICH_API_KEY', ['FULL_ENRICH', 'FULLENRICH', 'FULL_ENRICH_API_KEY', 'FULLENRICH_API', 'FULL_ENRICH_API']],
+  ['SOCIETEINFO_API_KEY', ['SOCIETE_INFO', 'SOCIETEINFO', 'SOCIETE_INFO_API_KEY', 'SOCIETEINFO_API', 'SOCIETE_INFO_API']],
+  ['KASPR_API_KEY', ['KASPR', 'KASPR_API', 'KASPR_KEY']]
+].forEach(([nom, autres]) => {
+  if (process.env[nom]) return;
+  const trouve = autres.find((x) => String(process.env[x] || '').trim());
+  if (trouve) process.env[nom] = String(process.env[trouve]).trim();
+});
 const DATA_DIR = process.env.DATA_DIR || __dirname;
 fs.mkdirSync(DATA_DIR, { recursive: true });
 const DATA_FILE = path.join(DATA_DIR, 'data.json');
