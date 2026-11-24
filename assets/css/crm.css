@@ -600,3 +600,20 @@ body.se-maps-open { overflow: hidden; }
 
 /* Contact impossible : explication claire */
 .se-notice{background:var(--color-sand, #f4efe6);border:1px solid rgba(20,18,16,.12);border-radius:12px;padding:12px 14px;font-size:13.5px;line-height:1.5}
+
+/* Radar : téléphone et email à la demande, jauges de crédits */
+.rd-coord{margin-top:12px}
+.rd-coord.ouvert{border:1px solid rgba(20,18,16,.12);border-radius:12px;padding:12px 14px;background:var(--color-paper, #fbf9f5)}
+.rd-coord-tete{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.rd-outils{display:flex;flex-direction:column;gap:8px}
+.rd-outil{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:13.5px;cursor:pointer}
+.rd-outil.off{opacity:.55;cursor:default}
+.rd-outil-nom{min-width:96px;font-weight:600}
+.rd-jauge{display:inline-block;width:120px;height:8px;border-radius:5px;background:rgba(20,18,16,.1);overflow:hidden;flex:0 0 auto}
+.rd-jauge i{display:block;height:100%;background:#3f7d58;border-radius:5px}
+.rd-jauge.bas i{background:#c9892e}
+.rd-jauge.vide i{background:#b5483a;width:100%!important;opacity:.35}
+.rd-jauge.inconnue i{background:repeating-linear-gradient(45deg,rgba(20,18,16,.18) 0 6px,transparent 6px 12px)}
+.rd-jauge-txt{font-size:12.5px;color:var(--color-taupe,#6f665c)}
+.rd-outil-opt{display:flex;gap:8px;align-items:flex-start;font-size:12.5px;margin-top:10px;color:var(--color-taupe,#6f665c)}
+@media (max-width:640px){.rd-jauge{width:90px}.rd-outil-nom{min-width:80px}}
