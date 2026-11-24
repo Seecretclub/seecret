@@ -644,3 +644,14 @@ body.se-maps-open { overflow: hidden; }
 .se-journee-stats{margin-top:10px}
 .se-journee-stats summary{cursor:pointer;font-size:13px;color:var(--color-taupe,#6f665c);padding:6px 0}
 @media (max-width:640px){.se-journee-cat{display:none}.se-journee-ligne{padding:11px 12px}}
+
+/* Vidéos home tour : options et deux formats */
+.se-video-options { border: 1px solid rgba(20,18,16,.1); border-radius: 12px; padding: 12px 14px; margin-bottom: 12px; }
+.se-video-cases { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px 14px; margin-top: 6px; font-size: 13.5px; }
+.se-video-cases label { display: flex; gap: 8px; align-items: flex-start; cursor: pointer; }
+.se-video-formats { display: grid; grid-template-columns: 1fr; gap: 14px; margin-top: 10px; }
+@media (min-width: 900px) { .se-video-formats { grid-template-columns: 1.6fr 1fr; align-items: start; } }
+.se-video-format { border-top: 1px solid rgba(20,18,16,.08); padding-top: 10px; min-width: 0; }
+.se-video.horizontal { width: 100%; aspect-ratio: 16 / 9; }
+.se-video.vertical { width: min(100%, 260px); aspect-ratio: 9 / 16; }
+.se-video.vertical { object-fit: cover; }

@@ -1644,6 +1644,7 @@ function bienPublic(b) {
     description: b.description || '', photos: b.photos || [], statut: b.statut || 'brouillon',
     coupDeCoeur: b.coupDeCoeur || '',
     video: b.video && b.video.publie && b.video.url ? { url: b.video.url, type: b.video.type || 'video/mp4' } : null,
+    videoVerticale: b.videoVerticale && b.videoVerticale.publie && b.videoVerticale.url ? { url: b.videoVerticale.url, type: b.videoVerticale.type || 'video/mp4' } : null,
     visite: b.visite && b.visite.publie && Array.isArray(b.visite.etapes) && b.visite.etapes.length ? { etapes: b.visite.etapes.map((e) => ({ piece: e.piece || '', image: e.image, mode: e.mode === '360' ? '360' : 'photo' })) } : null,
     editorial: b.editorial && b.editorial.publie && b.editorial.texte ? { titre: b.editorial.titre || '', texte: b.editorial.texte } : null,
     statutDemande: b.statutDemande || null, cree: b.cree || null,
@@ -1756,40 +1757,71 @@ setTimeout(() => {
 const VIDEO_MAX = 80 * 1024 * 1024;
 function supprimerVideoFichier(v) {
   if (!v || !v.url || !/^\/uploads\/video-[\w-]+\.(mp4|webm)$/.test(v.url)) return;
+  // (formats horizontal et vertical : même dossier, même règle)
   try { fs.unlinkSync(path.join(UPLOADS_DIR, path.basename(v.url))); } catch (e) { /* déjà supprimée */ }
 }
+// Deux formats par bien : horizontal (16:9, fiche du bien sur la plateforme)
+// et vertical (9:16, réseaux sociaux de l'agent et page « Vidéos » à faire
+// défiler). ?format=vertical choisit le second ; par défaut, horizontal.
+const champVideo = (req) => (String(req.query.format || '') === 'vertical' ? 'videoVerticale' : 'video');
 app.post('/api/biens/:id/video', requireAdmin, express.raw({ type: ['video/mp4', 'video/webm'], limit: VIDEO_MAX }), (req, res) => {
   const type = String(req.headers['content-type'] || '').split(';')[0];
   if (['video/mp4', 'video/webm'].indexOf(type) === -1 || !Buffer.isBuffer(req.body) || req.body.length < 1000) {
     return res.status(400).json({ error: 'Vidéo invalide (MP4 ou WebM attendu).' });
   }
+  // Disque gratuit limité : on garde de la marge pour la base des membres.
+  const libre = placeLibreMo();
+  if (libre !== null && libre - req.body.length / 1048576 < 80) return res.status(507).json({ error: 'Plus assez de place sur le disque du site (' + libre + ' Mo libres) pour enregistrer cette vidéo.' });
   const db = readDb();
   const b = db.biens.find((x) => x.id === req.params.id);
   if (!b) return res.status(404).json({ error: 'Bien introuvable.' });
+  const champ = champVideo(req);
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-  const nom = 'video-' + String(b.id).replace(/[^\w-]/g, '') + '-' + crypto.randomBytes(6).toString('hex') + (type === 'video/mp4' ? '.mp4' : '.webm');
+  const nom = 'video-' + String(b.id).replace(/[^\w-]/g, '') + (champ === 'videoVerticale' ? '-v' : '') + '-' + crypto.randomBytes(6).toString('hex') + (type === 'video/mp4' ? '.mp4' : '.webm');
   fs.writeFileSync(path.join(UPLOADS_DIR, nom), req.body);
-  supprimerVideoFichier(b.video);
-  b.video = { url: '/uploads/' + nom, type: type, taille: req.body.length, cree: nowISO(), auteur: nomComplet(req.lead), publie: String(req.query.publier || '1') === '1' };
+  supprimerVideoFichier(b[champ]);
+  const options = (() => { try { return JSON.parse(String(req.query.options || '{}')); } catch (e) { return {}; } })();
+  b[champ] = { url: '/uploads/' + nom, type: type, taille: req.body.length, cree: nowISO(), auteur: nomComplet(req.lead), publie: String(req.query.publier || '1') === '1', format: champ === 'videoVerticale' ? 'vertical' : 'horizontal', options: options };
   writeDb(db);
-  res.json({ ok: true, video: b.video });
+  res.json({ ok: true, video: b[champ], champ: champ });
 });
 app.patch('/api/biens/:id/video', requireAdmin, (req, res) => {
   const db = readDb();
   const b = db.biens.find((x) => x.id === req.params.id);
-  if (!b || !b.video) return res.status(404).json({ error: 'Aucune vidéo pour ce bien.' });
-  b.video.publie = !!(req.body && req.body.publie);
+  const champ = champVideo(req);
+  if (!b || !b[champ]) return res.status(404).json({ error: 'Aucune vidéo pour ce bien.' });
+  b[champ].publie = !!(req.body && req.body.publie);
   writeDb(db);
-  res.json({ ok: true, video: b.video });
+  res.json({ ok: true, video: b[champ], champ: champ });
 });
 app.delete('/api/biens/:id/video', requireAdmin, (req, res) => {
   const db = readDb();
   const b = db.biens.find((x) => x.id === req.params.id);
   if (!b) return res.status(404).json({ error: 'Bien introuvable.' });
-  supprimerVideoFichier(b.video);
-  delete b.video;
+  const champ = champVideo(req);
+  supprimerVideoFichier(b[champ]);
+  delete b[champ];
   writeDb(db);
-  res.json({ ok: true });
+  res.json({ ok: true, champ: champ });
+});
+// Une fois : les vidéos créées avant les deux formats étaient verticales.
+setTimeout(() => {
+  try {
+    const db = readDb(); db.migrations = db.migrations || {};
+    if (db.migrations.videosFormats) return;
+    let n = 0;
+    (db.biens || []).forEach((b) => { if (b.video && !b.video.format && !b.videoVerticale) { b.videoVerticale = Object.assign({}, b.video, { format: 'vertical' }); delete b.video; n++; } });
+    db.migrations.videosFormats = nowISO(); writeDb(db);
+    if (n) console.log('[vidéos] ' + n + ' vidéo(s) verticale(s) rangée(s) dans le format réel');
+  } catch (e) { console.error('[vidéos] migration :', e.message); }
+}, 6000);
+// Page « Vidéos » de la plateforme : les vidéos verticales publiées des biens visibles.
+app.get('/api/videos', requireAuth, (req, res) => {
+  const db = readDb();
+  const liste = db.biens.filter((b) => bienSurPlateforme(b) && b.videoVerticale && b.videoVerticale.publie && b.videoVerticale.url)
+    .sort((a, b) => String(b.videoVerticale.cree).localeCompare(String(a.videoVerticale.cree)))
+    .map((b) => ({ id: b.id, url: b.videoVerticale.url, type: b.videoVerticale.type, titre: (b.editorial && b.editorial.publie && b.editorial.titre) || b.titre || '', quartier: labelQuartier(b.quartier) || b.ville || '', statut: b.statut, surface: b.surface || 0, pieces: b.pieces || 0, poster: (b.photos || [])[0] || '' }));
+  res.json({ ok: true, videos: liste });
 });
 
 // ---------------- Sectorisation scolaire (Ville de Paris, open data) ----------------

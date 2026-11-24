@@ -482,6 +482,39 @@
   // En-tête : « Les biens » (accueil + catalogue), « Mes favoris », « Le
   // concept » ; Mon bien / Ma recherche / Mon profil passent dans le menu
   // déroulant du nom (survol sur ordinateur, appui sur mobile).
+  const photoSrc = (p) => (/^(data:|https?:|\/)/.test(String(p || '')) ? p : 'assets/img/' + p);
+  // ---- Page « Vidéos » : les réels verticaux des biens, à faire défiler ----
+  // Une vidéo par écran ; celle qui est à l'écran se lance (sans le son,
+  // un appui active le son) ; « Voir le bien » ouvre la fiche.
+  function edViewVideos() {
+    if (!state.videosFeed && !state.__videosDemande) {
+      state.__videosDemande = true;
+      API.get('/api/videos').then((d) => { state.videosFeed = d.videos || []; }).catch(() => { state.videosFeed = []; }).then(() => { state.__videosDemande = false; if (parseRoute().name === 'videos') render(); });
+    }
+    const liste = state.videosFeed;
+    if (!liste) return '<div class="ed-videos-vide">Chargement des vidéos…</div>';
+    if (!liste.length) return '<div class="ed-page-head"><span class="ed-kicker">Vidéos</span><h1>Les biens en vidéo</h1><p class="ed-muted">Aucune vidéo pour le moment. Les home tours des biens du club apparaîtront ici dès qu’ils seront publiés.</p></div>';
+    return '<div class="ed-videos" data-videos>' + liste.map((v, i) =>
+      '<section class="ed-video-ecran">' +
+        '<video src="' + esc(v.url) + '" poster="' + esc(v.poster ? photoSrc(v.poster) : '') + '" muted loop playsinline preload="' + (i < 2 ? 'auto' : 'metadata') + '" data-video-feed></video>' +
+        '<button type="button" class="ed-video-son" data-act="video-son" aria-label="Activer le son">🔇</button>' +
+        '<div class="ed-video-infos"><span class="ed-kicker" style="color:rgba(255,255,255,.8)">' + esc(v.quartier || 'Paris') + (v.statut === 'ouvert' ? ' · visites ouvertes' : ' · avant-première') + '</span>' +
+          '<b>' + esc(v.titre || 'Un bien du club') + '</b>' +
+          '<span>' + [v.surface ? v.surface + ' m²' : '', v.pieces ? v.pieces + ' pièces' : ''].filter(Boolean).join(' · ') + '</span>' +
+          '<a class="se-btn sm" href="#/bien/' + esc(v.id) + '">Voir le bien</a></div>' +
+      '</section>').join('') + '</div>';
+  }
+  function activerFeedVideos() {
+    const racine = document.querySelector('[data-videos]');
+    if (!racine || racine.__actif) return;
+    racine.__actif = true;
+    const vids = Array.from(racine.querySelectorAll('[data-video-feed]'));
+    if (!('IntersectionObserver' in window)) { if (vids[0]) vids[0].play().catch(() => {}); return; }
+    const obs = new IntersectionObserver((entrees) => {
+      entrees.forEach((en) => { const v = en.target; if (en.isIntersecting && en.intersectionRatio > 0.6) v.play().catch(() => {}); else { v.pause(); } });
+    }, { threshold: [0, 0.6, 1] });
+    vids.forEach((v) => obs.observe(v));
+  }
   function edShell(r, content) {
     const p = state.profil;
     const nom = (p.prenom + ' ' + p.nom).trim() || 'Mon compte';
@@ -495,7 +528,8 @@
           // Sur téléphone, ces liens deviennent la barre d'onglets en bas d'écran.
           '<a href="#/accueil" data-tour="biens" class="' + (surBiens ? 'active' : '') + '">' + '<svg class="ed-nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M10 21v-6h4v6"/></svg>' + '<span>Les biens</span></a>' +
           '<a href="#/gazette" class="' + (r.name === 'gazette' ? 'active' : '') + '">' + '<svg class="ed-nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="15" height="16" rx="2"/><path d="M18 8h3v10a2 2 0 0 1-2 2"/><path d="M7 8h7M7 12h7M7 16h4"/></svg>' + '<span>La Gazette</span></a>' +
-          '<a href="#/favoris" data-tour="favoris" class="' + (r.name === 'favoris' ? 'active' : '') + '">' + '<svg class="ed-nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h12v18l-6-4-6 4z"/></svg>' + '<span>Mes favoris</span>' + (nbFavoris ? ' <span class="ed-count">' + nbFavoris + '</span>' : '') + '</a>' +
+          '<a href="#/videos" class="' + (r.name === 'videos' ? 'active' : '') + '">' + '<svg class="ed-nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="m10.5 9 4 3-4 3z"/></svg>' + '<span>Vidéos</span></a>' +
+          '<a href="#/favoris" data-tour="favoris" class=""' + (r.name === 'favoris' ? 'active' : '') + '">' + '<svg class="ed-nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h12v18l-6-4-6 4z"/></svg>' + '<span>Mes favoris</span>' + (nbFavoris ? ' <span class="ed-count">' + nbFavoris + '</span>' : '') + '</a>' +
           '<a href="/index.html" target="_blank" rel="noopener" data-tour="concept">' + '<svg class="ed-nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><path d="M12 7.5v.01"/></svg>' + '<span>Le concept</span></a>' +
         '</nav>' +
         '<div class="ed-menu" data-tour="menu">' +
@@ -1730,6 +1764,7 @@
       catalogue: edViewCatalogue,
       favoris: edViewFavoris,
       gazette: edViewGazette,
+      videos: edViewVideos,
       bien: edViewBien,
       visites: viewVisites,
       offres: viewOffres,
@@ -1767,6 +1802,8 @@
       lastRoute = r.name;
     }
     $$('img[data-cadre]').forEach((img) => { if (img.complete) ajusterCadre(img); });
+    if (r.name === 'videos') activerFeedVideos();
+    document.body.classList.toggle('ed-sur-videos', r.name === 'videos' && !!(state.videosFeed && state.videosFeed.length));
     rendreChat();
     rendreMusique();
     afficherTour();
@@ -2717,9 +2754,17 @@
       else afficherEtape(cible, Number(sens));
     },
     'visite-piece': (el, i) => { if (visiteEtat) afficherEtape(Number(i), Number(i) >= visiteEtat.i ? 1 : -1); },
+    'video-son': (el) => {
+      const v = el.parentElement.querySelector('video'); if (!v) return;
+      const coupe = !v.muted;
+      document.querySelectorAll('[data-video-feed]').forEach((x) => { x.muted = true; });
+      document.querySelectorAll('.ed-video-son').forEach((x) => { x.textContent = '🔇'; });
+      v.muted = coupe; el.textContent = coupe ? '🔇' : '🔊'; if (!coupe) v.play().catch(() => {});
+    },
     'video-voir': (el, id) => {
       const b = bien(id); if (!b || !b.video) return;
-      modal = '<div class="ed-video-modale"><video src="' + esc(b.video.url) + '" controls autoplay playsinline></video>' +
+      const affiche = (b.photos || [])[0] ? photoSrc(b.photos[0]) : '';
+      modal = '<div class="ed-video-modale' + (b.video.format === 'vertical' ? ' vertical' : '') + '"><video src="' + esc(b.video.url) + '" poster="' + esc(affiche) + '" controls autoplay playsinline></video>' +
         '<div class="se-modal-foot"><span class="se-hint">' + esc(b.titre || '') + '</span><button class="se-btn ghost" type="button" data-act="modal-close">Fermer</button></div></div>';
       render();
     },

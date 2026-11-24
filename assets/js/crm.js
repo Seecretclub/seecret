@@ -459,8 +459,28 @@
     if (l) lignes.push(l);
     return lignes;
   }
-  async function genererHomeTour(b, progres) {
-    const W = 720, H = 1280, FPS = 30;
+  // Ce que la vidéo affiche : l'agent choisit, puis valide.
+  const VIDEO_OPTIONS = [
+    ['prix', 'Prix', true], ['surface', 'Surface', true], ['pieces', 'Pièces et chambres', true], ['secteur', 'Secteur (quartier)', true],
+    ['rue', 'Nom de la rue (sans numéro)', false], ['etage', 'Étage', false], ['exterieur', 'Extérieur (balcon, terrasse…)', true], ['dpe', 'Classe énergie (DPE)', false],
+    ['mention', 'Mention « Visible uniquement sur Seecret »', true], ['musique', 'Musique d’ambiance', true]
+  ];
+  function videoOptions(id) {
+    state.videoOptions = state.videoOptions || {};
+    if (!state.videoOptions[id]) { const o = {}; VIDEO_OPTIONS.forEach(([k, , d]) => { o[k] = d; }); o.formats = { horizontal: true, vertical: true }; state.videoOptions[id] = o; }
+    return state.videoOptions[id];
+  }
+  function rueSansNumero(adresse) {
+    return String(adresse || '').split(',')[0].replace(/^\s*\d+\s*(bis|ter|b|t)?\s*/i, '').trim();
+  }
+  // Formats : horizontal 16:9 (fiche du bien) et vertical 9:16 (réels).
+  // Vidéos compressées (disque du site limité) : ~1,2 Mb/s.
+  async function genererHomeTour(b, progres, opts) {
+    opts = opts || {};
+    const vertical = opts.format === 'vertical';
+    const O = opts.options || videoOptions(b.serverId);
+    const W = vertical ? 720 : 1280, H = vertical ? 1280 : 720, FPS = 30;
+    const U = Math.min(W, H) / 720; // unité de taille (texte identique dans les deux formats)
     const sources = (b.photos || []).filter((p) => !/^https?:/.test(p) || p.indexOf(location.origin) === 0).slice(0, 8);
     const images = (await Promise.all(sources.map(chargerImage))).filter(Boolean);
     if (images.length < 2) throw new Error('Il faut au moins 2 photos du bien pour créer la vidéo.');
@@ -471,43 +491,46 @@
     const serif = (getComputedStyle(document.documentElement).getPropertyValue('--font-serif') || 'Georgia, serif').trim();
     const sans = getComputedStyle(document.body).fontFamily || 'system-ui, sans-serif';
     const titre = (b.editorial && b.editorial.titre) || b.titre || 'Un bien du club';
-    const quartier = (typeof qLabel === 'function' ? qLabel(b.quartier) : '') || b.ville || 'Paris';
-    const infos = [b.surface ? b.surface + ' m²' : '', b.pieces ? b.pieces + ' pièces' : '', b.chambres ? b.chambres + ' chambre' + (b.chambres > 1 ? 's' : '') : ''].filter(Boolean).join('  ·  ');
+    const quartier = O.secteur ? ((typeof qLabel === 'function' ? qLabel(b.quartier) : '') || b.ville || 'Paris') : '';
+    const rue = O.rue ? rueSansNumero(b.adresse) : '';
+    const lieu = [quartier, rue].filter(Boolean).join(' · ');
+    const e = parseInt(b.etage, 10);
+    const infos1 = [O.surface && b.surface ? b.surface + ' m²' : '', O.pieces && b.pieces ? b.pieces + ' pièces' : '', O.pieces && b.chambres ? b.chambres + ' chambre' + (b.chambres > 1 ? 's' : '') : '', O.etage && !isNaN(e) ? (e === 0 ? 'Rez-de-chaussée' : e + (e === 1 ? 'er' : 'e') + ' étage') : ''].filter(Boolean).join('  ·  ');
+    const infos2 = [O.exterieur && b.exterieur && b.exterieur !== 'Aucun' ? b.exterieur + (b.surfaceExterieur ? ' ' + b.surfaceExterieur + ' m²' : '') : '', O.dpe && b.dpe ? 'DPE ' + b.dpe : ''].filter(Boolean).join('  ·  ');
+    const prix = O.prix && b.prix ? euro(b.prix) : '';
 
     function photo(img, t, sens) {
-      // Recadrage plein cadre + zoom lent et léger glissement.
       const z = 1.06 + 0.12 * t;
       const ratio = Math.max(W / img.width, H / img.height) * z;
       const w = img.width * ratio, h = img.height * ratio;
-      const dx = (W - w) / 2 + (sens ? 1 : -1) * (t - 0.5) * W * 0.06;
-      const dy = (H - h) / 2;
-      c.drawImage(img, dx, dy, w, h);
+      const dx = (W - w) / 2 + (sens ? 1 : -1) * (t - 0.5) * W * 0.05;
+      c.drawImage(img, dx, (H - h) / 2, w, h);
     }
-    function degrade(haut, opacite) {
+    function voile(haut, opacite) {
       const g = c.createLinearGradient(0, haut ? 0 : H * 0.45, 0, haut ? H * 0.35 : H);
       g.addColorStop(0, haut ? 'rgba(10,9,8,' + opacite + ')' : 'rgba(10,9,8,0)');
       g.addColorStop(1, haut ? 'rgba(10,9,8,0)' : 'rgba(10,9,8,' + opacite + ')');
       c.fillStyle = g; c.fillRect(0, 0, W, H);
     }
-    function texteCentre(txt, y, taille, police, couleur, espacement) {
-      c.font = taille + 'px ' + police; c.fillStyle = couleur; c.textAlign = 'center'; c.textBaseline = 'alphabetic';
-      if (espacement) { try { c.letterSpacing = espacement + 'px'; } catch (e) { /* ancien navigateur */ } }
+    function texte(txt, y, taille, police, couleur, espacement) {
+      c.font = Math.round(taille * U) + 'px ' + police; c.fillStyle = couleur; c.textAlign = 'center'; c.textBaseline = 'alphabetic';
+      if (espacement) { try { c.letterSpacing = espacement + 'px'; } catch (e2) { /* ancien navigateur */ } }
       c.fillText(txt, W / 2, y);
-      try { c.letterSpacing = '0px'; } catch (e) { /* ignore */ }
+      try { c.letterSpacing = '0px'; } catch (e2) { /* ignore */ }
     }
     function image(t) {
       c.fillStyle = '#141210'; c.fillRect(0, 0, W, H);
       if (t < INTRO) {
+        // Première image : la photo est là dès l'image 0 (jamais d'écran noir).
         const k = t / INTRO;
-        c.globalAlpha = Math.min(1, k * 2); photo(images[0], k * 0.4, true); c.globalAlpha = 1;
-        c.fillStyle = 'rgba(10,9,8,.5)'; c.fillRect(0, 0, W, H);
-        const a = Math.min(1, Math.max(0, (t - 0.3) / 0.8));
-        c.globalAlpha = a;
-        texteCentre('SEECRET', H * 0.36, 22, sans, 'rgba(255,255,255,.8)', 8);
-        c.font = '58px ' + serif;
-        lignesTexte(c, titre, W - 120).slice(0, 4).forEach((l, i) => texteCentre(l, H * 0.46 + i * 66, 58, serif, '#fff'));
-        texteCentre(quartier.toUpperCase(), H * 0.46 + Math.min(4, lignesTexte(c, titre, W - 120).length) * 66 + 40, 22, sans, 'rgba(255,255,255,.85)', 5);
-        c.globalAlpha = 1;
+        photo(images[0], k * 0.4, true);
+        c.fillStyle = 'rgba(10,9,8,.45)'; c.fillRect(0, 0, W, H);
+        texte('SEECRET', H * (vertical ? 0.36 : 0.28), 22, sans, 'rgba(255,255,255,.85)', 8);
+        c.font = Math.round(58 * U) + 'px ' + serif;
+        const lignes = lignesTexte(c, titre, W - 140 * U).slice(0, vertical ? 4 : 2);
+        const y0 = H * (vertical ? 0.46 : 0.45);
+        lignes.forEach((l, i) => texte(l, y0 + i * 66 * U, 58, serif, '#fff'));
+        if (lieu) texte(lieu.toUpperCase(), y0 + lignes.length * 66 * U + 30 * U, 22, sans, 'rgba(255,255,255,.88)', 5);
         return;
       }
       const tp = t - INTRO;
@@ -515,40 +538,47 @@
         const i = Math.min(images.length - 1, Math.floor(tp / PAR_PHOTO));
         const local = (tp - i * PAR_PHOTO) / PAR_PHOTO;
         photo(images[i], local, i % 2 === 0);
-        const resteFondu = (PAR_PHOTO - (tp - i * PAR_PHOTO));
-        if (resteFondu < FONDU && i < images.length - 1) {
-          c.globalAlpha = 1 - resteFondu / FONDU; photo(images[i + 1], 0, (i + 1) % 2 === 0); c.globalAlpha = 1;
-        }
-        degrade(false, 0.55); degrade(true, 0.35);
-        texteCentre('SEECRET', 70, 18, sans, 'rgba(255,255,255,.85)', 7);
-        if (i === 0 && infos) { c.globalAlpha = Math.min(1, local * 3); texteCentre(infos, H - 120, 28, sans, '#fff'); c.globalAlpha = 1; }
-        if (i === 1) { c.globalAlpha = Math.min(1, local * 3); c.font = '44px ' + serif; texteCentre(quartier, H - 120, 44, serif, '#fff'); c.globalAlpha = 1; }
+        const reste = PAR_PHOTO - (tp - i * PAR_PHOTO);
+        if (reste < FONDU && i < images.length - 1) { c.globalAlpha = 1 - reste / FONDU; photo(images[i + 1], 0, (i + 1) % 2 === 0); c.globalAlpha = 1; }
+        voile(false, 0.55); voile(true, 0.3);
+        texte('SEECRET', 60 * U, 18, sans, 'rgba(255,255,255,.85)', 7);
+        const a = Math.min(1, local * 3);
+        c.globalAlpha = a;
+        // Vertical : texte au-dessus du tiers bas (là où les réseaux et la page Vidéos affichent leurs boutons).
+        const bas = vertical ? H * 0.6 : H - 70 * U;
+        if (i === 0 && (infos1 || prix)) { if (prix) texte(prix, bas - 46 * U, 40, serif, '#fff'); if (infos1) texte(infos1, bas, 26, sans, '#fff'); }
+        else if (i === 1 && lieu) texte(lieu, bas, 40, serif, '#fff');
+        else if (i === 2 && infos2) texte(infos2, bas, 26, sans, '#fff');
+        c.globalAlpha = 1;
         return;
       }
       const tf = (t - INTRO - images.length * PAR_PHOTO) / FIN;
       photo(images[images.length - 1], 1, true);
       c.fillStyle = 'rgba(10,9,8,' + Math.min(0.82, 0.3 + tf * 1.2) + ')'; c.fillRect(0, 0, W, H);
       c.globalAlpha = Math.min(1, tf * 2.5);
-      texteCentre('Visible uniquement', H * 0.45, 54, serif, '#fff');
-      texteCentre('sur Seecret', H * 0.45 + 64, 54, serif, '#fff');
-      texteCentre('LE CLUB OFF-MARKET', H * 0.45 + 140, 20, sans, 'rgba(255,255,255,.8)', 6);
+      const ym = H * (vertical ? 0.42 : 0.38);
+      if (O.mention) { texte('Visible uniquement', ym, 54, serif, '#fff'); texte('sur Seecret', ym + 64 * U, 54, serif, '#fff'); texte('LE CLUB OFF-MARKET', ym + 130 * U, 20, sans, 'rgba(255,255,255,.8)', 6); }
+      else { texte(titre.length > 34 ? titre.slice(0, 32) + '…' : titre, ym + 30 * U, 46, serif, '#fff'); texte('SEECRET', ym + 100 * U, 20, sans, 'rgba(255,255,255,.8)', 6); }
+      if (prix && !O.mention) texte(prix, ym + 150 * U, 30, serif, '#fff');
       c.globalAlpha = 1;
     }
 
     image(0);
     const flux = canvas.captureStream(FPS);
     let actx = null;
-    try {
-      actx = new (window.AudioContext || window.webkitAudioContext)();
-      await actx.resume();
-      const dest = actx.createMediaStreamDestination();
-      ambiance(actx, dest, duree);
-      dest.stream.getAudioTracks().forEach((tr) => flux.addTrack(tr));
-    } catch (e) { /* vidéo sans musique */ }
+    if (O.musique) {
+      try {
+        actx = new (window.AudioContext || window.webkitAudioContext)();
+        await actx.resume();
+        const dest = actx.createMediaStreamDestination();
+        ambiance(actx, dest, duree);
+        dest.stream.getAudioTracks().forEach((tr) => flux.addTrack(tr));
+      } catch (e2) { /* vidéo sans musique */ }
+    }
     const type = typeVideo();
-    const rec = new MediaRecorder(flux, Object.assign({ videoBitsPerSecond: 3500000, audioBitsPerSecond: 128000 }, type ? { mimeType: type } : {}));
+    const rec = new MediaRecorder(flux, Object.assign({ videoBitsPerSecond: 1200000, audioBitsPerSecond: 96000 }, type ? { mimeType: type } : {}));
     const morceaux = [];
-    rec.ondataavailable = (e) => { if (e.data && e.data.size) morceaux.push(e.data); };
+    rec.ondataavailable = (ev) => { if (ev.data && ev.data.size) morceaux.push(ev.data); };
     const fini = new Promise((ok) => { rec.onstop = ok; });
     rec.start(1000);
     const debut = performance.now();
@@ -558,8 +588,6 @@
         image(Math.min(t, duree));
         if (progres) progres(Math.min(1, t / duree));
         if (t >= duree) return ok();
-        // setTimeout plutôt que requestAnimationFrame : l'enregistrement continue
-        // même si l'onglet passe brièvement en arrière-plan.
         setTimeout(tic, 1000 / FPS);
       };
       tic();
@@ -571,30 +599,51 @@
     const mime = (rec.mimeType || type || 'video/webm').split(';')[0];
     return { blob: new Blob(morceaux, { type: mime }), type: mime, duree: Math.round(duree) };
   }
+  const posterBien = (b) => { const p = (b.photos || [])[0]; return p ? (/^(data:|https?:|\/)/.test(p) ? p : 'assets/img/' + p) : ''; };
+  function blocVideoFormat(b, fmt) {
+    const champ = fmt === 'vertical' ? 'videoVerticale' : 'video';
+    const v = b[champ];
+    const ap = state.videoApercu && state.videoApercu[b.serverId + '|' + fmt];
+    const nomF = fmt === 'vertical' ? 'Format réel (vertical 9:16)' : 'Format plateforme (horizontal 16:9)';
+    const usage = fmt === 'vertical' ? 'Pour vos réseaux (Instagram, TikTok…) et la page « Vidéos » de la plateforme.' : 'Affichée sur la fiche du bien, sur la plateforme.';
+    const fichier = 'home-tour-' + (fmt === 'vertical' ? 'reel-' : '') + String(b.titre || 'bien').toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    const lecteur = (url) => '<video class="se-video ' + fmt + '" src="' + esc(url) + '" poster="' + esc(posterBien(b)) + '" controls playsinline preload="metadata"></video>';
+    return '<div class="se-video-format"><div class="se-row" style="justify-content:space-between;gap:8px;flex-wrap:wrap"><b>' + nomF + '</b>' +
+        (ap ? '<span class="se-badge warn">Aperçu, pas encore publié</span>' : v ? (v.publie ? '<span class="se-badge open">Publiée</span>' : '<span class="se-badge muted">Non publiée</span>') : '<span class="se-badge muted">Pas encore créée</span>') + '</div>' +
+      '<p class="se-hint" style="margin:4px 0 8px">' + usage + '</p>' +
+      (ap ? lecteur(ap.url) + '<div class="se-row" style="gap:8px;flex-wrap:wrap;margin-top:8px"><button type="button" class="se-btn sm" data-act="video-publier" data-id="' + esc(b.serverId) + '" data-format="' + fmt + '">Publier</button>' +
+          '<a class="se-btn ghost sm" href="' + ap.url + '" download="' + fichier + (ap.type === 'video/mp4' ? '.mp4' : '.webm') + '">Télécharger</a>' +
+          '<button type="button" class="se-btn ghost sm" data-act="video-oublier" data-id="' + esc(b.serverId) + '" data-format="' + fmt + '">Annuler</button></div>'
+        : v ? lecteur(v.url) + '<div class="se-row" style="gap:8px;flex-wrap:wrap;margin-top:8px">' +
+            '<a class="se-btn ghost sm" href="' + esc(v.url) + '" download>Télécharger</a>' +
+            '<button type="button" class="se-btn ghost sm" data-act="video-visibilite" data-id="' + esc(b.serverId) + '" data-format="' + fmt + '">' + (v.publie ? 'Retirer de la plateforme' : 'Publier') + '</button>' +
+            '<button type="button" class="se-btn ghost sm" data-act="video-supprimer" data-id="' + esc(b.serverId) + '" data-format="' + fmt + '">Supprimer</button></div>'
+        : '') +
+    '</div>';
+  }
   function carteVideo(b) {
     if (!b.serverId) return '';
-    const v = b.video;
-    const ap = state.videoApercu && state.videoApercu[b.serverId];
+    const O = videoOptions(b.serverId);
     const enCours = state.videoEnCours === b.serverId;
     const nbPhotos = (b.photos || []).length;
+    const formats = ['horizontal', 'vertical'].filter((f) => O.formats[f]);
     return '<div class="se-card se-video-carte">' +
-      '<div class="se-row" style="justify-content:space-between;gap:10px;flex-wrap:wrap"><h3>Vidéo home tour</h3>' +
-        (v ? (v.publie ? '<span class="se-badge open">En ligne sur la fiche</span>' : '<span class="se-badge muted">Non publiée</span>') : '') + '</div>' +
-      '<p class="se-hint" style="margin:6px 0 12px">Une vidéo verticale de ~' + Math.round(2.6 + Math.min(8, nbPhotos) * 3 + 2.8) + ' s au format Reel Instagram, créée à partir des photos du bien (8 maximum), avec titre, quartier et musique d’ambiance. Gardez cet onglet ouvert pendant la création.</p>' +
+      '<h3>Vidéos home tour</h3>' +
+      '<p class="se-hint" style="margin:6px 0 12px">Créées à partir des photos du bien (8 maximum, ~' + Math.round(2.6 + Math.min(8, nbPhotos) * 3 + 2.8) + ' s). Choisissez ce qui s’affiche, puis validez : les vidéos se créent dans votre navigateur (gardez l’onglet ouvert), vous les regardez, puis vous les publiez.</p>' +
+      (!videoSupportee() ? '<p class="se-note">Ce navigateur ne sait pas créer de vidéo. Utilisez Chrome, Edge ou Safari récent.</p>'
+        : nbPhotos < 2 ? '<p class="se-note">Ajoutez au moins 2 photos au bien pour créer les vidéos.</p>'
+        : '<div class="se-video-options">' +
+            '<span class="se-kicker">CE QUI S’AFFICHE</span><div class="se-video-cases">' +
+              VIDEO_OPTIONS.map(([k, l]) => '<label><input type="checkbox" data-video-opt="' + k + '" data-id="' + esc(b.serverId) + '"' + (O[k] ? ' checked' : '') + '/> ' + l + '</label>').join('') + '</div>' +
+            (O.rue ? '<p class="se-hint" style="margin:6px 0 0">Le nom de la rue rend le bien plus facile à repérer : à réserver à vos réseaux si le vendeur est d’accord.</p>' : '') +
+            '<span class="se-kicker" style="margin-top:12px;display:block">FORMATS</span><div class="se-video-cases">' +
+              '<label><input type="checkbox" data-video-format="horizontal" data-id="' + esc(b.serverId) + '"' + (O.formats.horizontal ? ' checked' : '') + '/> Horizontal 16:9 (fiche sur la plateforme)</label>' +
+              '<label><input type="checkbox" data-video-format="vertical" data-id="' + esc(b.serverId) + '"' + (O.formats.vertical ? ' checked' : '') + '/> Vertical 9:16 (réels et page « Vidéos »)</label></div>' +
+            '<div class="se-row" style="gap:8px;margin-top:12px;flex-wrap:wrap"><button type="button" class="se-btn" data-act="video-generer" data-id="' + esc(b.serverId) + '"' + (enCours || !formats.length ? ' disabled' : '') + '>' +
+              (enCours ? 'Création ' + (state.videoFormatEnCours === 'vertical' ? 'du format réel' : 'du format plateforme') + '…' : 'Valider et créer ' + (formats.length > 1 ? 'les 2 vidéos' : 'la vidéo')) + '</button></div>' +
+          '</div>') +
       (enCours ? '<div class="se-video-progres"><i style="width:' + Math.round((state.videoProgres || 0) * 100) + '%"></i></div><p class="se-hint" data-video-statut>Création en cours… ' + Math.round((state.videoProgres || 0) * 100) + ' %</p>' : '') +
-      (ap ? '<video class="se-video" src="' + ap.url + '" controls playsinline></video>' +
-          '<div class="se-row" style="gap:8px;flex-wrap:wrap;margin-top:10px"><button type="button" class="se-btn" data-act="video-publier" data-id="' + esc(b.serverId) + '">Publier sur la fiche</button>' +
-          '<a class="se-btn ghost" href="' + ap.url + '" download="home-tour-' + esc((b.titre || 'bien').toLowerCase().replace(/[^a-z0-9]+/g, '-')) + (ap.type === 'video/mp4' ? '.mp4' : '.webm') + '">Télécharger pour Instagram</a>' +
-          '<button type="button" class="se-btn ghost" data-act="video-oublier" data-id="' + esc(b.serverId) + '">Annuler</button></div>'
-        : v ? '<video class="se-video" src="' + esc(v.url) + '" controls playsinline preload="metadata"></video>' +
-          '<div class="se-row" style="gap:8px;flex-wrap:wrap;margin-top:10px">' +
-            '<button type="button" class="se-btn ghost" data-act="video-generer" data-id="' + esc(b.serverId) + '"' + (enCours ? ' disabled' : '') + '>Recréer la vidéo</button>' +
-            '<a class="se-btn ghost" href="' + esc(v.url) + '" download>Télécharger pour Instagram</a>' +
-            '<button type="button" class="se-btn ghost" data-act="video-visibilite" data-id="' + esc(b.serverId) + '">' + (v.publie ? 'Retirer de la fiche' : 'Publier sur la fiche') + '</button>' +
-            '<button type="button" class="se-btn ghost" data-act="video-supprimer" data-id="' + esc(b.serverId) + '">Supprimer</button></div>'
-        : (!videoSupportee() ? '<p class="se-note">Ce navigateur ne sait pas créer de vidéo. Utilisez Chrome, Edge ou Safari récent.</p>'
-          : nbPhotos < 2 ? '<p class="se-note">Ajoutez au moins 2 photos au bien pour créer la vidéo.</p>'
-          : '<button type="button" class="se-btn" data-act="video-generer" data-id="' + esc(b.serverId) + '"' + (enCours ? ' disabled' : '') + '>' + (enCours ? 'Création…' : 'Créer la vidéo') + '</button>')) +
+      '<div class="se-video-formats">' + blocVideoFormat(b, 'horizontal') + blocVideoFormat(b, 'vertical') + '</div>' +
     '</div>';
   }
 
@@ -1710,7 +1759,7 @@
       delai: b.delai || '', dejaEnVente: b.dejaEnVente || '', motif: b.motif || '',
       statut: b.statut || 'brouillon', etapeProposition: b.etapeProposition || '', proprietaireId: lead ? lead.id : null,
       photos: b.photos || [], description: b.description || '',
-      coupDeCoeur: b.coupDeCoeur || '', editorial: b.editorial || null, video: b.video || null, visite: b.visite || null, panoramas: b.panoramas || [], venduParAgence: b.venduParAgence === true ? true : (b.venduParAgence === false ? false : null),
+      coupDeCoeur: b.coupDeCoeur || '', editorial: b.editorial || null, video: b.video || null, videoVerticale: b.videoVerticale || null, visite: b.visite || null, panoramas: b.panoramas || [], venduParAgence: b.venduParAgence === true ? true : (b.venduParAgence === false ? false : null),
       atouts: b.atouts || b.annexes || [], annexes: b.annexes || [], mandat: { type: 'simple', fin: '' }, cree: b.cree || nowISO(),
       exclusivite: b.exclusivite || { statut: 'scan_en_cours', liens: [] },
       validation: b.validation || 'en_attente', surSeecret: b.surSeecret !== false,
@@ -7555,54 +7604,65 @@
     'video-generer': async (el, id) => {
       const b = (state.biensServeur || []).find((x) => x.serverId === id);
       if (!b || state.videoEnCours) return;
-      state.videoEnCours = id; state.videoProgres = 0; render();
-      try {
-        let dernier = 0;
-        const res = await genererHomeTour(b, (p) => {
-          state.videoProgres = p;
-          if (p - dernier > 0.04 || p === 1) {
-            dernier = p;
-            const barre = document.querySelector('.se-video-progres i'); if (barre) barre.style.width = Math.round(p * 100) + '%';
-            const st = document.querySelector('[data-video-statut]'); if (st) st.textContent = 'Création en cours… ' + Math.round(p * 100) + ' %';
-          }
-        });
-        state.videoApercu = state.videoApercu || {};
-        if (state.videoApercu[id]) URL.revokeObjectURL(state.videoApercu[id].url);
-        state.videoApercu[id] = { url: URL.createObjectURL(res.blob), blob: res.blob, type: res.type };
-        toast('Vidéo prête (' + res.duree + ' s, ' + (res.blob.size / 1048576).toFixed(1).replace('.', ',') + ' Mo). Regardez-la avant de la publier.', 'ok');
-      } catch (err) { toast(err.message || 'Création impossible', 'warn'); }
-      state.videoEnCours = null; render();
+      const O = videoOptions(id);
+      const formats = ['horizontal', 'vertical'].filter((f) => O.formats[f]);
+      state.videoEnCours = id; state.videoApercu = state.videoApercu || {};
+      for (const fmt of formats) {
+        state.videoFormatEnCours = fmt; state.videoProgres = 0; render();
+        try {
+          let dernier = 0;
+          const res = await genererHomeTour(b, (p) => {
+            state.videoProgres = p;
+            if (p - dernier > 0.04 || p === 1) {
+              dernier = p;
+              const barre = document.querySelector('.se-video-progres i'); if (barre) barre.style.width = Math.round(p * 100) + '%';
+              const st = document.querySelector('[data-video-statut]'); if (st) st.textContent = 'Création ' + (fmt === 'vertical' ? 'du format réel' : 'du format plateforme') + '… ' + Math.round(p * 100) + ' %';
+            }
+          }, { format: fmt, options: O });
+          const cle = id + '|' + fmt;
+          if (state.videoApercu[cle]) URL.revokeObjectURL(state.videoApercu[cle].url);
+          state.videoApercu[cle] = { url: URL.createObjectURL(res.blob), blob: res.blob, type: res.type };
+        } catch (err) { toast(err.message || 'Création impossible', 'warn'); break; }
+      }
+      state.videoEnCours = null; state.videoFormatEnCours = null; render();
+      toast('Vidéos prêtes : regardez-les, puis publiez-les.', 'ok');
     },
     'video-oublier': (el, id) => {
-      if (state.videoApercu && state.videoApercu[id]) { URL.revokeObjectURL(state.videoApercu[id].url); delete state.videoApercu[id]; }
+      const cle = id + '|' + (el.getAttribute('data-format') || 'horizontal');
+      if (state.videoApercu && state.videoApercu[cle]) { URL.revokeObjectURL(state.videoApercu[cle].url); delete state.videoApercu[cle]; }
       render();
     },
     'video-publier': async (el, id) => {
-      const ap = state.videoApercu && state.videoApercu[id];
+      const fmt = el.getAttribute('data-format') || 'horizontal';
+      const cle = id + '|' + fmt;
+      const ap = state.videoApercu && state.videoApercu[cle];
       if (!ap) return;
       el.disabled = true; el.textContent = 'Envoi…';
       try {
-        const r = await fetch('/api/biens/' + encodeURIComponent(id) + '/video?publier=1', { method: 'POST', headers: { 'content-type': ap.type }, body: ap.blob });
+        const O = videoOptions(id);
+        const r = await fetch('/api/biens/' + encodeURIComponent(id) + '/video?publier=1&format=' + fmt + '&options=' + encodeURIComponent(JSON.stringify(O)), { method: 'POST', headers: { 'content-type': ap.type }, body: ap.blob });
         const res = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(res.error || 'Envoi impossible');
-        const b = (state.biensServeur || []).find((x) => x.serverId === id); if (b) b.video = res.video;
-        URL.revokeObjectURL(ap.url); delete state.videoApercu[id];
-        toast('Vidéo publiée : les membres la voient sur la fiche.', 'ok');
+        const b = (state.biensServeur || []).find((x) => x.serverId === id); if (b) b[res.champ] = res.video;
+        URL.revokeObjectURL(ap.url); delete state.videoApercu[cle];
+        toast(fmt === 'vertical' ? 'Réel publié : il apparaît dans la page « Vidéos » de la plateforme.' : 'Vidéo publiée sur la fiche du bien.', 'ok');
       } catch (err) { toast(err.message || 'Envoi impossible', 'warn'); }
       render();
     },
     'video-visibilite': async (el, id) => {
-      const b = (state.biensServeur || []).find((x) => x.serverId === id); if (!b || !b.video) return;
-      const r = await fetch('/api/biens/' + encodeURIComponent(id) + '/video', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ publie: !b.video.publie }) });
+      const fmt = el.getAttribute('data-format') || 'horizontal'; const champ = fmt === 'vertical' ? 'videoVerticale' : 'video';
+      const b = (state.biensServeur || []).find((x) => x.serverId === id); if (!b || !b[champ]) return;
+      const r = await fetch('/api/biens/' + encodeURIComponent(id) + '/video?format=' + fmt, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ publie: !b[champ].publie }) });
       const res = await r.json().catch(() => ({}));
-      if (r.ok) { b.video = res.video; toast(res.video.publie ? 'Vidéo publiée sur la fiche.' : 'Vidéo retirée de la fiche.', 'ok'); } else toast(res.error || 'Erreur', 'warn');
+      if (r.ok) { b[champ] = res.video; toast(res.video.publie ? 'Vidéo publiée.' : 'Vidéo retirée de la plateforme.', 'ok'); } else toast(res.error || 'Erreur', 'warn');
       render();
     },
     'video-supprimer': async (el, id) => {
+      const fmt = el.getAttribute('data-format') || 'horizontal'; const champ = fmt === 'vertical' ? 'videoVerticale' : 'video';
       const b = (state.biensServeur || []).find((x) => x.serverId === id); if (!b) return;
       if (!el.dataset.confirme) { el.dataset.confirme = '1'; el.textContent = 'Confirmer la suppression'; return; }
-      const r = await fetch('/api/biens/' + encodeURIComponent(id) + '/video', { method: 'DELETE' });
-      if (r.ok) { b.video = null; toast('Vidéo supprimée.', 'ok'); } else toast('Suppression impossible', 'warn');
+      const r = await fetch('/api/biens/' + encodeURIComponent(id) + '/video?format=' + fmt, { method: 'DELETE' });
+      if (r.ok) { b[champ] = null; toast('Vidéo supprimée.', 'ok'); } else toast('Suppression impossible', 'warn');
       render();
     },
     'editorial-generer': async (el, id) => {
@@ -7682,6 +7742,8 @@
   document.addEventListener('change', (e) => {
     const t = e.target;
     if (!t || !t.hasAttribute) return;
+    if (t.hasAttribute('data-video-opt')) { videoOptions(t.getAttribute('data-id'))[t.getAttribute('data-video-opt')] = t.checked; render(); return; }
+    if (t.hasAttribute('data-video-format')) { videoOptions(t.getAttribute('data-id')).formats[t.getAttribute('data-video-format')] = t.checked; render(); return; }
     if (t.hasAttribute('data-coord-outil')) { radar.coordChoix = radar.coordChoix || {}; radar.coordChoix[t.getAttribute('data-coord-outil')] = t.checked; render(); }
     else if (t.hasAttribute('data-coord-tout')) { radar.coordChoix = radar.coordChoix || {}; radar.coordChoix._tout = t.checked; render(); }
   });
