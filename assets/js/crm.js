@@ -4821,6 +4821,59 @@
     // Recherche encore en cours côté serveur : on revient chercher le résultat.
     else if (F && F.enCours && location.hash.indexOf(encodeURIComponent(id)) > -1) setTimeout(() => chargerFicheRadar(id, true), 4000);
   }
+  // ---- Téléphone et email du gérant : action volontaire, outil par outil ----
+  // +33612345678 → +33 6 12 34 56 78 ; 0612345678 → 06 12 34 56 78
+  function rdTel(t) {
+    const v = String(t || '').replace(/[^\d+]/g, '');
+    if (/^\+33\d{9}$/.test(v)) return '+33 ' + v.slice(3, 4) + ' ' + v.slice(4).replace(/(\d{2})(?=\d)/g, '$1 ');
+    if (/^0\d{9}$/.test(v)) return v.replace(/(\d{2})(?=\d)/g, '$1 ');
+    return t;
+  }
+  const RD_STATUT_OUTIL = { trouve: 'trouvé', vide: 'rien trouvé', epuise: 'crédits épuisés', erreur: 'erreur (vérifiez la clé)', non_configure: 'pas de clé' };
+  function rdJauge(o) {
+    if (!o.configure) return '<span class="se-hint">pas de clé dans Railway</span>';
+    if (o.soldeConnu && typeof o.solde === 'number') {
+      const max = Math.max(o.max || 0, o.solde, 1); const pc = Math.round(o.solde / max * 100);
+      const cls = o.solde <= 0 ? 'vide' : pc < 20 ? 'bas' : '';
+      return '<span class="rd-jauge ' + cls + '" title="' + o.solde + ' crédits sur ' + max + ' (plus haut solde vu)"><i style="width:' + pc + '%"></i></span><span class="rd-jauge-txt">' + num(o.solde) + ' crédit' + (o.solde > 1 ? 's' : '') + ' restant' + (o.solde > 1 ? 's' : '') + '</span>';
+    }
+    return '<span class="rd-jauge inconnue" title="Cet outil ne donne pas son solde"><i style="width:100%"></i></span><span class="rd-jauge-txt">solde non communiqué · ' + o.utilisesMois + ' recherche' + (o.utilisesMois > 1 ? 's' : '') + ' ce mois' +
+      (o.dernier && (o.dernier.statut === 'epuise' || o.dernier.statut === 'erreur') ? ' · dernier essai : ' + esc(RD_STATUT_OUTIL[o.dernier.statut]) : '') + '</span>';
+  }
+  function rdBlocCoordonnees(F, p) {
+    const d = p.dirigeant;
+    if (!d || !d.nom) return '';
+    const nomD = ((d.prenom || '') + ' ' + d.nom).trim();
+    const cp = p.coordPro;
+    const res = cp && (cp.etapes || []).length ? '<p class="se-hint" style="margin:6px 0 0">Dernière recherche' + (cp.le ? ' le ' + dFR(cp.le) : '') + ' : ' + cp.etapes.map((e) => esc(e.fournisseur) + ' — ' + esc(RD_STATUT_OUTIL[e.statut] || e.statut)).join(' · ') + '</p>' : '';
+    if (!radar.coordOuvert || radar.coordOuvert !== F.fiche.id) {
+      return '<div class="rd-coord"><button class="se-btn sm" data-act="radar-coord-ouvrir" data-id="' + esc(F.fiche.id) + '">📞 Téléphone et email du gérant</button>' +
+        '<span class="se-hint"> Recherche payante en crédits : vous choisissez les outils.</span>' + res + '</div>';
+    }
+    const outils = radar.outilsCoord;
+    if (!outils) return '<div class="rd-coord"><p class="se-hint">Lecture des crédits restants…</p></div>';
+    const choix = radar.coordChoix || {};
+    const lignes = outils.map((o) => {
+      const vide = o.soldeConnu && typeof o.solde === 'number' && o.solde <= 0;
+      const ok = o.configure && !vide;
+      const coche = ok && choix[o.id] !== false;
+      return '<label class="rd-outil' + (ok ? '' : ' off') + '"><input type="checkbox" data-coord-outil="' + o.id + '"' + (coche ? ' checked' : '') + (ok ? '' : ' disabled') + '/>' +
+        '<span class="rd-outil-nom">' + esc(o.nom) + '</span>' + rdJauge(o) +
+        (o.configure ? ' <a class="se-hint" href="' + esc(o.site) + '" target="_blank" rel="noopener">recharger</a>' : '') + '</label>';
+    }).join('');
+    const nb = outils.filter((o) => o.configure && !(o.soldeConnu && typeof o.solde === 'number' && o.solde <= 0) && choix[o.id] !== false).length;
+    return '<div class="rd-coord ouvert"><div class="rd-coord-tete"><b>Téléphone et email de ' + esc(nomD) + '</b><button class="se-btn ghost sm" data-act="radar-coord-fermer">Fermer</button></div>' +
+      '<p class="se-hint" style="margin:4px 0 10px">Chaque outil coché coûte environ 1 crédit par recherche. Les outils sont interrogés dans l’ordre.</p>' +
+      '<div class="rd-outils">' + lignes + '</div>' +
+      '<label class="rd-outil-opt"><input type="checkbox" data-coord-tout' + (choix._tout ? ' checked' : '') + '/> Interroger tous les outils cochés, même après un premier résultat (plus de chances, plus de crédits)</label>' +
+      '<div class="se-row" style="gap:8px;margin-top:10px;flex-wrap:wrap"><button class="se-btn" data-act="radar-coord-lancer" data-id="' + esc(F.fiche.id) + '"' + (nb && !radar.coordEnCours ? '' : ' disabled') + '>' +
+        (radar.coordEnCours ? 'Recherche en cours… (jusqu’à 1 min par outil)' : 'Lancer la recherche · ' + nb + ' outil' + (nb > 1 ? 's' : '') + ' · ' + (choix._tout ? nb : 'jusqu’à ' + nb) + ' crédit' + (nb > 1 ? 's' : '')) + '</button>' +
+        '<button class="se-btn ghost sm" data-act="radar-coord-soldes">Actualiser les soldes</button></div>' + res + '</div>';
+  }
+  async function rdChargerOutils(rafraichir) {
+    try { const r = await fetch('/api/radar/credits' + (rafraichir ? '?rafraichir=1' : ''), { credentials: 'same-origin' }); const d = await r.json(); if (r.ok) radar.outilsCoord = d.outils; } catch (e) { /* hors ligne */ }
+    render();
+  }
   function rdLettre(F) {
     const x = F.fiche; const p = x.proprietaire || {}; const d = p.dirigeant; const ag = F.agent || {};
     const ou = x.adresse + (x.etage != null ? ', ' + etageTxt(x.etage) : '') + (x.porte ? ', porte ' + x.porte : '');
@@ -4862,15 +4915,15 @@
           const li = (c.linkedin || []).find((l) => radarNormC(l.nom).indexOf(radarNormC(d.nom)) > -1);
           return '<li><span class="se-hint">' + esc(d.qualite || 'Dirigeant') + '</span> <b>' + esc(nomD) + '</b>' + (d.age ? ', ' + d.age + ' ans' : '') + ' · ' + (li ? '<a href="' + esc(li.url) + '" target="_blank" rel="noopener">LinkedIn ✓</a>' : '<a href="https://www.linkedin.com/search/results/people/?keywords=' + encodeURIComponent(nomD) + '" target="_blank" rel="noopener">chercher sur LinkedIn</a>') + '</li>';
         })()).join('') +
-        (c.telephones || []).map((t) => '<li><span class="se-hint">Téléphone</span> <a href="tel:' + esc(t) + '"><b>' + esc(t.replace(/(\d{2})(?=\d)/g, '$1 ')) + '</b></a></li>').join('') +
+        (c.telephones || []).map((t) => '<li><span class="se-hint">Téléphone</span> <a href="tel:' + esc(t) + '"><b>' + esc(rdTel(t)) + '</b></a></li>').join('') +
         (c.emails || []).map((m) => '<li><span class="se-hint">Email</span> <a href="mailto:' + esc(m) + '"><b>' + esc(m) + '</b></a></li>').join('') +
         (c.site ? '<li><span class="se-hint">Site</span> <a href="' + esc(c.site.url) + '" target="_blank" rel="noopener">' + esc(c.site.titre || c.site.url) + '</a></li>' : '') +
         (p.societe && p.societe.siege ? '<li><span class="se-hint">Courrier au siège</span> ' + esc(p.societe.siege) + '</li>' : '') +
         '<li><span class="se-hint">Fiches officielles</span> <a href="https://annuaire-entreprises.data.gouv.fr/entreprise/' + esc(p.siren) + '" target="_blank" rel="noopener">Annuaire</a> · <a href="https://www.pappers.fr/entreprise/' + esc(p.siren) + '" target="_blank" rel="noopener">Pappers</a> · <a href="https://www.societe.com/cgi-bin/search?champs=' + esc(p.siren) + '" target="_blank" rel="noopener">Societe.com</a></li></ul>' +
         (!(c.telephones || []).length && !(c.emails || []).length ? '<p class="se-hint">' + (F.enrichi ? (c.linkedin ? 'Pas de téléphone ni d’email publiés par la société : passez par LinkedIn ou le courrier.' : 'Téléphones, emails et LinkedIn trouvés automatiquement avec la clé Exa (voir « Comment ça marche ? »).') : '') + '</p>' : '') +
         (c.sourcePro ? '<p class="se-hint">Coordonnées du gérant trouvées via ' + esc(c.sourcePro) + '.</p>' : '') +
-        (F.enrichi && !F.fournisseursPro ? '<p class="se-hint">Annuaires pro (Dropcontact, Société Info, Datagma, FullEnrich) : aucune clé configurée, ils ne sont pas interrogés.</p>' : '') +
-        (p.coordPro && !p.coordPro.trouve && (p.coordPro.etapes || []).length ? '<p class="se-hint">Annuaires pro interrogés pour le gérant : ' + p.coordPro.etapes.map((e) => esc(e.fournisseur || e.source || '') + ' (' + ({ vide: 'rien trouvé', epuise: 'crédits épuisés', erreur: 'erreur, vérifiez la clé', non_configure: 'pas de clé', trouve: 'trouvé' }[e.statut] || esc(e.statut)) + ')').join(', ') + '.</p>' : '') +
+        rdBlocCoordonnees(F, p) +
+
         (F.kaspr && (c.linkedin || [])[0] ? '<button class="se-btn ghost sm" data-act="radar-kaspr" data-id="' + esc(x.id) + '" data-url="' + esc(c.linkedin[0].url) + '">Téléphone et email du gérant via Kaspr (profil LinkedIn ci-dessus)</button>' : '') +
         ((p.autresMandats || []).length ? '<div style="margin-top:12px"><span class="se-kicker">AUTRES SOCIÉTÉS DU GÉRANT · ' + p.autresMandats.length + '</span><ul class="rd-ul">' + p.autresMandats.slice(0, 10).map((m) => '<li><a href="https://annuaire-entreprises.data.gouv.fr/entreprise/' + esc(m.siren) + '" target="_blank" rel="noopener">' + esc(m.entreprise) + '</a> <span class="se-hint">' + esc([m.role, m.ville].filter(Boolean).join(' · ')) + '</span></li>').join('') + '</ul></div>' : (F.enrichi && p.dirigeant ? '<p class="se-hint">Aucun autre mandat trouvé pour ce gérant.</p>' : ''));
     } else {
@@ -6489,6 +6542,25 @@
     'radar-vue': (el, id) => { radar.vue = id; render(); },
     'radar-vers-secteur': (el, id) => { radar.secteurs = [id]; radar.vue = 'liste'; rdRelancer(); },
     'radar-siren': (el, id) => { radar.siren = id || ''; radar.sirenNom = el.getAttribute('data-nom') || ''; radar.vue = 'liste'; rdRelancer(); },
+    'radar-coord-ouvrir': (el, id) => { radar.coordOuvert = id; radar.coordChoix = radar.coordChoix || {}; render(); rdChargerOutils(false); },
+    'radar-coord-fermer': () => { radar.coordOuvert = null; render(); },
+    'radar-coord-soldes': () => { radar.outilsCoord = null; render(); rdChargerOutils(true); },
+    'radar-coord-lancer': async (el, id) => {
+      const choix = radar.coordChoix || {};
+      const outils = (radar.outilsCoord || []).filter((o) => o.configure && !(o.soldeConnu && typeof o.solde === 'number' && o.solde <= 0) && choix[o.id] !== false).map((o) => o.id);
+      if (!outils.length) { toast('Cochez au moins un outil.', 'warn'); return; }
+      radar.coordEnCours = true; render();
+      try {
+        const r = await fetch('/api/radar/fiche/' + encodeURIComponent(id) + '/coordonnees', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ outils: outils, toutEssayer: !!choix._tout }) });
+        const d = await r.json(); if (!r.ok) throw new Error(d.error || 'Recherche impossible');
+        const F = radar.fiches[id];
+        if (F && F.fiche) { F.fiche.proprietaire.coordPro = d.resultat; F.fiche.proprietaire.contacts = d.contacts; }
+        radar.outilsCoord = d.outils;
+        toast(d.resultat.trouve ? 'Coordonnées trouvées : ' + [d.resultat.telephone, d.resultat.email].filter(Boolean).join(' · ') : 'Aucun outil n’a trouvé de téléphone ni d’email pour ce gérant.', d.resultat.trouve ? 'ok' : 'warn');
+        chargerFicheRadar(id, false);
+      } catch (e) { toast(e.message, 'warn'); }
+      radar.coordEnCours = false; render();
+    },
     'radar-kaspr': async (el, id) => {
       const url = el.getAttribute('data-url');
       el.disabled = true; el.textContent = 'Recherche Kaspr…';
@@ -7522,6 +7594,12 @@
     const b = bien(cle.slice(4)); if (!b || !b.serveur) return;
     const p = window.TriPhotos.reordonner(b.photos || [], e.detail.de, e.detail.vers);
     enregistrerBien(b, { photos: p }, e.detail.vers === 0 ? 'Nouvelle photo principale.' : 'Ordre des photos enregistré.');
+  });
+  document.addEventListener('change', (e) => {
+    const t = e.target;
+    if (!t || !t.hasAttribute) return;
+    if (t.hasAttribute('data-coord-outil')) { radar.coordChoix = radar.coordChoix || {}; radar.coordChoix[t.getAttribute('data-coord-outil')] = t.checked; render(); }
+    else if (t.hasAttribute('data-coord-tout')) { radar.coordChoix = radar.coordChoix || {}; radar.coordChoix._tout = t.checked; render(); }
   });
   document.addEventListener('change', async (e) => {
     if (e.target.hasAttribute('data-rdf')) { const k = e.target.getAttribute('data-rdf'); radar[k] = e.target.type === 'checkbox' ? e.target.checked : e.target.value; rdMajBouton(); return; }

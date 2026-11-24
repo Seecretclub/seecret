@@ -4191,6 +4191,85 @@ async function appelFullEnrich(prenom, nomFamille, societe) {
   } catch (e) { return { statut: 'erreur' }; }
 }
 
+// ---- Crédits des outils de téléphone / email ----
+// Solde réel quand l'outil le donne (FullEnrich, Dropcontact), sinon nombre de
+// recherches faites ce mois-ci et dernier état connu (épuisé, erreur…).
+const OUTILS_COORD = [
+  { id: 'dropcontact', nom: 'Dropcontact', cle: 'DROPCONTACT_API_KEY', site: 'https://app.dropcontact.com', solde: async () => { const r = await fetch('https://api.dropcontact.com/v1/account/credits', { headers: { 'X-Access-Token': process.env.DROPCONTACT_API_KEY }, signal: AbortSignal.timeout(10000) }); if (!r.ok) throw new Error('HTTP ' + r.status); const d = await r.json(); return Number(d.credits); } },
+  { id: 'fullenrich', nom: 'FullEnrich', cle: 'FULLENRICH_API_KEY', site: 'https://app.fullenrich.com', solde: async () => { const r = await fetch('https://app.fullenrich.com/api/v2/account/credits', { headers: { Authorization: 'Bearer ' + process.env.FULLENRICH_API_KEY }, signal: AbortSignal.timeout(10000) }); if (!r.ok) throw new Error('HTTP ' + r.status); const d = await r.json(); return Number(d.balance); } },
+  { id: 'datagma', nom: 'Datagma', cle: 'DATAGMA_API_KEY', site: 'https://app.datagma.com' },
+  { id: 'societeinfo', nom: 'Société Info', cle: 'SOCIETEINFO_API_KEY', site: 'https://societeinfo.com/app' }
+];
+const moisCourant = () => new Date().toISOString().slice(0, 7);
+function creditsLus(id) { return (RS && cacheLu('credits', id)) || { utilises: {}, dernier: null, max: null, solde: null }; }
+function creditsNoter(id, statut, solde) {
+  if (!RS) return;
+  const c = creditsLus(id);
+  c.utilises = c.utilises || {};
+  if (statut && statut !== 'non_configure') { const m = moisCourant(); c.utilises[m] = (c.utilises[m] || 0) + 1; c.dernier = { statut: statut, at: nowISO() }; }
+  if (typeof solde === 'number' && isFinite(solde)) { c.solde = solde; c.soldeLe = nowISO(); c.max = Math.max(c.max || 0, solde); }
+  RS.cacheSet.run('credits', id, nowISO(), JSON.stringify(c));
+}
+async function creditsOutils(rafraichir) {
+  return Promise.all(OUTILS_COORD.map(async (o) => {
+    const configure = fournisseurConfigure(o.cle);
+    let c = creditsLus(o.id);
+    if (configure && o.solde && (rafraichir || !c.soldeLe || Date.now() - Date.parse(c.soldeLe) > 5 * 60e3)) {
+      try { creditsNoter(o.id, null, await o.solde()); c = creditsLus(o.id); c.soldeErreur = null; } catch (e) { c.soldeErreur = e.message; }
+    }
+    return { id: o.id, nom: o.nom, site: o.site, configure: configure, soldeConnu: !!o.solde, solde: c.solde, max: c.max, soldeLe: c.soldeLe || null, soldeErreur: c.soldeErreur || null,
+      utilisesMois: (c.utilises || {})[moisCourant()] || 0, dernier: c.dernier || null, cout: 1 };
+  }));
+}
+async function appelOutilCoord(id, nomComplet, societe, siren) {
+  const parts = nomComplet.split(/\s+/);
+  const prenom = parts[0] || ''; const nomFamille = parts.slice(1).join(' ') || parts[0] || '';
+  if (id === 'dropcontact') return appelDropcontact(prenom, nomFamille, societe);
+  if (id === 'fullenrich') return appelFullEnrich(prenom, nomFamille, societe);
+  if (id === 'datagma') return appelDatagma(prenom, nomFamille, societe);
+  if (id === 'societeinfo') return appelSocieteinfo(nomComplet, societe, siren);
+  return { statut: 'non_configure' };
+}
+app.get('/api/radar/credits', requireAdmin, async (req, res) => {
+  res.json({ ok: true, outils: await creditsOutils(req.query.rafraichir === '1') });
+});
+// Téléphone et email du gérant, avec les outils choisis par l'agent.
+app.post('/api/radar/fiche/:id/coordonnees', requireAdmin, async (req, res) => {
+  if (!RS) return res.status(503).json({ error: 'Base du Radar indisponible.' });
+  const f = rsFiche(req.params.id);
+  if (!f) return res.status(404).json({ error: 'Fiche introuvable.' });
+  radarAppliquerCache(f);
+  const p = f.proprietaire || {};
+  const dg = p.dirigeant;
+  if (p.statut !== 'identifie' || !dg || !dg.nom) return res.status(400).json({ error: 'Il faut d’abord connaître le gérant de la société.' });
+  const choisis = (Array.isArray(req.body && req.body.outils) ? req.body.outils : []).filter((id) => OUTILS_COORD.some((o) => o.id === id && fournisseurConfigure(o.cle)));
+  if (!choisis.length) return res.status(400).json({ error: 'Choisissez au moins un outil.' });
+  const toutEssayer = !!(req.body && req.body.toutEssayer);
+  const nomD = ((dg.prenoms || dg.prenom || '') + ' ' + dg.nom).trim();
+  const etapes = []; const trouves = [];
+  for (const id of choisis) {
+    const o = OUTILS_COORD.find((x) => x.id === id);
+    let r;
+    try { r = await appelOutilCoord(id, nomD, p.nom, p.siren); } catch (e) { r = { statut: 'erreur' }; }
+    creditsNoter(id, r.statut);
+    etapes.push({ fournisseur: o.nom, id: id, statut: r.statut, email: r.email || '', telephone: r.telephone || '', source: r.source || '' });
+    if (r.statut === 'trouve') { trouves.push(r); if (!toutEssayer) break; }
+  }
+  const premier = trouves[0];
+  p.coordPro = { ok: true, trouve: !!premier, email: premier ? premier.email : '', telephone: premier ? premier.telephone : '', source: premier ? premier.source : '', etapes: etapes, le: nowISO(), gerant: nomD };
+  // Tous les numéros / emails trouvés vont dans les contacts de la fiche.
+  p.contacts = p.contacts || { linkedin: [], site: null, telephones: [], emails: [] };
+  trouves.forEach((t) => {
+    if (t.telephone && p.contacts.telephones.indexOf(t.telephone) === -1) p.contacts.telephones.push(t.telephone);
+    if (t.email && p.contacts.emails.indexOf(t.email) === -1) p.contacts.emails.push(t.email);
+  });
+  if (premier) { RS.cacheSet.run('coordpro', p.siren + '|' + nomD, nowISO(), JSON.stringify(p.coordPro)); p.contacts.sourcePro = trouves.map((t) => t.source).join(', '); }
+  f.historique = Array.isArray(f.historique) ? f.historique : [];
+  const LIB = { trouve: 'trouvé', vide: 'rien', epuise: 'crédits épuisés', erreur: 'erreur', non_configure: 'pas de clé' };
+  f.historique.push({ at: nowISO(), par: [req.lead.prenom, req.lead.nom].filter(Boolean).join(' '), action: 'note', valeur: 'Recherche téléphone / email de ' + nomD + ' : ' + etapes.map((e) => e.fournisseur + ' ' + (LIB[e.statut] || e.statut)).join(', ') });
+  rsEcrire(f);
+  res.json({ ok: true, resultat: p.coordPro, contacts: p.contacts, outils: await creditsOutils(true) });
+});
 async function coordonneesPro(nomComplet, societe, siren) {
   const parts = nomComplet.split(/\s+/);
   const prenom = parts[0] || '';
@@ -4205,6 +4284,8 @@ async function coordonneesPro(nomComplet, societe, siren) {
   const etapes = [];
   for (const f of fournisseurs) {
     const r = await f.fn();
+    const o = OUTILS_COORD.find((x) => x.nom.replace(/\s/g, '').toLowerCase() === f.nom.toLowerCase());
+    if (o) creditsNoter(o.id, r.statut);
     etapes.push({ fournisseur: f.nom, statut: r.statut });
     if (r.statut === 'trouve') return { ok: true, trouve: true, email: r.email, telephone: r.telephone, source: r.source, etapes: etapes };
   }
@@ -5960,14 +6041,10 @@ async function radarEnrichirFiche(f) {
     const cleCoord = p2.siren + '|' + nomD;
     await Promise.all([
       avant(avecCache('mandats', 'x', nomD, 30, () => autresMandats(nomD, p2.siren).then((m) => ({ mandats: m }))).then((v) => { if (v) p2.autresMandats = v.mandats; }).catch(() => null)),
-      // Coordonnées pro : on ne mémorise que ce qui a été trouvé (crédits épuisés ou
-      // annuaire en panne aujourd'hui ≠ rien à trouver demain).
-      avant((async () => {
-        const deja = cacheLu('coordpro', cleCoord);
-        const v = deja && deja.trouve ? deja : await coordonneesPro(nomD, p2.nom, p2.siren);
-        if (v && !v.aucunConfigure) { p2.coordPro = v; coordTente = true; if (v.trouve && !deja) RS.cacheSet.run('coordpro', cleCoord, nowISO(), JSON.stringify(v)); }
-        if (v && v.aucunConfigure) coordTente = true;
-      })().catch(() => null))
+      // Téléphone et email : jamais automatiques (ils consomment des crédits).
+      // L'agent les lance depuis la fiche en choisissant les outils. On réutilise
+      // seulement un résultat déjà trouvé.
+      Promise.resolve().then(() => { const deja = cacheLu('coordpro', cleCoord); if (deja && deja.trouve) p2.coordPro = deja; coordTente = true; })
     ]);
     radarAppliquerCache(f);
   }
