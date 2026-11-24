@@ -6339,6 +6339,8 @@
               '<button class="se-btn danger block" data-act="reset">Réinitialiser le CRM</button>' +
             '</div>' +
           '</div>' +
+          (state.moi && state.moi.role === 'superadmin' ? '<div class="se-card"><h3>Sauvegarde du serveur</h3><p class="se-muted">Toute la base (leads, biens, recherches, messages…) et toutes les photos et documents, en un fichier à garder chez vous. Contient des données personnelles : à conserver en lieu sûr.</p>' +
+            '<a class="se-btn block" style="margin-top:12px" href="/api/admin/sauvegarde" download>Télécharger une sauvegarde complète</a></div>' : '') +
           '<div class="se-card"><h3>Accès</h3><p class="se-muted">Deux faces du même club.</p>' +
             '<a class="se-btn ghost block" style="margin-top:12px" href="espace.html">Espace membre</a>' +
             '<a class="se-btn ghost block" style="margin-top:8px" href="index.html">Site public</a>' +
