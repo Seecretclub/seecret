@@ -4764,13 +4764,14 @@ async function pmImporter(raison) {
     fs.mkdirSync(path.join(tmpDir, 'insee'), { recursive: true });
     fs.mkdirSync(path.join(tmpDir, 'siren'), { recursive: true });
     const communes = {};
-    let nbEcrits = 0;
+    let nbEcrits = 0; let disquePlein = '';
     const ecrire = (dossier, nom, ligne) => {
+      if (disquePlein) return;
       const cle = dossier + '/' + nom;
       if (!flux[cle]) flux[cle] = fs.createWriteStream(path.join(tmpDir, dossier, nom + '.ndjson'));
       flux[cle].write(ligne);
       // Garde-fou : on arrête l'import avant de remplir le disque.
-      if (++nbEcrits % 5000 === 0) { const l = placeLibreMo(); if (l !== null && l < 100) throw new Error('import arrêté : il ne restait que ' + l + ' Mo sur le disque du site'); }
+      if (++nbEcrits % 5000 === 0) { const l = placeLibreMo(); if (l !== null && l < 100) disquePlein = 'import arrêté : il ne restait que ' + l + ' Mo sur le disque du site'; }
     };
     // Le zip national (plusieurs centaines de Mo) va dans le dossier temporaire du
     // conteneur, pas sur le volume : seul l'index final (Paris) occupe le disque.
@@ -4796,8 +4797,10 @@ async function pmImporter(raison) {
         PM_IMPORT.lignes++;
       }, tmpZip);
       try { fs.unlinkSync(zipLocal); } catch (e) {}
+      if (disquePlein) break;
     }
     fs.rmSync(tmpZip, { recursive: true, force: true });
+    if (disquePlein) throw new Error(disquePlein);
     await fermerTout();
     if (!PM_IMPORT.lignes) throw new Error('aucune ligne retenue pour les départements ' + PM_DEPTS.join(', '));
     fs.writeFileSync(path.join(tmpDir, 'meta.json'), JSON.stringify({ annee, importeLe: nowISO(), lignes: PM_IMPORT.lignes, departements: PM_DEPTS, communes, source: fichiers.map((f) => f.url) }, null, 1));
