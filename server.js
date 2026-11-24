@@ -6976,6 +6976,9 @@ app.patch('/api/leads/:id/statut', requireAdmin, (req, res) => {
     return res.status(403).json({ error: 'Ce client est attribué à un autre agent.' });
   }
   const statut = String((req.body && req.body.statut) || 'accepte');
+  // Un lead ajouté par l'agence (prospect) n'a pas fait de demande d'adhésion :
+  // on ne lui ouvre pas la plateforme par ce bouton.
+  if (statut === 'accepte' && lead.statut === 'prospect') return res.status(409).json({ error: 'Ce lead n’a pas fait de demande d’adhésion.' });
   lead.statut = statut;
   let notif = null;
   if (statut === 'accepte') {
