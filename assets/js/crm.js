@@ -6592,6 +6592,7 @@
     const groupe = (titre) => '<div class="se-nav-label" style="padding:14px 4px 4px">' + titre + '</div>';
     return '<h3>Menu</h3><p class="se-muted">Tout le CRM.</p><div class="se-list">' +
       groupe('Prospection') +
+      item('radar', ICONS.search, 'Radar') +
       item('recherches', ICONS.search, 'Recherches') +
       item('robot', ICONS.robot, 'Immo Data Robot', matchings().filter((m) => m.statut === 'nouveau').length) +
       item('notifications', ICONS.inbox, 'À prévenir', notifications().length) +
@@ -6599,6 +6600,7 @@
       item('demandes', ICONS.inbox, 'Candidatures', demandesNouvelles()) +
       item('membres', ICONS.users, 'Membres') +
       item('biens-club', ICONS.building, 'Biens du Club') +
+      item('gazette', ICONS.chat, 'La Gazette') +
       groupe('Intelligence') +
       item('rapprochements', ICONS.tag, 'Rapprochements') +
       item('tracking', ICONS.search, 'Tracking') +
@@ -6609,6 +6611,7 @@
       item('verifications', ICONS.check, 'Vérifications', verifEnAttente()) +
       item('messages', ICONS.chat, 'Messages') +
       item('reglages', ICONS.tools, 'Réglages') +
+      (state.moi && state.moi.role === 'superadmin' ? item('agents', ICONS.users, 'Agents') : '') +
       item('espace', ICONS.out, 'Espace membre', 0, 'espace.html') +
       '</div>';
   }
