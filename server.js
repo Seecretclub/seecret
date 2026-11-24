@@ -5329,7 +5329,12 @@ async function radarCharger(cle, arrs, per) {
   const crit = per.recent ? { depuis: radarPeriode('mois').de, jusqua: '' } : { depuis: per.de, jusqua: per.a };
   await enParallele(arrs, 4, async (arr) => {
     try {
-      const res = await radarDpeArrondissement(arr, crit, 4000);
+      // Déjà chargé une fois : on ne redemande que ce qui a pu paraître depuis
+      // (30 jours avant le dernier passage, car l'ADEME publie avec retard).
+      const deja = RS.couvGet.get(radarCouvertureCle(arr, per));
+      const c2 = Object.assign({}, crit);
+      if (deja) { const depuis = new Date(radarAnnee(deja.maj) - 30 * 864e5).toISOString().slice(0, 10); if (depuis > (c2.depuis || '')) c2.depuis = depuis; }
+      const res = await radarDpeArrondissement(arr, c2, 4000);
       const ecrire = RadarSQL.transaction((liste) => liste.forEach((x) => {
         const f = radarFicheDepuisDpe(x, arr);
         const ancien = rsFiche(f.id);
