@@ -4764,10 +4764,13 @@ async function pmImporter(raison) {
     fs.mkdirSync(path.join(tmpDir, 'insee'), { recursive: true });
     fs.mkdirSync(path.join(tmpDir, 'siren'), { recursive: true });
     const communes = {};
+    let nbEcrits = 0;
     const ecrire = (dossier, nom, ligne) => {
       const cle = dossier + '/' + nom;
       if (!flux[cle]) flux[cle] = fs.createWriteStream(path.join(tmpDir, dossier, nom + '.ndjson'));
       flux[cle].write(ligne);
+      // Garde-fou : on arrête l'import avant de remplir le disque.
+      if (++nbEcrits % 5000 === 0) { const l = placeLibreMo(); if (l !== null && l < 100) throw new Error('import arrêté : il ne restait que ' + l + ' Mo sur le disque du site'); }
     };
     // Le zip national (plusieurs centaines de Mo) va dans le dossier temporaire du
     // conteneur, pas sur le volume : seul l'index final (Paris) occupe le disque.
@@ -4815,7 +4818,8 @@ function planifierImportPm() {
   if (process.env.PM_AUTO_IMPORT === '0') return;
   // Premier import automatique peu après le démarrage si l'index n'existe pas,
   // puis vérification mensuelle d'un millésime plus récent.
-  setTimeout(() => { if (!pmMeta()) pmImporter('initial'); }, 2 * 60 * 1000);
+  // Import automatique au démarrage seulement si PM_AUTO_IMPORT=1 (sinon : bouton dans le Radar).
+  if (process.env.PM_AUTO_IMPORT === '1') setTimeout(() => { if (!pmMeta()) pmImporter('initial'); }, 2 * 60 * 1000);
   setInterval(() => pmImporter('mensuel'), 30 * 24 * 60 * 60 * 1000);
 }
 
