@@ -617,3 +617,30 @@ body.se-maps-open { overflow: hidden; }
 .rd-jauge-txt{font-size:12.5px;color:var(--color-taupe,#6f665c)}
 .rd-outil-opt{display:flex;gap:8px;align-items:flex-start;font-size:12.5px;margin-top:10px;color:var(--color-taupe,#6f665c)}
 @media (max-width:640px){.rd-jauge{width:90px}.rd-outil-nom{min-width:80px}}
+
+/* Tableau de bord : la journée de l'agent */
+.se-journee-filtres{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 18px}
+.se-journee-filtres a{display:inline-flex;gap:6px;align-items:center;padding:7px 12px;border-radius:999px;border:1px solid rgba(20,18,16,.14);font-size:13px;color:inherit;text-decoration:none;background:var(--color-paper,#fff)}
+.se-journee-filtres a span{font-weight:600}
+.se-journee-filtres a.actif{background:#141210;color:#fff;border-color:#141210}
+.se-journee-section{margin-bottom:22px}
+.se-journee-titre{display:flex;align-items:center;gap:8px;font-size:12px;letter-spacing:.12em;text-transform:uppercase;margin:0 0 8px;color:var(--color-taupe,#6f665c)}
+.se-journee-titre span{font-weight:700;color:inherit}
+.se-journee-titre.p1{color:#b5483a}
+.se-journee-liste{display:flex;flex-direction:column;border:1px solid rgba(20,18,16,.1);border-radius:14px;overflow:hidden;background:var(--color-paper,#fff)}
+.se-journee-ligne{display:flex;align-items:center;gap:12px;padding:12px 14px;color:inherit;text-decoration:none;border-top:1px solid rgba(20,18,16,.07);min-width:0}
+.se-journee-ligne:first-child{border-top:0}
+.se-journee-ligne:hover{background:rgba(20,18,16,.035)}
+.se-journee-ligne.p1{box-shadow:inset 3px 0 0 #b5483a}
+.se-journee-ligne.p2{box-shadow:inset 3px 0 0 #c9892e}
+.se-journee-ico{width:32px;height:32px;flex:0 0 32px;border-radius:9px;background:rgba(20,18,16,.06);display:grid;place-items:center}
+.se-journee-ico svg{width:17px;height:17px}
+.se-journee-txt{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.se-journee-txt b{font-weight:600;font-size:14px}
+.se-journee-txt span{font-size:12.5px;color:var(--color-taupe,#6f665c);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.se-journee-cat{font-size:11.5px;color:var(--color-taupe,#6f665c);white-space:nowrap}
+.se-journee-fleche{font-size:20px;color:var(--color-taupe,#6f665c)}
+.se-journee-plus{display:block;padding:10px 14px;font-size:13px;border-top:1px solid rgba(20,18,16,.07)}
+.se-journee-stats{margin-top:10px}
+.se-journee-stats summary{cursor:pointer;font-size:13px;color:var(--color-taupe,#6f665c);padding:6px 0}
+@media (max-width:640px){.se-journee-cat{display:none}.se-journee-ligne{padding:11px 12px}}
