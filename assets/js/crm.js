@@ -1792,7 +1792,7 @@
       validation: b.validation || 'en_attente', surSeecret: b.surSeecret !== false,
       serveur: true, email: b.email || '', demo: !!b.demo,
       refAgence: b.refAgence || '', nomProprio: b.nom || '', source: b.source || '', sourceFichier: b.sourceFichier || '', importLot: b.importLot || '',
-      details: b.details || null, mandatOrigine: b.mandatOrigine || null, accesVisites: b.accesVisites || '', verifs: b.verifs || null
+      notesLibres: b.notesLibres || '', details: b.details || null, mandatOrigine: b.mandatOrigine || null, accesVisites: b.accesVisites || '', verifs: b.verifs || null
     };
   }
 
@@ -5455,6 +5455,7 @@
       '<p class="se-hint" style="margin:4px 0 0">' + esc(b.source || 'Import') + (b.refAgence ? ' · réf. ' + esc(b.refAgence) : '') + (b.sourceFichier ? ' · ' + esc(b.sourceFichier) : '') + '</p>' +
       (lignes ? '<div class="se-kv" style="margin-top:12px">' + lignes + '</div>' : '') +
       liste('Pièces', d && d.surfacesDetail) + liste('Prestations', d && d.prestations) + liste('À proximité', d && d.proximites) +
+      (b.description ? '<details style="margin-top:14px"><summary class="se-hint" style="cursor:pointer">Descriptif d’origine</summary><p style="white-space:pre-line;font-size:13.5px;line-height:1.6;margin:8px 0 0">' + esc(b.description) + '</p></details>' : '') +
     '</div>';
   }
   const VERIF_DVF = { vendu_probable: ['Vendu (DVF)', 'alert'], pas_de_vente: ['Pas de vente DVF', 'muted'], sans_position: ['Adresse non localisée', 'muted'], erreur: ['DVF indisponible', 'muted'] };
@@ -5547,8 +5548,11 @@
             ? '<div class="se-list" style="margin-top:12px">' + b.historiquePrix.slice().reverse().map((h) => '<div class="se-list-item"><div style="flex:1;min-width:0"><div style="font-size:13.5px">' + (h.ancien ? euro(h.ancien) + ' → ' : '') + '<b>' + euro(h.nouveau) + '</b> net</div><div class="se-hint">' + dFR(h.at) + (h.auteur ? ' · ' + esc(h.auteur) : '') + (h.source ? ' · ' + esc(h.source) : '') + '</div></div></div>').join('') + '</div>'
             : '<p class="se-hint" style="margin-top:10px">Aucun changement de prix enregistré.</p>') +
           '</div>' +
-          '<div class="se-card"><h3>Descriptif</h3><p style="color:var(--color-graphite);font-size:14.5px;line-height:1.65;margin:10px 0 0">' + esc(b.description) + '</p>' +
-            '<div class="se-chips" style="margin-top:14px">' + (b.atouts || []).map((a) => '<span class="se-chip" style="cursor:default">' + esc(a) + '</span>').join('') + '</div></div>' +
+          (b.importLot ? '' : '<div class="se-card"><h3>Descriptif</h3><p style="color:var(--color-graphite);font-size:14.5px;line-height:1.65;margin:10px 0 0">' + esc(b.description) + '</p>' +
+            '<div class="se-chips" style="margin-top:14px">' + (b.atouts || []).map((a) => '<span class="se-chip" style="cursor:default">' + esc(a) + '</span>').join('') + '</div></div>') +
+          (b.serveur ? '<div class="se-card"><h3>Infos libres</h3><p class="se-hint" style="margin:4px 0 10px">Tout ce que vous voulez noter sur ce bien. Visible seulement dans le CRM.</p>' +
+            '<form data-form="bien-notes" data-id="' + esc(b.serverId) + '"><textarea class="se-textarea" name="notesLibres" rows="5" placeholder="Échange avec le vendeur, travaux, prix plancher, contraintes de visite…" style="width:100%">' + esc(b.notesLibres || '') + '</textarea>' +
+            '<div class="se-row" style="justify-content:flex-end;margin-top:8px"><button class="se-btn sm" type="submit">Enregistrer</button></div></form></div>' : '') +
           '<div class="se-card"><h3>Acquéreurs compatibles</h3>' +
             (compat.length
               ? '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;gap:10px">' +
@@ -8437,6 +8441,18 @@
       return;
     }
 
+    if (kind === 'bien-notes') {
+      const sid = form.getAttribute('data-id');
+      const txt = String(data.get('notesLibres') || '');
+      try {
+        const r = await fetch('/api/biens/' + encodeURIComponent(sid), { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ notesLibres: txt }) });
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'erreur');
+        const b = (state.biensServeur || []).find((x) => x.serverId === sid);
+        if (b) b.notesLibres = txt;
+        toast('Infos enregistrées.', 'ok');
+      } catch (err) { toast('Enregistrement impossible : ' + (err.message || 'erreur'), 'warn'); }
+      return;
+    }
     if (kind === 'editorial') {
       const id = form.getAttribute('data-id');
       const publie = e.submitter ? e.submitter.value === '1' : false;
