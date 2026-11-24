@@ -1728,6 +1728,25 @@ app.post('/api/membre/onboarding', requireAuth, (req, res) => {
   res.json({ ok: true, onboarding: req.lead.onboarding });
 });
 
+// Une fois : titres sans adresse. Biens importés : le titre de « Texte de la
+// fiche » est refait (s'il n'a pas été retouché à la main). Biens sans titre :
+// on leur en donne un, construit de la même façon.
+setTimeout(() => {
+  try {
+    const db = readDb();
+    db.migrations = db.migrations || {};
+    if (db.migrations.titresSansAdresse) return;
+    let edit = 0, vides = 0;
+    (db.biens || []).forEach((b) => {
+      if (b.importLot && b.editorial && b.editorial.auteur === 'Import') { b.editorial.titre = titreEditorialImport(b); edit++; }
+      if (!String(b.titre || '').trim() || /^bien sans titre$/i.test(String(b.titre).trim())) { b.titre = titreEditorialImport(b); vides++; }
+    });
+    db.migrations.titresSansAdresse = { le: nowISO(), editoriaux: edit, titres: vides };
+    writeDb(db);
+    console.log('[biens] titres sans adresse : ' + edit + ' texte(s) de fiche, ' + vides + ' bien(s) sans titre');
+  } catch (e) { console.error('[biens] titres', e.message); }
+}, 6000);
+
 // Une fois : biens validés dans le CRM et « Sur Seecret » activé, mais restés
 // invisibles des membres (créés directement en Avant-première sans validation,
 // ou validés mais laissés en préparation). Aucun email n'est envoyé.
@@ -2978,7 +2997,7 @@ app.post('/api/biens', requireAdmin, (req, res) => {
   const etageN = (() => { const n = Number(body.etage); return (body.etage === null || body.etage === '' || isNaN(n)) ? null : n; })();
   const bien = {
     id: uid('b'), leadId: lead ? lead.id : null, email: lead ? lead.email : '', nom: lead ? nomComplet(lead) : '',
-    ref: String(body.ref || ''), titre: String(body.titre || 'Bien').trim(),
+    ref: String(body.ref || ''), titre: String(body.titre || '').trim() || titreEditorialImport(body),
     adresse: String(body.adresse || '').trim(), ville: String(body.ville || ''), codePostal: String(body.codePostal || ''),
     type: String(body.type || 'Appartement'), quartier: String(body.quartier || ''), transaction: 'Vente',
     surface: Math.max(0, Number(body.surface) || 0), pieces: Math.max(0, Number(body.pieces) || 0),
@@ -3054,6 +3073,7 @@ app.patch('/api/biens/:id', requireAdmin, (req, res) => {
   if (Array.isArray(body.atouts)) bien.atouts = body.atouts.map(String);
   if (Array.isArray(body.photos)) bien.photos = body.photos.map(String).slice(0, 12);
   if (typeof body.surSeecret === 'boolean') bien.surSeecret = body.surSeecret;
+  if (typeof body.notesLibres === 'string') bien.notesLibres = body.notesLibres.slice(0, 5000);
   // « Sur Seecret » activé par l'agent : il veut le bien visible. S'il est déjà
   // validé mais encore en préparation, il passe en Avant-première ; s'il est
   // déjà en Avant-première / En vente sans validation, il devient validé.
@@ -6629,21 +6649,13 @@ function titreEditorialImport(b) {
   // accorde « rénové / lumineux » au féminin pour maison, villa, propriété
   const fem = /^(Maison|Villa|Propriété|Péniche)/.test(nom);
   const trait = fem ? tr.replace(/^rénové$/, 'rénovée').replace('calme et lumineux', 'calme et lumineuse').replace('haussmannien', 'haussmannienne').replace('traversant', 'traversante') : tr;
-  // Le lieu : la rue à Paris et en proche banlieue, sinon la ville.
-  const rue = String(b.adresse || '').split(/\s+[—–-]\s+|\n/)[0].replace(/^\s*\d+[\s,]*(bis|ter|b)?\b\s*,?\s*/i, '').trim();
-  const ville = String(b.ville || '').replace(/\s*\d+(er|e|ème|eme)\b.*/i, '').trim();
-  const estParis = /^75/.test(String(b.codePostal || ''));
-  let lieu = '';
-  if (rue && /^(rue|avenue|boulevard|bd|place|quai|square|villa|impasse|allée|allee|cité|cite|passage|cour|chemin|route|sente|hameau)\b/i.test(rue)) {
-    lieu = rue.replace(/^bd\b/i, 'boulevard');
-    lieu = lieu.toLowerCase().replace(/(^|[\s-])([a-zà-ÿ])/g, (m, a, c) => a + c.toUpperCase())
-      .replace(/(\s)(De|Du|Des|La|Le|Les|Et|Sur|Sous|Aux?)(?=\s)/g, (m, a, w) => a + w.toLowerCase()).replace(/(\s)([DL])'/g, (m, a, w) => a + w.toLowerCase() + "'").replace(/([dl])'([a-zà-ÿ])/g, (m, a, c) => a + "'" + c.toUpperCase());
-    lieu = lieu.charAt(0).toLowerCase() + lieu.slice(1);
-    if (!estParis && ville) lieu += ', ' + ville;
-  } else lieu = ville ? 'à ' + ville : '';
-  let titre = [nom, trait].filter(Boolean).join(' ') + (lieu ? (lieu.startsWith('à ') ? ' ' : ', ') + lieu : '');
-  if (titre.length > 90) titre = [nom, trait].filter(Boolean).join(' ') + (ville ? ' à ' + ville : '');
-  if (titre.length > 90) titre = nom + (ville ? ' à ' + ville : '');
+  // Le lieu, sans jamais l'adresse (off-market) : l'arrondissement à Paris, sinon la ville.
+  const cp = String(b.codePostal || '');
+  const arr = /^75(0\d\d|116)$/.test(cp) ? (cp === '75116' ? 16 : Number(cp.slice(3))) : 0;
+  const ville = String(b.ville || '').replace(/\s*\d+\s*(er|e|ème|eme|ᵉ)?\b.*$/i, '').trim();
+  const lieu = arr ? 'Paris ' + arr + (arr === 1 ? 'er' : 'e') : ville;
+  let titre = [nom, trait].filter(Boolean).join(' ') + (lieu ? ', ' + lieu : '');
+  if (titre.length > 90) titre = nom + (lieu ? ', ' + lieu : '');
   return titre.slice(0, 90);
 }
 
