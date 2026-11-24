@@ -1727,6 +1727,28 @@ app.post('/api/membre/onboarding', requireAuth, (req, res) => {
   res.json({ ok: true, onboarding: req.lead.onboarding });
 });
 
+// Une fois : statuts des biens alignés sur le parcours vendeur.
+// « Mandat signé » disparaît (le seul mandat est le mandat de recherche de
+// l'acquéreur) ; un bien publié par le vendeur mais pas encore validé passe
+// « À valider » ; un bien que l'agent a mis en ligne depuis le CRM (Sur Seecret
+// activé) mais jamais validé devient visible, comme il l'attendait.
+setTimeout(() => {
+  try {
+    const db = readDb();
+    db.migrations = db.migrations || {};
+    if (db.migrations.statutsBien2) return;
+    let n = 0;
+    (db.biens || []).forEach((b) => {
+      if (b.statut === 'mandat') { b.statut = 'brouillon'; n++; }
+      else if (b.statut === 'avant-premiere' && b.validation !== 'valide' && b.surSeecret !== true) { b.statut = 'a_valider'; n++; }
+      else if ((b.statut === 'avant-premiere' || b.statut === 'ouvert') && b.validation !== 'valide' && b.surSeecret === true) { b.validation = 'valide'; b.valideAt = nowISO(); n++; }
+    });
+    db.migrations.statutsBien2 = nowISO();
+    writeDb(db);
+    console.log('[biens] statuts alignés sur le parcours vendeur : ' + n + ' bien(s) mis à jour');
+  } catch (e) { console.error('[biens] migration statuts :', e.message); }
+}, 5000);
+
 // ---------------- Vidéo « home tour » ----------------
 // La vidéo verticale est fabriquée dans le navigateur de l'agent (CRM) à
 // partir des photos du bien, puis envoyée ici. Une seule vidéo par bien :
@@ -2506,8 +2528,9 @@ app.patch('/api/mon-bien', requireAuth, (req, res) => {
   // "mandat" est un statut interne au CRM que seul l'agent manie.
   if (['brouillon', 'avant-premiere'].indexOf(body.statut) > -1) {
     const avant = b.statut;
-    b.statut = body.statut;
-    if (avant === 'brouillon' && b.statut === 'avant-premiere') {
+    // Publier = demander la mise en ligne : l'agent valide (statut « À valider »).
+    b.statut = body.statut === 'avant-premiere' && b.validation !== 'valide' ? 'a_valider' : body.statut;
+    if (avant === 'brouillon' && (b.statut === 'avant-premiere' || b.statut === 'a_valider')) {
       logActivite(req.db, { leadId: req.lead.id, bienId: b.id, type: 'mise_au_catalogue', auteur: nomComplet(req.lead) });
     }
   }
@@ -2780,6 +2803,9 @@ app.patch('/api/biens/:id/valider', requireAdmin, (req, res) => {
   if (!bien) return res.status(404).json({ error: 'Bien introuvable' });
   bien.validation = 'valide';
   bien.valideAt = nowISO();
+  // Valider un bien en préparation / à valider le met en avant-première.
+  if (['brouillon', 'a_valider', 'mandat', ''].indexOf(bien.statut || '') > -1) bien.statut = 'avant-premiere';
+  if (bien.surSeecret === undefined) bien.surSeecret = true;
   let notif = null;
   if (bien.leadId) {
     const lead = db.leads.find((l) => l.id === bien.leadId);
@@ -2898,7 +2924,24 @@ app.patch('/api/biens/:id', requireAdmin, (req, res) => {
   } else if (typeof body.statut === 'string' && body.statut !== 'vendu') {
     delete bien.venduParAgence;
   }
+  const statutAvant = bien.statut;
   ['ref', 'titre', 'adresse', 'ville', 'codePostal', 'type', 'quartier', 'dpe', 'ges', 'etat', 'statut', 'description', 'exterieur'].forEach((k) => { if (typeof body[k] === 'string') bien[k] = body[k]; });
+  if (bien.statut === 'mandat') bien.statut = 'brouillon'; // ancien statut, retiré
+  // Avant-première / En vente choisis par l'agent = bien validé et publié.
+  let notifValidation = null;
+  if ((bien.statut === 'avant-premiere' || bien.statut === 'ouvert') && statutAvant !== bien.statut) {
+    if (body.surSeecret !== false) bien.surSeecret = true;
+    if (bien.validation !== 'valide') {
+      bien.validation = 'valide'; bien.valideAt = nowISO();
+      if (bien.leadId) {
+        const lead = db.leads.find((l) => l.id === bien.leadId);
+        logActivite(db, { leadId: bien.leadId, bienId: bien.id, type: 'bien_valide', auteur: nomComplet(req.lead) || 'Agent' });
+        notifValidation = notifierClient(db, { leadId: bien.leadId, email: (lead && lead.email) || bien.email, tel: (lead && lead.tel) || '', prenom: (lead && lead.prenom) || '',
+          titre: 'Votre bien est en ligne', message: 'Votre bien « ' + (bien.titre || bien.adresse || 'votre annonce') + ' » a été validé par l’agence et est désormais visible des membres Seecret.', lien: originOf(req) + '/espace.html' });
+      }
+    }
+    if (bien.statut === 'ouvert' && !bien.ouvertLe) bien.ouvertLe = nowISO();
+  }
   // L'étage est un nombre comparable (0 = RDC) depuis #62 : un simple "typeof === 'string'"
   // ignorait silencieusement toute mise à jour envoyée par le CRM, y compris le cas RDC.
   if (body.etage !== undefined) {
@@ -2918,7 +2961,7 @@ app.patch('/api/biens/:id', requireAdmin, (req, res) => {
     bien.etapeProposition = body.etapeProposition || null;
   }
   writeDb(db);
-  res.json({ ok: true, bien: prixPourCrm(bien) });
+  res.json({ ok: true, bien: prixPourCrm(bien), notif: notifValidation });
 });
 
 // Avant ce correctif, une recherche nouvellement créée dans le CRM ne
@@ -6800,7 +6843,7 @@ app.post('/api/demandes/:id/decision', requireAdmin, async (req, res) => {
     }
   } else if (d.type === 'statut' && d.bienId) {
     const b = db.biens.find((x) => x.id === d.bienId);
-    if (b) { b.statut = d.role === 'vente' ? 'mandat' : 'ouvert'; b.statutDemande = null; }
+    if (b) { b.statut = 'ouvert'; b.statutDemande = null; if (!b.ouvertLe) b.ouvertLe = nowISO(); }
     titreNotif = 'Votre demande est validée';
     messageNotif = 'Votre demande de changement de statut a été validée par l’agence.';
   } else if (d.type === 'modification') {
