@@ -4678,14 +4678,14 @@ function pmBase() {
     const Database = require('better-sqlite3');
     const b = new Database(f, { readonly: true, fileMustExist: true });
     const sel = 'SELECT s.siren, s.nom, s.forme, l.droit, l.bat, l.entree, l.niveau, l.porte, l.num, l.ind, v.nature, v.nom AS voie, l.section, l.plan, s.groupe, l.insee, s.formeCode FROM lot l JOIN soc s ON s.id = l.soc JOIN voie v ON v.id = l.voie';
-    PM_BASE = { b, adr: b.prepare(sel + ' WHERE l.insee = ? AND (l.num = ? OR CAST(l.num AS INTEGER) = ?)').raw(true), siren: b.prepare(sel + ' WHERE l.soc IN (SELECT id FROM soc WHERE siren = ?)').raw(true) };
+    PM_BASE = { b, adr: b.prepare(sel + ' WHERE l.insee = ? AND l.num = ?').raw(true), siren: b.prepare(sel + ' WHERE l.soc IN (SELECT id FROM soc WHERE siren = ?)').raw(true) };
     return PM_BASE;
   } catch (e) { console.error('[pm-locaux] base illisible :', e.message); return null; }
 }
 function pmFermerBase() { try { if (PM_BASE) PM_BASE.b.close(); } catch (e) { /* rien */ } PM_BASE = null; }
 function pmLignesAdresse(insee, numero) {
   const b = pmBase();
-  if (b) return b.adr.all(insee, numero, Number(numero) || -1).map(pmLigneReparee);
+  if (b) return b.adr.all(insee, String(parseInt(numero, 10) || numero)).map(pmLigneReparee);
   return pmLireBucket('insee', insee).filter((r) => String(parseInt(r[PMC.num], 10)) === numero);
 }
 function pmLignesSiren(siren) {
@@ -4870,7 +4870,7 @@ async function pmImporter(raison) {
     fs.rmSync(PM_DIR, { recursive: true, force: true });
     fs.renameSync(tmpDir, PM_DIR);
     PM_CACHE.clear();
-    setTimeout(() => { try { radarReidentifier(); } catch (e) { console.error('[radar] ré-identification :', e.message); } }, 1000);
+    setTimeout(() => { radarReidentifier().catch((e) => console.error('[radar] ré-identification :', e.message)); }, 1000);
     Object.assign(PM_IMPORT, { enCours: false, etape: 'Import terminé : ' + PM_IMPORT.lignes.toLocaleString('fr-FR') + ' locaux de sociétés indexés (millésime ' + annee + ').' });
     console.log('[pm-locaux] ' + PM_IMPORT.etape);
   } catch (e) {
@@ -5471,27 +5471,32 @@ function radarPlafonner() {
 // Une fois : reconnaître de nouveau après la correction du format 2026.
 setTimeout(() => {
   try {
-    if (!RS || !pmMeta() || RS.cacheGet.get('meta', 'reident-2026')) return;
-    radarReidentifier();
-    RS.cacheSet.run('meta', 'reident-2026', new Date().toISOString(), '1');
+    if (!RS || !pmMeta() || RS.cacheGet.get('meta', 'reident-2026b')) return;
+    RS.cacheSet.run('meta', 'reident-2026b', new Date().toISOString(), '1');
+    radarReidentifier().catch((e) => console.error('[radar] ré-identification :', e.message));
   } catch (e) { console.error('[radar] ré-identification :', e.message); }
 }, 30 * 1000);
 // Après un import du fichier des propriétaires : on reconnaît les sociétés
 // propriétaires de tous les DPE déjà stockés, sans rien retélécharger.
-function radarReidentifier() {
-  if (!RS) return;
-  const annee = (pmMeta() || {}).annee || null;
-  const rows = RadarSQL.prepare('SELECT data FROM fiches').all();
-  let n = 0;
-  const maj = RadarSQL.transaction((l) => l.forEach((r) => {
-    const f = rsLire(r); if (!f) return;
-    if (f.proprietaire && f.proprietaire.statut === 'identifie' && f.proprietaire.millesime === annee) return;
-    const p = radarProprietaire(f);
-    if (p.statut === 'identifie') { p.nbBiens = radarBiensSociete(p.siren).length || 1; n++; }
-    p.millesime = annee; f.proprietaire = p; rsEcrire(f);
-  }));
-  maj(rows);
-  console.log('[radar] ' + n + ' propriétaire(s) société identifié(s) sur ' + rows.length + ' DPE stockés.');
+let RADAR_REIDENT = false;
+async function radarReidentifier() {
+  if (!RS || RADAR_REIDENT) return;
+  RADAR_REIDENT = true;
+  try {
+    const annee = (pmMeta() || {}).annee || null;
+    const rows = RadarSQL.prepare('SELECT data FROM fiches').all();
+    let n = 0; const t0 = Date.now();
+    const maj = RadarSQL.transaction((l) => l.forEach((r) => {
+      const f = rsLire(r); if (!f) return;
+      if (f.proprietaire && f.proprietaire.statut === 'identifie' && f.proprietaire.millesime === annee) return;
+      const p = radarProprietaire(f);
+      if (p.statut === 'identifie') { p.nbBiens = radarBiensSociete(p.siren).length || 1; n++; }
+      p.millesime = annee; f.proprietaire = p; rsEcrire(f);
+    }));
+    // Par lots de 200, en rendant la main entre deux lots : le site reste réactif.
+    for (let i = 0; i < rows.length; i += 200) { maj(rows.slice(i, i + 200)); await new Promise((r) => setImmediate(r)); }
+    console.log('[radar] ' + n + ' propriétaire(s) société identifié(s) sur ' + rows.length + ' DPE stockés (' + Math.round((Date.now() - t0) / 1000) + ' s).');
+  } finally { RADAR_REIDENT = false; }
 }
 async function radarCharger(cle, arrs, per) {
   if (RADAR_CHARGEMENTS[cle] && RADAR_CHARGEMENTS[cle].enCours) return;
