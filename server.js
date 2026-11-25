@@ -1753,6 +1753,32 @@ setTimeout(() => {
   } catch (e) { console.error('[biens] villes', e.message); }
 }, 5000);
 
+// Une fois (demandé par l'agence) : les biens importés dont la vente est
+// confirmée (vente DVF après le début du mandat ET annonce retirée du site de
+// l'agence) passent « Vendu », vente faite par une autre agence. Rien n'est
+// supprimé. Attend que le contrôle DVF et le bot aient tourné.
+setTimeout(() => {
+  try {
+    const db = readDb();
+    db.migrations = db.migrations || {};
+    if (db.migrations.vendusConfirmes1) return;
+    const ids = [];
+    (db.biens || []).forEach((b) => {
+      if (!b.importLot || b.statut === 'vendu') return;
+      const d = b.verifs && b.verifs.dvf;
+      const vente = d && d.statut === 'vendu_probable' && (d.ventes || []).find((v) => v.apresMandat);
+      if (!vente || !(b.suiviAgence && b.suiviAgence.statut === 'retire')) return;
+      b.statut = 'vendu'; b.venduParAgence = false; b.venduLe = vente.date; b.venteConstatee = { source: 'DVF + annonce retirée', date: vente.date, prix: vente.prix, le: nowISO() };
+      if (b.leadId) logActivite(db, { leadId: b.leadId, bienId: b.id, type: 'bien_vendu_ailleurs', auteur: 'Bot de suivi', detail: 'Vendu le ' + vente.date + ' (' + vente.prix + ' €, DVF) par une autre agence' });
+      ids.push(b.id);
+    });
+    if (!ids.length && !(db.suiviAgence && db.suiviAgence.le)) return; // le bot n'a pas encore tourné : on réessaiera
+    db.migrations.vendusConfirmes1 = { le: nowISO(), biens: ids };
+    writeDb(db);
+    console.log('[biens] ' + ids.length + ' bien(s) importé(s) passés « Vendu » (vente confirmée)');
+  } catch (e) { console.error('[biens] vendus confirmés', e.message); }
+}, 20000);
+
 // Une fois : titres sans adresse. Biens importés : le titre de « Texte de la
 // fiche » est refait (s'il n'a pas été retouché à la main). Biens sans titre :
 // on leur en donne un, construit de la même façon.
