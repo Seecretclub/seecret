@@ -2084,7 +2084,7 @@ function articlePublic(a) {
 // surface et prix au m² arrondi à la centaine).
 function ventesRecentesClub(db) {
   const depuis = Date.now() - 183 * 864e5;
-  return db.biens.filter((b) => b.statut === 'vendu' && new Date(b.venduLe || b.majLe || b.cree || 0).getTime() > depuis)
+  return db.biens.filter((b) => b.statut === 'vendu' && !b.importLot && new Date(b.venduLe || b.majLe || b.cree || 0).getTime() > depuis)
     .sort((a, b) => new Date(b.venduLe || b.cree || 0) - new Date(a.venduLe || a.cree || 0)).slice(0, 20)
     .map((b) => ({ quartier: b.quartier || '', label: labelQuartier(b.quartier) || '', type: b.type || '', surface: Number(b.surface) || null, pieces: Number(b.pieces) || null,
       prixM2: b.surface && b.prix ? Math.round(prixHai(b.prix, 5) / b.surface / 100) * 100 : null, venduLe: b.venduLe || null, parSeecret: b.venduParAgence === true }));
