@@ -4228,7 +4228,7 @@
       const mB = b ? manque([['photos', (b.photos || []).length], ['prix', b.prix], ['surface', b.surface], ['pièces', b.pieces], ['adresse', b.adresse], ['DPE', b.dpe], ['description', b.description && String(b.description).length > 40]]) : ['fiche bien'];
       const st = b ? ((typeof ST_BIEN !== 'undefined' && ST_BIEN[b.statut] && ST_BIEN[b.statut].label) || b.statut || '') : '';
       blocs.push({ titre: 'Son bien', icone: ICONS.building, etat: b ? etat(mB, 7) : '<span class="se-badge muted">Absent</span>',
-        texte: b ? (st ? 'Statut : ' + esc(st) + '. ' : '') + (mB.length ? 'À compléter avant la mise en ligne : ' + mB.join(', ') + '.' : 'Fiche complète : vous pouvez la passer en Avant-première.') : 'Aucun bien enregistré : ajoutez-le depuis sa fiche lead.',
+        texte: b ? (st ? 'Statut : ' + esc(st) + '. ' : '') + (mB.length ? 'À compléter avant la mise en ligne : ' + mB.join(', ') + '.' : 'Fiche complète : vous pouvez la passer en vente (Avant-première).') : 'Aucun bien enregistré : ajoutez-le depuis sa fiche lead.',
         bouton: b ? '<a class="se-btn sm" href="#/bien/' + b.id + '">' + (mB.length ? 'Compléter la fiche bien' : 'Ouvrir la fiche bien') + '</a>' : '' });
     }
     const S = d.__suite || null;
@@ -4241,9 +4241,9 @@
       const ko = (t) => '<li class="se-suite-ko">' + t + '</li>';
       if (accepte) etapes = ok('Adhésion acceptée : ' + esc(prenom) + ' est maintenant membre du club.') + ok('Son espace est ouvert : connexion avec son email, sans mot de passe.') +
         (S && S.emailEnvoye === false ? ko('L’email d’accès n’est pas parti (' + esc(S.emailErreur || 'erreur') + ') : utilisez « Renvoyer l’email d’accès ».') : ok('Email d’accès envoyé à ' + esc(d.email || 'son adresse') + ', avec son lien et son code.')) +
-        (estVendeur && bienMembre ? ok('Son bien reste hors plateforme tant que vous ne l’avez pas passé en Avant-première.') : '') +
+        (estVendeur && bienMembre ? ok('Son bien reste hors plateforme tant que vous ne l’avez pas passé en vente.') : '') +
         (estAcheteur ? ok('Les biens qui correspondent à sa recherche lui arriveront dès que vous les proposerez.') : '');
-      else if (d.statut === 'refusee') etapes = ok('Candidature refusée : aucun accès n’est ouvert.') + ok(esc(prenom) + ' est prévenu (« Votre demande n’a pas été retenue »).') + ok('Sa fiche lead reste dans le CRM : vous pouvez garder le contact ou relancer la demande.');
+      else if (d.statut === 'refusee') etapes = ok('Candidature refusée : aucun accès n’est ouvert.') + ok(esc(prenom) + ' est prévenu par un email courtois (« Votre candidature au club Seecret »).') + ok('Sa fiche lead, sa recherche et son bien sont rangés dans les Archivés : rien n’est supprimé, « Restaurer » les remet dans le CRM. S’il recandidate, ses fiches ressortent automatiquement.');
       else if (d.statut === 'suspendue') etapes = ok('Adhésion suspendue : pas d’accès pour l’instant.') + ok(esc(prenom) + ' est prévenu, le motif est noté dans sa timeline.') + ok('Vous pouvez la reprendre à tout moment depuis cette page.');
     }
     const titre = !decide ? 'Son parcours' : accepte ? 'Accepté : la suite' : d.statut === 'refusee' ? 'Refusé : ce qui se passe' : 'Suspendu : ce qui se passe';
