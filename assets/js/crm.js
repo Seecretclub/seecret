@@ -270,6 +270,9 @@
         if (parsed && parsed.v === 1) {
           const s = Object.assign(seed(), parsed);
           s.filtres = s.filtres || {};
+          // La recherche texte ne survit pas à un rechargement : sinon un ancien
+          // mot (« romain ») filtre en silence toutes les listes.
+          delete s.filtres.q;
           s.threads = s.threads || {};
           s.membresBiens = s.membresBiens || [];
           mergeShared(s);
@@ -1703,7 +1706,7 @@
         '<div class="se-topbar">' +
           '<span class="se-crumb">CRM</span><h2>' + esc(titre(r)) + '</h2>' +
           '<span class="se-spacer"></span>' +
-          '<label class="se-search-top">' + ICONS.search + '<input data-search placeholder="Rechercher un client, un bien…" value="' + esc(state.filtres.q || '') + '"/></label>' +
+          '<label class="se-search-top' + (state.filtres.q ? ' actif' : '') + '">' + ICONS.search + '<input data-search placeholder="Rechercher un client, un bien…" value="' + esc(state.filtres.q || '') + '"/>' + (state.filtres.q ? '<button type="button" class="se-search-effacer" data-act="recherche-effacer" aria-label="Effacer la recherche">×</button>' : '') + '</label>' +
           '<a class="se-btn ghost sm" href="espace.html">Espace membre</a>' +
         '</div>' +
         '<div class="se-view">' + content + '</div>' +
@@ -7108,6 +7111,7 @@
     },
     'client-nouveau': () => { modal = clientModal(null); render(); },
     'client-editer': (el, id) => { modal = clientModal(client(id)); render(); },
+    'recherche-effacer': () => { state.filtres.q = ''; save(); render(); },
     'archiver-demander': (el, id) => { modal = archiveModal(el.getAttribute('data-kind'), id); render(); },
     'archiver-confirmer': async (el, id) => {
       const kind = el.getAttribute('data-kind');
