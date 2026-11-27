@@ -235,6 +235,11 @@ function readDb() {
       if (lead) b.leadId = lead.id;
     }
   });
+  // Une candidature renvoyée avec un email déjà connu gardait l'identifiant
+  // provisoire de son lead (jamais créé) : on la rattache au vrai lead (clientId).
+  (db.demandes || []).forEach((d) => {
+    if (d.leadId && d.clientId && d.leadId !== d.clientId && !db.leads.some((l) => l.id === d.leadId) && db.leads.some((l) => l.id === d.clientId)) d.leadId = d.clientId;
+  });
   db.recherches.forEach((r) => {
     if (!r.leadId) r.leadId = r.clientId || null;
     if (r.leadId && !db.leads.some((l) => l.id === r.leadId)) {
@@ -400,7 +405,7 @@ function decoupe(dossier) {
   }
 
   const dossierGarde = JSON.parse(JSON.stringify({ projet: projet, vous: v, recherche: r, budget: budget, bien: b, vente: vente }));
-  const demande = { id: uid('d'), type: 'candidature', nom: nom || 'Candidat', email: email, leadId: lead.id, clientId: lead.id, role: projet, montant: 0, message: resumeDemande(dossier), dossier: dossierGarde, source: 'Site', statut: 'nouvelle', cree: nowISO() };
+  const demande = { id: uid('d'), type: 'candidature', nom: nom || 'Candidat', email: email, tel: v.tel || '', leadId: lead.id, clientId: lead.id, role: projet, montant: 0, message: resumeDemande(dossier), dossier: dossierGarde, source: 'Site', statut: 'nouvelle', cree: nowISO() };
 
   return { lead, recherche, bien, demande };
 }
@@ -502,6 +507,7 @@ app.post('/api/candidature', async (req, res) => {
 
   if (result.demande) {
     result.demande.clientId = lead.id;
+    result.demande.leadId = lead.id;
     db.demandes.unshift(result.demande);
     creerTacheDemande(db, result.demande, 'Valider la candidature de ' + (result.demande.nom || 'nouveau membre'));
   }
@@ -8469,14 +8475,19 @@ const ASSISTANT_TOOLS_GEMINI = [{ functionDeclarations: OUTILS_ASSISTANT.map((o)
 
 const ASSISTANT_SYSTEM = "Tu es Célia, l'assistante interne vocale du CRM Seecret, une agence immobilière. Un agent te parle à l'oral ou à l'écrit, en général juste après un rendez-vous ou une visite, pour te raconter ce qui s'est passé. Comprends ce qu'il raconte et appelle toi-même les outils correspondants dans le CRM — ne te contente jamais de répondre en texte si une action est possible. Tu peux : créer/mettre à jour un lead, changer son statut pipeline, programmer un rappel daté (qui sert aussi pour un rendez-vous/rdv ou une relance à faire — mets-le simplement dans le titre, ex. \"RDV de visite\", \"Relancer sur l'offre\"), envoyer l'invitation de candidature standard, créer la fiche d'un bien visité, enregistrer les critères de recherche d'un acquéreur, et envoyer un email libre personnalisé. Si plusieurs actions sont nécessaires (ex. créer le lead ET créer le bien ET programmer un rappel), appelle plusieurs outils, dans un ordre logique (toujours créer/identifier le lead avant d'agir sur lui ou de créer un bien qui lui est lié). Si une information nécessaire manque (ex. aucune date pour un rappel, aucune adresse pour un bien), pose la question à l'agent au lieu d'inventer une valeur. Réponds toujours en français, de façon brève, orale et naturelle (ta réponse peut être lue à voix haute), en confirmant ce que tu as fait.";
 
-function trouverLeadParNom(db, texte) {
+// Un nom ne suffit jamais à identifier une personne : deux « Romain Dias »
+// avec des emails et téléphones différents sont deux leads distincts. On ne
+// renvoie un lead que si le nom désigne une seule fiche ; sinon null (ambigu).
+function leadsParNom(db, texte) {
   const q = String(texte || '').trim().toLowerCase();
-  if (!q) return null;
-  let lead = db.leads.find((l) => ((l.prenom || '') + ' ' + (l.nom || '')).trim().toLowerCase() === q);
-  if (lead) return lead;
-  const candidats = db.leads.filter((l) => (l.nom || '').length > 1 && q.indexOf((l.nom || '').toLowerCase()) > -1);
-  candidats.sort((a, b) => new Date(b.cree) - new Date(a.cree));
-  return candidats[0] || null;
+  if (!q) return [];
+  const exacts = db.leads.filter((l) => ((l.prenom || '') + ' ' + (l.nom || '')).trim().toLowerCase() === q);
+  if (exacts.length) return exacts;
+  return db.leads.filter((l) => (l.nom || '').length > 1 && q.indexOf((l.nom || '').toLowerCase()) > -1);
+}
+function trouverLeadParNom(db, texte) {
+  const l = leadsParNom(db, texte);
+  return l.length === 1 ? l[0] : null;
 }
 
 function dFRServer(iso) {
@@ -8556,7 +8567,9 @@ async function dispatchOutilAssistant(db, req, nomOutil, input) {
     const telDigits = telBrut.replace(/\D/g, '');
     let lead = (email && db.leads.find((l) => (l.email || '').toLowerCase() === email)) ||
       (telDigits && db.leads.find((l) => (l.tel || '').replace(/\D/g, '') === telDigits)) ||
-      trouverLeadParNom(db, ((input.prenom || '') + ' ' + nom).trim());
+      // Rapprochement par le nom seulement sans email ni téléphone fournis :
+      // sinon un homonyme aux coordonnées différentes serait écrasé.
+      (!email && !telDigits ? trouverLeadParNom(db, ((input.prenom || '') + ' ' + nom).trim()) : null);
     let cree = false;
     if (!lead) {
       lead = {
@@ -8587,7 +8600,7 @@ async function dispatchOutilAssistant(db, req, nomOutil, input) {
 
   if (nomOutil === 'changer_pipeline') {
     const lead = trouverLeadParNom(db, input.nomComplet);
-    if (!lead) return { resultat: { ok: false, erreur: 'Lead introuvable : ' + input.nomComplet } };
+    if (!lead) return { resultat: { ok: false, erreur: leadsParNom(db, input.nomComplet).length > 1 ? 'Plusieurs leads s’appellent ' + input.nomComplet + ' : précisez son email ou son téléphone.' : 'Lead introuvable : ' + input.nomComplet } };
     const avant = lead.pipeline;
     lead.pipeline = String(input.statut || '').slice(0, 40);
     if (avant !== lead.pipeline && (lead.pipeline === 'a_relancer' || lead.pipeline === 'converti')) {
@@ -8598,7 +8611,7 @@ async function dispatchOutilAssistant(db, req, nomOutil, input) {
 
   if (nomOutil === 'programmer_rappel') {
     const lead = trouverLeadParNom(db, input.nomComplet);
-    if (!lead) return { resultat: { ok: false, erreur: 'Lead introuvable : ' + input.nomComplet } };
+    if (!lead) return { resultat: { ok: false, erreur: leadsParNom(db, input.nomComplet).length > 1 ? 'Plusieurs leads s’appellent ' + input.nomComplet + ' : précisez son email ou son téléphone.' : 'Lead introuvable : ' + input.nomComplet } };
     const titre = String(input.titre || 'Rappel').trim();
     const dateEcheance = String(input.dateEcheance || '').trim();
     const dateValide = dateEcheance && !isNaN(new Date(dateEcheance).getTime());
@@ -8611,7 +8624,7 @@ async function dispatchOutilAssistant(db, req, nomOutil, input) {
 
   if (nomOutil === 'envoyer_invitation_candidature') {
     const lead = trouverLeadParNom(db, input.nomComplet);
-    if (!lead) return { resultat: { ok: false, erreur: 'Lead introuvable : ' + input.nomComplet } };
+    if (!lead) return { resultat: { ok: false, erreur: leadsParNom(db, input.nomComplet).length > 1 ? 'Plusieurs leads s’appellent ' + input.nomComplet + ' : précisez son email ou son téléphone.' : 'Lead introuvable : ' + input.nomComplet } };
     const r = await envoyerInvitationCandidatureEmail(req, lead, input.messagePersonnalise);
     if (!r.ok) return { resultat: { ok: false, erreur: r.erreur } };
     logActivite(db, { leadId: lead.id, type: 'candidature_envoyee', auteur: auteur });
@@ -8639,7 +8652,7 @@ async function dispatchOutilAssistant(db, req, nomOutil, input) {
 
   if (nomOutil === 'creer_recherche') {
     const lead = trouverLeadParNom(db, input.nomComplet);
-    if (!lead) return { resultat: { ok: false, erreur: 'Lead introuvable : ' + input.nomComplet } };
+    if (!lead) return { resultat: { ok: false, erreur: leadsParNom(db, input.nomComplet).length > 1 ? 'Plusieurs leads s’appellent ' + input.nomComplet + ' : précisez son email ou son téléphone.' : 'Lead introuvable : ' + input.nomComplet } };
     let recherche = db.recherches.find((x) => x.clientId === lead.id || x.leadId === lead.id);
     if (!recherche) {
       recherche = {
@@ -8662,7 +8675,7 @@ async function dispatchOutilAssistant(db, req, nomOutil, input) {
 
   if (nomOutil === 'envoyer_email') {
     const lead = trouverLeadParNom(db, input.nomComplet);
-    if (!lead) return { resultat: { ok: false, erreur: 'Lead introuvable : ' + input.nomComplet } };
+    if (!lead) return { resultat: { ok: false, erreur: leadsParNom(db, input.nomComplet).length > 1 ? 'Plusieurs leads s’appellent ' + input.nomComplet + ' : précisez son email ou son téléphone.' : 'Lead introuvable : ' + input.nomComplet } };
     if (!lead.email) return { resultat: { ok: false, erreur: "Ce lead n'a pas d'email connu." } };
     if (!mailer) return { resultat: { ok: false, erreur: "Aucun service d'email configuré sur ce serveur." } };
     const sujet = String(input.sujet || 'Message de ' + (nomComplet(req.lead) || DEFAULT_AGENT_NOM));

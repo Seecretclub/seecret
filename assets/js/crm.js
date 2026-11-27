@@ -1499,7 +1499,7 @@
         const id = 'srv-' + d.id;
         const fresh = {
           id: id, serverDemandeId: d.id, type: d.type || 'statut',
-          nom: d.nom || '', email: d.email || '', message: d.message || '',
+          nom: d.nom || '', email: d.email || '', tel: d.tel || (d.dossier && d.dossier.vous && d.dossier.vous.tel) || '', message: d.message || '',
           statut: d.statut || 'nouvelle',
           source: d.source || 'Espace membre', cree: d.cree || nowISO(),
           role: d.role, serveur: true,
@@ -4225,10 +4225,20 @@
     '</div>';
   }
 
+  // Deux personnes du même nom ne sont pas la même personne : si la fiche lead
+  // rattachée n'a ni le même email ni le même téléphone, on le signale.
+  function alerteIdentiteDemande(d, lead) {
+    if (!lead) return '';
+    const tel = (x) => String(x || '').replace(/\D/g, '').slice(-9);
+    const emailDiff = d.email && lead.email && d.email.toLowerCase() !== lead.email.toLowerCase();
+    const telDiff = d.tel && lead.tel && tel(d.tel) !== tel(lead.tel);
+    if (!emailDiff && !telDiff) return '';
+    return '<div class="se-note" style="margin-top:10px;background:var(--color-warn-soft);border:0">Coordonnées différentes de la fiche lead rattachée (' + esc(nomClient(lead)) + ' · ' + esc([emailDiff ? lead.email : '', telDiff ? lead.tel : ''].filter(Boolean).join(' · ')) + '). Vérifiez qu’il s’agit bien de la même personne.</div>';
+  }
   function viewDemandeDetail(r) {
     const d = state.demandes.find((x) => x.id === r.param || x.serverDemandeId === r.param);
     if (!d) return '<div class="se-card se-empty"><div class="se-empty-title">Demande introuvable</div><a class="se-btn" href="#/demandes">Retour aux candidatures</a></div>';
-    const lead = (d.leadId ? state.clients.find((c) => c.serverId === d.leadId) : null) ||
+    const lead = (d.leadId ? state.clients.find((c) => c.serverId === d.leadId) || archivees('clients').find((c) => c.serverId === d.leadId) : null) ||
       state.clients.find((c) => d.email && c.email && c.email.toLowerCase() === d.email.toLowerCase()) || null;
     const rec = lead ? (state.recherchesServeur || []).concat(state.recherches).find((x) => x.clientId === lead.id || x.clientId === lead.serverId) : null;
     const b = d.bienId ? bienParServeur(d.bienId) : null;
@@ -4301,11 +4311,11 @@
       (d.type === 'candidature' ? blocsParcoursCandidature(d, lead, rec, bienMembre, estAcheteur, estVendeur) : '') +
       '<div class="se-split">' +
         '<div class="se-grid" style="gap:18px">' +
-          '<div class="se-card"><h3>Coordonnées & financement</h3><div class="se-kv" style="margin-top:10px">' +
-            kv('Nom', esc(lead && lead.nom ? lead.nom : (d.nom || NR))) +
-            kv('Prénom', esc(lead && lead.prenom ? lead.prenom : NR)) +
+          '<div class="se-card"><h3>Coordonnées & financement</h3>' + alerteIdentiteDemande(d, lead) + '<div class="se-kv" style="margin-top:10px">' +
+            // Coordonnées saisies DANS cette demande (pas celles d'une autre fiche du même nom).
+            kv('Nom', esc(d.nom || (lead ? nomClient(lead) : NR))) +
             kv('Email', esc(d.email || NR)) +
-            kv('Téléphone', esc(lead && lead.tel ? lead.tel : NR)) +
+            kv('Téléphone', esc(d.tel || (lead && lead.tel) || NR)) +
             kv('Ville', esc(villeClient || NR)) +
             kv('Profil', profilLabel) +
             kv('Apport', apport ? euro(apport) : NR) +
