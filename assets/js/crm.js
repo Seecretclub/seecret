@@ -1520,6 +1520,7 @@
       clients: viewClients,
       radar: viewRadar,
       'radar-fiche': viewRadarFiche,
+      sci: viewSci,
       import: viewImport,
       // L'ancien onglet Réseau vit maintenant dans Leads › À prospecter.
       reseau: () => { state.filtres.leadType = 'prospecter'; setTimeout(() => { location.replace('#/clients'); }, 0); return ''; },
@@ -1630,6 +1631,7 @@
           nav('biens', r.name, 'building', 'Produits') +
           nav('recherches', r.name, 'search', 'Recherches') +
           nav('radar', r.name, 'search', 'Radar') +
+          nav('sci', r.name, 'building', 'SCI') +
           nav('robot', r.name, 'robot', 'Immo Data Robot', (matchings().filter((m) => m.statut === 'nouveau').length) || '') +
           nav('notifications', r.name, 'inbox', 'À prévenir', (notifications().length) || '') +
         '</nav>' +
@@ -1681,7 +1683,7 @@
   }
 
   function titre(r) {
-    const map = { tableau: 'Tableau de bord', demandes: 'Candidatures', demande: 'Fiche demande', clients: 'Leads', import: 'Import clients', radar: 'Radar', 'radar-fiche': 'Fiche Radar', reseau: 'Réseau', pipeline: 'Pipeline de relance', notifications: 'À prévenir', client: 'Fiche lead', biens: 'Produits', bien: 'Fiche produit', recherches: 'Recherches', recherche: 'Recherche', robot: 'Immo Data Robot', 'robot-radar': 'Radar — Biens détectés', 'robot-opportunites': 'Opportunités Clients', 'robot-bien': 'Fiche bien Radar', 'robot-dpe': 'Recherche DPE', 'robot-proprietaires': 'Propriétaires', 'robot-proprietaire': 'Fiche propriétaire', 'portefeuille-foncier': 'Portefeuille foncier', 'societe-fonciere': 'Fiche société', bodacc: 'Signaux BODACC', membres: 'Membres', 'biens-club': 'Biens du club', rapprochements: 'Rapprochements', tracking: 'Tracking', visites: 'Visites', offres: 'Propositions → Offres', verifications: 'Vérifications', taches: 'Tâches', messages: 'Messages', reglages: 'Réglages', agents: 'Agents' };
+    const map = { tableau: 'Tableau de bord', demandes: 'Candidatures', demande: 'Fiche demande', clients: 'Leads', import: 'Import clients', radar: 'Radar', 'radar-fiche': 'Fiche Radar', sci: 'SCI', reseau: 'Réseau', pipeline: 'Pipeline de relance', notifications: 'À prévenir', client: 'Fiche lead', biens: 'Produits', bien: 'Fiche produit', recherches: 'Recherches', recherche: 'Recherche', robot: 'Immo Data Robot', 'robot-radar': 'Radar — Biens détectés', 'robot-opportunites': 'Opportunités Clients', 'robot-bien': 'Fiche bien Radar', 'robot-dpe': 'Recherche DPE', 'robot-proprietaires': 'Propriétaires', 'robot-proprietaire': 'Fiche propriétaire', 'portefeuille-foncier': 'Portefeuille foncier', 'societe-fonciere': 'Fiche société', bodacc: 'Signaux BODACC', membres: 'Membres', 'biens-club': 'Biens du club', rapprochements: 'Rapprochements', tracking: 'Tracking', visites: 'Visites', offres: 'Propositions → Offres', verifications: 'Vérifications', taches: 'Tâches', messages: 'Messages', reglages: 'Réglages', agents: 'Agents' };
     return map[r.name] || 'CRM';
   }
 
@@ -4959,6 +4961,135 @@
       '<div class="rd-acq"><div class="rd-acq-t">CLIENTS <br>INTÉRESSÉS</div><div class="rd-acq-n"><div><b class="' + (a.club ? 'vert' : '') + '">' + (a.club || 0) + '</b><span>club</span></div><div><b class="' + (a.leads ? 'vert' : '') + '">' + (a.leads || 0) + '</b><span>lead' + (a.leads > 1 ? 's' : '') + '</span></div></div></div>' +
     '</a>';
   }
+
+  /* ============================ OUTIL SCI ============================ */
+  const sci = { zones: [], temp: [], choix: false, q: '', tri: 'score', mono: false, dpe: false, horsInstit: true, signal: '', suivies: false, page: 1, data: null, chargement: false, erreur: '', zonesSup: null, fiches: {}, analyse: {}, lot: null };
+  const SCI_SIGNAUX = { deces: 'Gérant décédé', age: 'Gérant âgé', radiee: 'Société cessée', dissolution: 'Dissolution', gerant: 'Nouveau gérant', cession: 'Cession de parts', mono: 'Un seul bien', ancienne: 'SCI ancienne', dpe: 'DPE récent', passoire: 'Passoire F/G' };
+  const sciNiveau = (n) => n === 'forte' ? 'alert' : n === 'moyenne' ? 'warn' : 'muted';
+  async function sciChargerZones() {
+    if (sci.zonesSup) return;
+    try { const d = await (await fetch('/api/radar/zones')).json(); sci.zonesSup = (d.zones || []).map((z) => ({ id: z.quartier, label: z.label })); } catch (e) { sci.zonesSup = []; }
+  }
+  async function sciCharger() {
+    sci.chargement = true; sci.erreur = ''; render();
+    await sciChargerZones();
+    const q = new URLSearchParams({ zones: sci.zones.join(','), q: sci.q, tri: sci.tri, mono: sci.mono ? '1' : '', dpe: sci.dpe ? '1' : '', horsInstit: sci.horsInstit ? '1' : '0', signal: sci.signal, suivies: sci.suivies ? '1' : '', page: String(sci.page) });
+    try {
+      const r = await fetch('/api/sci/liste?' + q.toString());
+      const d = await r.json(); if (!r.ok) throw new Error(d.error || 'erreur');
+      sci.data = sci.page > 1 && sci.data ? Object.assign(d, { lignes: sci.data.lignes.concat(d.lignes) }) : d;
+    } catch (e) { sci.erreur = e.message || 'erreur'; }
+    sci.chargement = false; render();
+  }
+  function sciZonesTout() { return QUARTIERS.filter((q) => /^p\d+$/.test(q.id)).map((q) => ({ id: q.id, label: q.label.replace('Paris ', '') })).concat(sci.zonesSup || []); }
+  function sciLabelZones() {
+    if (!sci.zones.length) return (sci.zonesSup || []).length ? 'Toutes les zones' : 'Tout Paris';
+    const t = sciZonesTout();
+    return sci.zones.length <= 3 ? sci.zones.map((z) => (t.find((x) => x.id === z) || {}).label || z).join(', ') : sci.zones.length + ' secteurs';
+  }
+  function viewSci(r) {
+    if (r && r.param) return viewSciFiche(r.param);
+    if (!sci.data && !sci.chargement && !sci.erreur) setTimeout(sciCharger, 0);
+    const D = sci.data;
+    const choix = sci.choix ? '<div class="rd-choix-panneau">' +
+      '<div class="rd-choix-titre">Paris</div><div class="rd-choix-grille">' + QUARTIERS.filter((q) => /^p\d+$/.test(q.id)).map((q) => '<button type="button" class="rd-chip' + (sci.temp.indexOf(q.id) > -1 ? ' on' : '') + '" data-act="sci-zone" data-id="' + q.id + '">' + q.label.replace('Paris ', '') + '</button>').join('') + '</div>' +
+      ((sci.zonesSup || []).length ? '<div class="rd-choix-titre">Autres communes</div><div class="rd-chips">' + sci.zonesSup.map((z) => '<button type="button" class="rd-chip' + (sci.temp.indexOf(z.id) > -1 ? ' on' : '') + '" data-act="sci-zone" data-id="' + esc(z.id) + '">' + esc(z.label) + '</button>').join('') + '</div>' : '<p class="se-hint">Ajoutez une commune depuis le Radar (« + Code postal ») pour la retrouver ici.</p>') +
+      '<div class="rd-choix-actions"><button type="button" class="se-btn ghost sm" data-act="sci-zones-tout">Tout décocher</button><span class="se-hint">' + (sci.temp.length ? sci.temp.length + ' sélectionné(s)' : 'Aucun coché = tout') + '</span><button type="button" class="se-btn sm" data-act="sci-zones-valider">Valider</button></div></div>' : '';
+    const filtres = '<div class="se-card" style="margin-bottom:16px"><div class="sci-filtres">' +
+      '<input class="se-input" placeholder="Nom de SCI, SIREN ou gérant" data-sci-q value="' + esc(sci.q) + '" style="flex:2;min-width:180px"/>' +
+      '<button type="button" class="rd-choix-btn" data-act="sci-zones-ouvrir"><span>' + esc(sciLabelZones()) + '</span><span>' + (sci.choix ? '▴' : '▾') + '</span></button>' +
+      '<select class="se-select" data-sci-f="signal"><option value="">Tous les signaux</option>' + Object.keys(SCI_SIGNAUX).map((k) => '<option value="' + k + '"' + (sci.signal === k ? ' selected' : '') + '>' + SCI_SIGNAUX[k] + '</option>').join('') + '</select>' +
+      '<select class="se-select" data-sci-f="tri">' + [['score', 'Probabilité de vendre'], ['dpe', 'DPE le plus récent'], ['biens', 'Plus de biens'], ['nom', 'Nom']].map((o) => '<option value="' + o[0] + '"' + (sci.tri === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select>' +
+      '</div>' + choix +
+      '<div class="sci-cases">' +
+        [['mono', 'Un seul bien'], ['dpe', 'Avec DPE récent'], ['horsInstit', 'Hors institutionnels'], ['suivies', 'Suivies']].map((c) => '<label class="se-check"><input type="checkbox" data-sci-c="' + c[0] + '"' + (sci[c[0]] ? ' checked' : '') + '/> ' + c[1] + '</label>').join('') +
+        '<button class="se-btn sm" data-act="sci-chercher">Rechercher</button>' +
+      '</div></div>';
+    let corps;
+    if (sci.erreur) corps = '<div class="se-card"><p class="se-hint">Erreur : ' + esc(sci.erreur) + '</p></div>';
+    else if (!D) corps = '<div class="se-card"><p class="se-hint">Chargement des SCI…</p></div>';
+    else if (D.disponible === false) corps = '<div class="se-card"><p class="se-hint">Le fichier des propriétaires (DGFiP) n’est pas encore chargé sur le serveur.</p></div>';
+    else {
+      const aAnalyser = D.lignes.filter((x) => !x.analysee).slice(0, 20);
+      corps = '<div class="rd-resultats"><b>' + num(D.total) + ' SCI</b><span class="se-hint">' + esc(sciLabelZones()) + ' · ' + num(D.analysees || 0) + ' analysée(s)</span>' +
+        (aAnalyser.length ? '<button class="se-btn ghost sm" data-act="sci-analyser-lot"' + (sci.lot ? ' disabled' : '') + '>' + (sci.lot ? 'Analyse… ' + sci.lot.fait + ' / ' + sci.lot.total : 'Analyser les ' + aAnalyser.length + ' suivantes') + '</button>' : '') + '</div>' +
+        '<p class="se-hint" style="margin:0 0 10px">Le score complet (gérant âgé ou décédé, BODACC, ancienneté) apparaît une fois la SCI analysée : touchez « Analyser ».</p>' +
+        '<div class="sci-liste">' + D.lignes.map((x) => '<div class="sci-ligne"><a href="#/sci/' + x.siren + '" class="sci-ligne-lien">' +
+          '<div class="sci-score ' + sciNiveau(x.niveau) + '">' + x.score + '</div>' +
+          '<div style="flex:1;min-width:0"><div class="sci-nom">' + esc(x.nom) + (x.suivie ? ' <span class="se-badge muted">suivie</span>' : '') + '</div>' +
+          '<div class="se-hint">' + x.adresses + ' adresse' + (x.adresses > 1 ? 's' : '') + ' · ' + x.lots + ' lot' + (x.lots > 1 ? 's' : '') + ' · ' + esc(x.communes.slice(0, 3).join(', ')) + (x.dirigeants.length ? ' · ' + esc(x.dirigeants.join(' ; ')) : '') + '</div>' +
+          (x.resume ? '<div class="sci-resume">' + esc(x.resume) + '</div>' : '') +
+          '<div class="se-row" style="gap:4px;margin-top:4px;flex-wrap:wrap">' + x.signaux.map((k) => '<span class="se-badge ' + (k === 'deces' || k === 'dissolution' || k === 'radiee' ? 'alert' : 'warn') + '">' + (SCI_SIGNAUX[k] || k) + '</span>').join('') + (x.dpe ? '<span class="se-badge muted">' + x.dpe + ' DPE</span>' : '') + '</div></div></a>' +
+          (x.analysee ? '' : '<button class="se-btn ghost sm" data-act="sci-analyser" data-id="' + x.siren + '"' + (sci.analyse[x.siren] ? ' disabled' : '') + '>' + (sci.analyse[x.siren] ? '…' : 'Analyser') + '</button>') + '</div>').join('') + '</div>' +
+        (D.lignes.length < D.total ? '<div style="text-align:center;margin-top:14px"><button class="se-btn ghost" data-act="sci-plus">Voir plus</button></div>' : '');
+    }
+    return head('Prospection', 'SCI', 'Toutes les SCI propriétaires dans vos secteurs, leur patrimoine, leurs gérants et les signaux de vente.') + filtres + (sci.chargement && !D ? '<div class="se-card"><p class="se-hint">Chargement…</p></div>' : corps);
+  }
+  async function sciAnalyserUne(siren) {
+    sci.analyse[siren] = true; render();
+    try {
+      const r = await fetch('/api/sci/' + siren + '?analyser=1');
+      const d = await r.json(); if (!r.ok) throw new Error(d.error || 'erreur');
+      sci.fiches[siren] = d;
+      if (sci.data) { const x = sci.data.lignes.find((l) => l.siren === siren); if (x) Object.assign(x, { analysee: true, score: d.score.score, niveau: d.score.niveau, signaux: d.score.signaux.slice(0, 3).map((s) => s.code), resume: d.score.signaux[0] ? d.score.signaux[0].texte : '', dirigeants: ((d.infos && d.infos.dirigeants) || []).filter((g) => g.nom).map((g) => [g.prenom, g.nom].filter(Boolean).join(' ') + (g.deces ? ' (décédé)' : g.age ? ', ' + g.age + ' ans' : '')).slice(0, 2) }); }
+    } catch (e) { toast('Analyse impossible : ' + (e.message || 'erreur'), 'warn'); }
+    delete sci.analyse[siren]; render();
+  }
+  function viewSciFiche(siren) {
+    const F = sci.fiches[siren];
+    if (!F && !sci.analyse[siren]) setTimeout(async () => {
+      sci.analyse[siren] = true;
+      try { const d = await (await fetch('/api/sci/' + siren)).json(); sci.fiches[siren] = d; if (!d.infos) { delete sci.analyse[siren]; await sciAnalyserUne(siren); return; } } catch (e) { toast('Fiche indisponible', 'warn'); }
+      delete sci.analyse[siren]; render();
+    }, 0);
+    if (!F) return head('Outil SCI', 'Fiche SCI', 'Analyse en cours : annuaire des entreprises, gérants, fichier des décès, BODACC…') + '<div class="se-card"><p class="se-hint">Analyse de la SCI ' + esc(siren) + '…</p></div>';
+    const I = F.infos || {}; const S = F.score || { score: 0, signaux: [] };
+    const kvs = (k, v) => v ? kv(k, v) : '';
+    const dirs = (I.dirigeants || []).map((d) => d.societe
+      ? '<div class="se-list-item"><div style="flex:1"><b>' + esc(d.societe) + '</b> <span class="se-hint">' + esc(d.qualite || '') + '</span></div>' + (d.siren ? '<a class="se-btn ghost sm" href="#/sci/' + esc(d.siren) + '">Voir</a>' : '') + '</div>'
+      : '<div class="se-list-item" style="display:block"><div><b>' + esc([d.prenoms || d.prenom, d.nom].filter(Boolean).join(' ')) + '</b> <span class="se-hint">' + esc(d.qualite || '') + (d.age ? ' · ' + d.age + ' ans' : '') + (d.naissance ? ' · né(e) en ' + esc(String(d.naissance).slice(0, 7).split('-').reverse().join('/')) : '') + '</span>' +
+        (d.deces ? ' <span class="se-badge alert">Décédé' + (d.deces.date ? ' le ' + esc(String(d.deces.date).replace(/^(\d{4})(\d{2})(\d{2})$/, '$3/$2/$1')) : '') + (d.deces.lieu ? ' à ' + esc(d.deces.lieu) : '') + '</span>' : d.decesVerifie ? ' <span class="se-hint">· pas dans le fichier des décès</span>' : '') + '</div>' +
+        ((d.autresSocietes || []).length ? '<div class="se-hint" style="margin-top:6px">Autres sociétés : ' + d.autresSocietes.map((o) => '<a href="#/sci/' + esc(o.siren) + '">' + esc(o.nom) + '</a>' + (o.biensDgfip ? ' (' + o.biensDgfip + ' adresse' + (o.biensDgfip > 1 ? 's' : '') + ')' : '') + (o.etat === 'C' ? ' <i>cessée</i>' : '')).join(' · ') + '</div>' : '') + '</div>').join('');
+    const biens = (F.biens || []).map((b) => '<div class="se-list-item"><div style="flex:1;min-width:0"><div style="font-size:13.5px">' + esc(b.adresse) + '</div><div class="se-hint">' + esc(b.commune || '') + ' · ' + b.lots + ' lot' + (b.lots > 1 ? 's' : '') + (b.niveaux && b.niveaux.length ? ' · ' + esc(b.niveaux.slice(0, 6).join(', ')) : '') + '</div></div></div>').join('');
+    const dpe = F.dpe && F.dpe.fiches ? F.dpe.fiches.map((f) => '<a class="se-list-item" href="#/radar-fiche/' + esc(f.id) + '" style="text-decoration:none;color:inherit"><div style="flex:1"><div style="font-size:13.5px">' + esc(f.adresse) + '</div><div class="se-hint">DPE ' + esc(f.dpe || '?') + ' · ' + esc(f.type || '') + ' ' + (f.surface || '') + ' m² · ' + dFR(f.date) + '</div></div><span>↗</span></a>').join('') : '';
+    const achats = F.achats || (I.achats || null);
+    const bod = (I.bodacc || []).map((b) => '<div class="se-list-item"><div style="flex:1;min-width:0"><div style="font-size:13.5px">' + esc(b.type || b.famille || 'Annonce') + '</div><div class="se-hint">' + dFR(b.date) + (b.tribunal ? ' · ' + esc(b.tribunal) : '') + '</div>' + (b.detail ? '<div class="se-hint" style="margin-top:2px">' + esc(b.detail.slice(0, 220)) + '</div>' : '') + '</div></div>').join('');
+    const lead = (F.leads || [])[0];
+    return head('Outil SCI', esc(F.nom || 'SCI'), 'SIREN ' + esc(siren) + (F.forme ? ' · ' + esc(F.forme) : '')) +
+      '<div class="se-row" style="gap:8px;flex-wrap:wrap;margin-bottom:16px">' +
+        (lead ? '<a class="se-btn" href="#/client/' + esc(lead.id) + '">Ouvrir le lead</a>' : '<button class="se-btn" data-act="sci-lead" data-id="' + siren + '">Créer le lead vendeur</button>') +
+        '<button class="se-btn ghost" data-act="sci-suivre" data-id="' + siren + '">' + (F.suivie ? 'Ne plus suivre' : 'Suivre cette SCI') + '</button>' +
+        '<button class="se-btn ghost" data-act="sci-lettre" data-id="' + siren + '">Lettre au gérant</button>' +
+        '<button class="se-btn ghost" data-act="sci-radar" data-id="' + siren + '" data-nom="' + esc(F.nom || '') + '">Ses DPE dans le Radar</button>' +
+        '<button class="se-btn ghost" data-act="sci-reanalyser" data-id="' + siren + '"' + (sci.analyse[siren] ? ' disabled' : '') + '>' + (sci.analyse[siren] ? 'Analyse…' : 'Réanalyser') + '</button>' +
+      '</div>' +
+      '<div class="sci-grille">' +
+        '<div class="se-card"><div class="se-row" style="gap:14px;align-items:center"><div class="sci-score grand ' + sciNiveau(S.niveau) + '">' + S.score + '</div><div><h3 style="margin:0">Probabilité de vendre : ' + esc(S.niveau || '') + '</h3><p class="se-hint" style="margin:2px 0 0">Score sur 100, raisons ci-dessous.</p></div></div>' +
+          (S.signaux.length ? '<div class="se-list" style="margin-top:10px">' + S.signaux.map((x) => '<div class="se-list-item"><div style="flex:1;font-size:13.5px">' + esc(x.texte) + '</div><span class="se-badge ' + (x.niveau === 'fort' ? 'alert' : x.niveau === 'moyen' ? 'warn' : 'muted') + '">+' + x.points + '</span></div>').join('') + '</div>' : '<p class="se-hint" style="margin-top:10px">Aucun signal de vente pour l’instant.</p>') +
+          ((S.negatifs || []).length ? '<p class="se-hint" style="margin-top:6px">' + S.negatifs.map((x) => esc(x.texte)).join(' ') + '</p>' : '') + '</div>' +
+        '<div class="se-card"><h3>Identité</h3><div class="se-kv" style="margin-top:10px">' + kvs('État', esc(I.etat || '')) + kvs('Créée le', I.creation ? dFR(I.creation) : '') + kvs('Siège', esc(I.siege || '')) + kvs('Fermée le', I.dateFermeture ? dFR(I.dateFermeture) : '') + kvs('Analyse', I.maj ? dFR(I.maj) : '') + '</div>' +
+          ((I.erreurs || []).length ? '<p class="se-hint" style="margin-top:8px">' + I.erreurs.map(esc).join(' · ') + '</p>' : '') + '</div>' +
+        '<div class="se-card"><h3>Gérants</h3>' + (dirs ? '<div class="se-list" style="margin-top:8px">' + dirs + '</div>' : '<p class="se-hint">Non renseignés.</p>') + '<p class="se-hint" style="margin-top:8px">Décès vérifiés dans le fichier INSEE des personnes décédées (nom, prénom et mois de naissance).</p></div>' +
+        '<div class="se-card"><h3>Patrimoine (fichier DGFiP)</h3>' + (biens ? '<div class="se-list" style="margin-top:8px">' + biens + '</div>' : '<p class="se-hint">Aucun bien dans les départements suivis.</p>') + '</div>' +
+        '<div class="se-card"><div class="se-row" style="justify-content:space-between;gap:8px"><h3>Achats et ventes (DVF)</h3><button class="se-btn ghost sm" data-act="sci-achats" data-id="' + siren + '"' + (sci.analyse['dvf' + siren] ? ' disabled' : '') + '>' + (sci.analyse['dvf' + siren] ? 'Recherche…' : achats ? 'Actualiser' : 'Chercher') + '</button></div>' +
+          (achats ? (achats.length ? '<div class="se-list" style="margin-top:8px">' + achats.map((a) => '<div class="se-list-item"><div style="flex:1"><div style="font-size:13.5px"><b>' + euro(a.prix) + '</b>' + (a.surface ? ' · ' + num(a.surface) + ' m²' : '') + ' · ' + esc(a.type || '') + '</div><div class="se-hint">' + esc(a.adresse) + ' · ' + dFR(a.date) + '</div></div></div>').join('') + '</div>' : '<p class="se-hint" style="margin-top:8px">Aucune mutation trouvée sur ses parcelles depuis 2014.</p>') : '<p class="se-hint" style="margin-top:8px">Date et prix d’achat des biens, sur les parcelles de la SCI.</p>') + '</div>' +
+        (dpe ? '<div class="se-card"><h3>DPE récents sur ses biens</h3><div class="se-list" style="margin-top:8px">' + dpe + '</div></div>' : '') +
+        '<div class="se-card"><h3>Annonces légales (BODACC)</h3>' + (bod ? '<div class="se-list" style="margin-top:8px">' + bod + '</div>' : '<p class="se-hint">Aucune annonce.</p>') + '</div>' +
+      '</div>';
+  }
+  function sciLettre(siren) {
+    const F = sci.fiches[siren] || {}; const I = F.infos || {};
+    const g = (I.dirigeants || []).find((d) => d.nom && !d.deces) || (I.dirigeants || []).find((d) => d.nom) || {};
+    const bien = (F.biens || [])[0];
+    const moi = (state.moi && (state.moi.prenom || state.moi.nom)) ? [state.moi.prenom, state.moi.nom].filter(Boolean).join(' ') : 'Seecret';
+    return [[g.prenoms || g.prenom, g.nom].filter(Boolean).join(' ') || 'Madame, Monsieur', (I.nom || F.nom || ''), I.siege || '', '', 'Paris, le ' + new Date().toLocaleDateString('fr-FR'), '',
+      'Objet : votre bien' + (bien ? ' du ' + bien.adresse + (bien.commune ? ' (' + bien.commune + ')' : '') : ''), '',
+      (g.nom ? 'Madame, Monsieur ' + g.nom + ',' : 'Madame, Monsieur,'), '',
+      'Je dirige Seecret, un club d’acquéreurs qualifiés qui recherchent des biens à Paris et dans l’ouest parisien, en toute discrétion, sans publicité ni visites inutiles.',
+      'Plusieurs de nos membres recherchent actuellement un bien comparable à celui que détient ' + (I.nom || F.nom || 'votre société') + '. Si une vente ou un arbitrage est envisagé, même à moyen terme, je serais heureux d’en parler avec vous et de vous donner une estimation confidentielle.', '',
+      'Je reste à votre disposition.', '', 'Bien cordialement,', moi].join('\n');
+  }
+
   function viewRadar() {
     const D = radar.data;
     if (!D && !radar.chargement && !radar.erreur) rdRelancer();
@@ -6671,6 +6802,7 @@
     return '<h3>Menu</h3><p class="se-muted">Tout le CRM.</p><div class="se-list">' +
       groupe('Prospection') +
       item('radar', ICONS.search, 'Radar') +
+      item('sci', ICONS.building, 'SCI') +
       item('recherches', ICONS.search, 'Recherches') +
       item('robot', ICONS.robot, 'Immo Data Robot', matchings().filter((m) => m.statut === 'nouveau').length) +
       item('notifications', ICONS.inbox, 'À prévenir', notifications().length) +
@@ -6916,6 +7048,31 @@
       } catch (e) { toast('Impossible : ' + (e.message || 'erreur'), 'warn'); }
     },
     'radar-vers-secteur': (el, id) => { radar.secteurs = [id]; radar.vue = 'liste'; rdRelancer(); },
+    'sci-zones-ouvrir': () => { sci.choix = !sci.choix; sci.temp = sci.zones.slice(); render(); },
+    'sci-zone': (el, id) => { sci.temp = sci.temp.indexOf(id) > -1 ? sci.temp.filter((x) => x !== id) : sci.temp.concat([id]); render(); },
+    'sci-zones-tout': () => { sci.temp = []; render(); },
+    'sci-zones-valider': () => { sci.zones = sci.temp.slice(); sci.choix = false; sci.page = 1; sciCharger(); },
+    'sci-chercher': () => { const i = document.querySelector('[data-sci-q]'); sci.q = i ? i.value : sci.q; sci.page = 1; sciCharger(); },
+    'sci-radar': (el, id) => { radar.siren = id; radar.sirenNom = el.getAttribute('data-nom') || ''; radar.vue = 'liste'; radar.page = 1; location.hash = '#/radar'; setTimeout(rdRelancer, 50); },
+    'sci-plus': () => { sci.page++; sciCharger(); },
+    'sci-analyser': (el, id) => sciAnalyserUne(id),
+    'sci-reanalyser': async (el, id) => { sci.analyse[id] = true; render(); try { const d = await (await fetch('/api/sci/' + id + '?analyser=1&forcer=1')).json(); sci.fiches[id] = d; } catch (e) { toast('Analyse impossible', 'warn'); } delete sci.analyse[id]; render(); },
+    'sci-analyser-lot': async () => {
+      const ids = ((sci.data && sci.data.lignes) || []).filter((x) => !x.analysee).slice(0, 20).map((x) => x.siren);
+      sci.lot = { fait: 0, total: ids.length }; render();
+      for (const id of ids) { await sciAnalyserUne(id); sci.lot.fait++; render(); }
+      sci.lot = null; if (sci.tri === 'score' && sci.data) sci.data.lignes.sort((a, z) => z.score - a.score); render();
+    },
+    'sci-achats': async (el, id) => { sci.analyse['dvf' + id] = true; render(); try { const r = await fetch('/api/sci/' + id + '/achats', { method: 'POST' }); const d = await r.json(); if (!r.ok) throw new Error(d.error || 'erreur'); if (sci.fiches[id]) sci.fiches[id].achats = d.achats; } catch (e) { toast('DVF : ' + (e.message || 'erreur'), 'warn'); } delete sci.analyse['dvf' + id]; render(); },
+    'sci-lead': async (el, id) => { try { const r = await fetch('/api/sci/' + id + '/lead', { method: 'POST' }); const d = await r.json(); if (!r.ok) throw new Error(d.error || 'erreur'); toast(d.deja ? 'Ce lead existe déjà.' : 'Lead vendeur créé (sans coordonnées pour l’instant).', 'ok'); await syncServeur(); location.hash = '#/client/' + d.lead.id; } catch (e) { toast('Création impossible : ' + (e.message || 'erreur'), 'warn'); } },
+    'sci-suivre': async (el, id) => { const F = sci.fiches[id] || {}; try { const r = await fetch('/api/sci/' + id + '/suivre', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ suivre: !F.suivie }) }); const d = await r.json(); F.suivie = d.suivie; toast(d.suivie ? 'SCI suivie : alerte à chaque DPE, annonce BODACC ou décès.' : 'SCI plus suivie.', 'ok'); } catch (e) { toast('Impossible', 'warn'); } render(); },
+    'sci-lettre': (el, id) => {
+      const t = sciLettre(id);
+      const w = window.open('', '_blank');
+      if (!w) { try { navigator.clipboard.writeText(t); toast('Lettre copiée dans le presse-papiers.', 'ok'); } catch (e) { toast('Ouverture bloquée par le navigateur.', 'warn'); } return; }
+      w.document.write('<!doctype html><meta charset="utf-8"><title>Lettre</title><body style="font:15px/1.6 Georgia,serif;max-width:640px;margin:48px auto;padding:0 24px;white-space:pre-wrap" contenteditable="true">' + t.replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</body>');
+      w.document.close();
+    },
     'radar-siren': (el, id) => { radar.siren = id || ''; radar.sirenNom = el.getAttribute('data-nom') || ''; radar.vue = 'liste'; rdRelancer(); },
     'radar-coord-ouvrir': (el, id) => { radar.coordOuvert = id; radar.coordChoix = radar.coordChoix || {}; render(); rdChargerOutils(false); },
     'radar-coord-fermer': () => { radar.coordOuvert = null; render(); },
@@ -8055,6 +8212,8 @@
       } catch (err) { imp = { nom: f.name, erreur: 'Lecture impossible : ' + err.message }; render(); }
       return;
     }
+    if (e.target.hasAttribute('data-sci-f')) { sci[e.target.getAttribute('data-sci-f')] = e.target.value; sci.page = 1; sciCharger(); return; }
+    if (e.target.hasAttribute('data-sci-c')) { sci[e.target.getAttribute('data-sci-c')] = e.target.checked; sci.page = 1; sciCharger(); return; }
     if (e.target.hasAttribute('data-import-fiches')) {
       const fichiers = Array.from(e.target.files || []);
       if (!fichiers.length) return;
@@ -8630,6 +8789,7 @@
   });
 
   document.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target.hasAttribute && e.target.hasAttribute('data-sci-q')) { e.preventDefault(); sci.q = e.target.value; sci.page = 1; sciCharger(); return; }
     if (e.key === 'Enter' && e.target.hasAttribute && e.target.hasAttribute('data-rd-cp')) { e.preventDefault(); const b = document.querySelector('[data-act="radar-zone-ajouter"]'); if (b) b.click(); return; }
     if (e.key === 'Enter' && e.target.hasAttribute && e.target.hasAttribute('data-rdf') && e.target.tagName === 'INPUT') { e.preventDefault(); radar[e.target.getAttribute('data-rdf')] = e.target.value; rdRelancer(); }
   });

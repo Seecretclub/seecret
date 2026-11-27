@@ -671,3 +671,21 @@ body.se-maps-open { overflow: hidden; }
 .rd-choix-grille{display:grid;grid-template-columns:repeat(auto-fill,minmax(52px,1fr));gap:6px;margin-bottom:14px}
 .rd-choix-grille .rd-chip{width:100%;justify-content:center}
 .rd-choix-actions{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:14px;flex-wrap:wrap}
+
+/* Outil SCI */
+.sci-filtres{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.sci-filtres .se-select{flex:1;min-width:150px}
+.sci-cases{display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-top:12px}
+.sci-cases .se-btn{margin-left:auto}
+.sci-liste{display:flex;flex-direction:column;gap:8px}
+.sci-ligne{display:flex;gap:10px;align-items:center;padding:12px 14px;border:1px solid var(--color-line,#e5e2dc);border-radius:14px;background:var(--color-surface,#fff)}
+.sci-ligne-lien{display:flex;gap:12px;align-items:flex-start;flex:1;min-width:0;text-decoration:none;color:inherit}
+.sci-nom{font-weight:600;font-size:14.5px;overflow-wrap:anywhere}
+.sci-resume{font-size:13px;margin-top:4px;color:var(--color-graphite,#555)}
+.sci-score{flex:none;width:42px;height:42px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:15px;background:#f1efe9;color:#6b665c}
+.sci-score.warn{background:#fdf1dc;color:#9a5b00}
+.sci-score.alert{background:#fbe3e1;color:#a3261b}
+.sci-score.grand{width:64px;height:64px;font-size:22px;border-radius:16px}
+.sci-grille{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;align-items:start}
+.sci-grille .se-card{min-width:0}
+@media (max-width:600px){.sci-grille{grid-template-columns:1fr}.sci-ligne{align-items:flex-start}}
