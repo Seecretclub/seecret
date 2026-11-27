@@ -1603,7 +1603,7 @@
     const b = state.monBien;
     if (!b) {
       return edHead('Mon bien', 'Votre espace', '') + journalHtml() +
-        '<div class="ed-panel"><p class="se-muted">Votre fiche bien est en cours de préparation. Rechargez la page dans un instant.</p></div>';
+        '<div class="ed-panel"><p class="se-muted">Aucun bien à vendre n’est enregistré à votre nom. Vous envisagez de vendre ? Écrivez à votre agent depuis vos messages : il préparera votre fiche avec vous.</p></div>';
     }
     const photos = b.photos || [];
     const photosVerrouillees = b.validation === 'valide';
@@ -2000,7 +2000,7 @@
       state.suivis = Array.isArray(me.membre.suivis) ? me.membre.suivis.slice() : [];
       state.__menuOuvert = false;
       state.__tour = null;
-      try { const b = await API.get('/api/mon-bien'); state.monBien = Object.assign({ mien: true }, b.bien); } catch (e) { /* pas de bien */ }
+      try { const b = await API.get('/api/mon-bien'); state.monBien = b.bien ? Object.assign({ mien: true }, b.bien) : null; } catch (e) { /* pas de bien */ }
       try { const c = await API.get('/api/catalogue'); state.biens = c.biens || []; } catch (e) { /* catalogue indisponible */ }
       try { const r = await API.get('/api/mon-recherche'); state.recherche = Object.assign({}, state.recherche, r.recherche); } catch (e) { /* pas de recherche */ }
       try { const d = await API.get('/api/documents'); state.docs = d.documents || []; } catch (e) { /* pas de docs */ }

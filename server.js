@@ -481,11 +481,24 @@ app.post('/api/candidature', async (req, res) => {
   const email = ((dossier.vous && dossier.vous.email) || '').toLowerCase();
 
   let lead = email ? db.leads.find((l) => (l.email || '').toLowerCase() === email) : null;
+  // Une fiche archivée (ex. candidature refusée) qui revient avec une nouvelle
+  // candidature ressort des Archivés : sinon la nouvelle demande pointerait
+  // vers des fiches invisibles (« Recherche absente »).
+  const restaurer = (k, f) => {
+    if (!f || !f.archive) return;
+    delete f.archive; delete f.archiveMotif; f.restaureLe = nowISO(); f.restaurePar = 'Plateforme';
+    logActivite(db, { leadId: lead.id, bienId: k === 'bien' ? f.id : null, rechercheId: k === 'recherche' ? f.id : null, type: 'restauration', auteur: 'Plateforme', detail: 'Nouvelle candidature' });
+  };
+  const nonVide = (x) => !(x === undefined || x === null || x === '' || x === 0 || (Array.isArray(x) && !x.length));
   if (lead) {
     const fresh = result.lead;
-    fresh.id = lead.id;
-    fresh.cree = lead.cree;
-    Object.assign(lead, fresh);
+    const dejaMembre = lead.statut === 'accepte';
+    // Les nouvelles réponses remplacent les anciennes, sans effacer ce que
+    // l'agence a saisi quand le candidat laisse un champ vide.
+    Object.keys(fresh).forEach((k) => { if (['id', 'cree', 'statut', 'role'].indexOf(k) === -1 && nonVide(fresh[k])) lead[k] = fresh[k]; });
+    // Un membre déjà accepté garde son accès ; sinon la candidature repart à l'étude.
+    if (!dejaMembre) lead.statut = 'en_attente';
+    restaurer('lead', lead);
   } else {
     lead = result.lead;
     db.leads.push(lead);
@@ -493,16 +506,17 @@ app.post('/api/candidature', async (req, res) => {
 
   if (result.recherche) {
     result.recherche.clientId = lead.id;
-    const prev = db.recherches.find((x) => x.clientId === lead.id);
-    if (prev) Object.assign(prev, result.recherche, { id: prev.id });
+    result.recherche.leadId = lead.id;
+    const prev = db.recherches.find((x) => x.clientId === lead.id && !x.archive) || db.recherches.find((x) => x.clientId === lead.id);
+    if (prev) { Object.assign(prev, result.recherche, { id: prev.id, cree: prev.cree || result.recherche.cree }); restaurer('recherche', prev); result.recherche = prev; }
     else db.recherches.push(result.recherche);
   }
 
   if (result.bien) {
     result.bien.leadId = lead.id;
     result.bien.email = lead.email;
-    const prev = db.biens.find((x) => x.leadId === lead.id);
-    if (prev) Object.assign(prev, result.bien, { id: prev.id });
+    const prev = db.biens.find((x) => x.leadId === lead.id && !x.archive) || db.biens.find((x) => x.leadId === lead.id);
+    if (prev) { Object.assign(prev, result.bien, { id: prev.id, cree: prev.cree || result.bien.cree }); restaurer('bien', prev); result.bien = prev; }
     else db.biens.push(result.bien);
   }
 
@@ -1484,8 +1498,11 @@ const TYPES_DOC = {
   bien: 'Titre de propriété'
 };
 
-function bienDuMembre(db, lead) {
-  let b = db.biens.find((x) => x.leadId === lead.id || (x.email || '').toLowerCase() === (lead.email || '').toLowerCase());
+// Consulter « mon bien » ne crée rien (un acquéreur seul n'a pas de bien) :
+// le brouillon n'est créé que quand le membre agit sur son bien (creer = true).
+function bienDuMembre(db, lead, creer) {
+  let b = db.biens.find((x) => !x.archive && (x.leadId === lead.id || (lead.email && (x.email || '').toLowerCase() === (lead.email || '').toLowerCase())));
+  if (!b && creer === false) return null;
   if (!b) {
     b = {
       id: uid('mb'), leadId: lead.id, email: lead.email,
@@ -1812,8 +1829,8 @@ function nomComplet(lead) {
 
 // ---- Mon bien (membre connecté) ----
 app.get('/api/mon-bien', requireAuth, (req, res) => {
-  const b = bienDuMembre(req.db, req.lead);
-  res.json({ ok: true, bien: bienPublic(b) });
+  const b = bienDuMembre(req.db, req.lead, false);
+  res.json({ ok: true, bien: b ? bienPublic(b) : null });
 });
 
 // ---- Catalogue (membres) : biens validés en CRM, visibles sur la plateforme ----
