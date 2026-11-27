@@ -1942,7 +1942,7 @@
     }
     return '<div class="se-auth"><div class="se-auth-card">' + authBrand() +
       '<h1>Vérifiez vos emails</h1>' +
-      '<p class="se-muted">Un email vient de vous être envoyé à <b style="color:var(--color-ink,#141210);font-weight:600">' + esc(state.__pendingEmail) + '</b>. Entrez le code à 6 chiffres qu’il contient, ou cliquez sur le bouton de l’email.</p>' +
+      '<p class="se-muted">Un email vient de vous être envoyé à <b style="color:var(--color-ink,#141210);font-weight:600">' + esc(state.__pendingEmail) + '</b>.</p>' +
       '<form data-form="auth-code">' +
         '<input type="hidden" name="email" value="' + esc(state.__pendingEmail) + '"/>' +
         '<div class="se-field" style="margin-top:6px"><label for="code">Code reçu par email</label>' +
