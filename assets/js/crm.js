@@ -145,7 +145,12 @@
     document_envoye: { label: 'Pièce envoyée par le client', icon: 'inbox' },
     document_valide: { label: 'Pièce validée par l’agence', icon: 'check' },
     document_refuse: { label: 'Pièce refusée par l’agence', icon: 'chat' },
-    bien_valide: { label: 'Bien validé par l’agence', icon: 'building' }
+    bien_valide: { label: 'Bien validé par l’agence', icon: 'building' },
+    bien_cree: { label: 'Bien créé', icon: 'building' },
+    recherche_creee: { label: 'Recherche créée', icon: 'search' },
+    modification: { label: 'Fiche modifiée', icon: 'edit' },
+    archive: { label: 'Fiche archivée', icon: 'archive' },
+    restauration: { label: 'Fiche restaurée', icon: 'check' }
   };
 
   function seed() {
@@ -237,6 +242,12 @@
   state.tachesVerif = state.tachesVerif || [];
   state.biensServeur = state.biensServeur || [];
   state.recherchesServeur = state.recherchesServeur || [];
+  // Fiches archivées (jamais supprimées) : celles du serveur sont reconstruites à
+  // chaque synchronisation, celles qui n'existent que sur cet appareil restent ici.
+  state.archivesServeur = state.archivesServeur || { clients: [], biens: [], recherches: [] };
+  state.archives = state.archives || { clients: [], biens: [], recherches: [] };
+  // Historique des fiches qui n'existent que sur cet appareil (le serveur tient le reste).
+  state.journal = state.journal || [];
   // Célia (assistant CRM conversationnel et vocal) : messages affichés à l'écran
   // (avec le résumé des actions exécutées) + l'historique brut envoyé à l'API
   // pour qu'elle se souvienne du fil de la conversation. Purement local (jamais
@@ -308,15 +319,16 @@
 
   /* ============================== sélecteurs ============================== */
 
-  const client = (id) => state.clients.find((c) => c.id === id) || null;
-  const bien = (id) => state.biens.find((b) => b.id === id) || (state.biensServeur || []).find((b) => b.id === id) || null;
+  const archivees = (k) => ((state.archivesServeur || {})[k] || []).concat((state.archives || {})[k] || []);
+  const client = (id) => state.clients.find((c) => c.id === id) || archivees('clients').find((c) => c.id === id) || null;
+  const bien = (id) => state.biens.find((b) => b.id === id) || (state.biensServeur || []).find((b) => b.id === id) || archivees('biens').find((b) => b.id === id) || null;
   // Une demande venue du serveur (modification, visite, offre…) porte le
   // bienId BRUT du serveur (ex. "bmwm..."), alors que ce même bien, une fois
   // synchronisé côté CRM, vit dans state.biensServeur sous l'id préfixé
   // "srv-b-<id>" (cf. mapBienServeur). bien(d.bienId) seul ne le trouvait
   // donc jamais pour un vrai bien de production.
   const bienParServeur = (serverId) => (serverId ? (bien('srv-b-' + serverId) || bien(serverId)) : null);
-  const recherche = (id) => state.recherches.find((r) => r.id === id) || (state.recherchesServeur || []).find((r) => r.id === id) || null;
+  const recherche = (id) => state.recherches.find((r) => r.id === id) || (state.recherchesServeur || []).find((r) => r.id === id) || archivees('recherches').find((r) => r.id === id) || null;
   const nomClient = (c) => (c ? (c.prenom + ' ' + c.nom).trim() : '—');
   const prixM2 = (b) => (b.surface ? Math.round(b.prix / b.surface) : 0);
   // ---- Prix net vendeur / HAI ----
@@ -1388,7 +1400,8 @@
           Object.assign(c, {
             serverId: l.id, serveurStatut: l.statut,
             documents: l.documents || 0, documentsValides: l.documentsValides || 0,
-            bienInfo: l.bienInfo || null, agentId: l.agentId || null, demo: !!l.demo
+            bienInfo: l.bienInfo || null, agentId: l.agentId || null, demo: !!l.demo,
+            archive: !!l.archive, archiveLe: l.archiveLe || '', archivePar: l.archivePar || ''
           });
           // Identité saisie dans la candidature : complète la fiche lead sans écraser l'agence.
           ['civilite', 'adresse', 'raisonSociale', 'siren', 'representant', 'ville'].forEach((k) => { if (!c[k] && l[k]) c[k] = l[k]; });
@@ -1409,10 +1422,15 @@
             documents: l.documents || 0, documentsValides: l.documentsValides || 0,
             pipeline: l.pipeline || '', adresseBien: l.adresseBien || '', siren: l.siren || '', parcelle: l.parcelle || '', dirigeants: l.dirigeants || [],
             natureLead: l.natureLead || (l.type === 'sci' ? 'sci' : l.type === 'societe' ? 'societe' : 'personne'), civilite: l.civilite || '', adresse: l.adresse || '', raisonSociale: l.raisonSociale || '', representant: l.representant || '',
-            agentId: l.agentId || null, demo: !!l.demo
+            agentId: l.agentId || null, demo: !!l.demo,
+            archive: !!l.archive, archiveLe: l.archiveLe || '', archivePar: l.archivePar || ''
           });
         }
       });
+      // Leads archivés : retirés des listes de travail, gardés dans « Archivés ».
+      const leadsArchives = new Set(leads.filter((l) => l.archive).map((l) => l.id));
+      state.archivesServeur.clients = state.clients.filter((c) => c.serverId && leadsArchives.has(c.serverId));
+      state.clients = state.clients.filter((c) => !(c.serverId && leadsArchives.has(c.serverId)));
 
       try {
         const rag = await fetch('/api/agence', { headers: { accept: 'application/json' } });
@@ -1425,6 +1443,8 @@
       } catch (e) { /* barème par défaut */ }
       state.biensServeur = rb.ok ? ((await rb.json()).biens || []).map(mapBienServeur) : [];
       if (rb.ok) await rattraperBiensLocaux();
+      state.archivesServeur.biens = state.biensServeur.filter((b) => b.archive);
+      state.biensServeur = state.biensServeur.filter((b) => !b.archive);
       try {
         const rm = await fetch('/api/messages', { headers: { accept: 'application/json' } });
         if (rm.ok) state.conversations = (await rm.json()).conversations || [];
@@ -1432,6 +1452,8 @@
         if (rr.name === 'messages' && rr.param) await chargerFil(leadDuFil(rr.param));
       } catch (e) { /* messagerie indisponible */ }
       state.recherchesServeur = rr.ok ? ((await rr.json()).recherches || []).map(mapRechercheServeur) : [];
+      state.archivesServeur.recherches = state.recherchesServeur.filter((r) => r.archive);
+      state.recherchesServeur = state.recherchesServeur.filter((r) => !r.archive);
 
       // Les offres réelles n'étaient jusqu'ici jamais synchronisées : la vue
       // "Offres" du CRM ne montrait que les données de démo, jamais une vraie
@@ -1803,6 +1825,7 @@
       validation: b.validation || 'en_attente', surSeecret: b.surSeecret !== false,
       serveur: true, email: b.email || '', demo: !!b.demo,
       refAgence: b.refAgence || '', nomProprio: b.nom || '', source: b.source || '', sourceFichier: b.sourceFichier || '', importLot: b.importLot || '',
+      archive: !!b.archive, archiveLe: b.archiveLe || '', archivePar: b.archivePar || '',
       notesLibres: b.notesLibres || '', suiviAgence: b.suiviAgence || null, details: b.details || null, mandatOrigine: b.mandatOrigine || null, accesVisites: b.accesVisites || '', verifs: b.verifs || null
     };
   }
@@ -1810,7 +1833,8 @@
   function mapRechercheServeur(r) {
     const c = state.clients.find((x) => x.serverId === r.clientId);
     return {
-      id: 'srv-r-' + r.id, clientId: c ? c.id : r.clientId,
+      id: 'srv-r-' + r.id, serverId: r.id, clientId: c ? c.id : r.clientId,
+      archive: !!r.archive, archiveLe: r.archiveLe || '', archivePar: r.archivePar || '',
       titre: r.titre || 'Recherche', type: r.type || '', types: r.types || [],
       prixMin: r.prixMin || 0, prixMax: r.prixMax || 0, piecesMin: r.piecesMin || 0, chambresMin: r.chambresMin || 0, sdbMin: r.sdbMin || 0, surfaceMin: r.surfaceMin || 0, surfaceMax: r.surfaceMax || 0, dernierEtageOk: !!r.dernierEtageOk, delai: r.delai || '',
       apport: r.apport || 0, financement: r.financement || '', courtier: !!r.courtier, bienAVendre: !!r.bienAVendre,
@@ -5401,7 +5425,11 @@
         '<a href="#" data-act="filtre" data-id="leadType:plateforme" class="' + (leadType === 'plateforme' ? 'active' : '') + '">Leads Plateforme<span>' + count('plateforme') + '</span></a>' +
         '<a href="#" data-act="filtre" data-id="leadType:manuel" class="' + (leadType === 'manuel' ? 'active' : '') + '">Leads Manuels<span>' + count('manuel') + '</span></a>' +
         '<a href="#" data-act="filtre" data-id="leadType:prospecter" class="' + (leadType === 'prospecter' ? 'active' : '') + '">À prospecter<span>' + nbProspecter + '</span></a>' +
+        '<a href="#" data-act="filtre" data-id="leadType:archives" class="' + (leadType === 'archives' ? 'active' : '') + '">Archivés<span>' + archivees('clients').length + '</span></a>' +
       '</div>';
+    if (leadType === 'archives') {
+      return head('Prospection', 'Leads archivés', 'Rien n’est supprimé : chaque lead garde son historique et peut être restauré.', '') + ongletsLeads + viewArchives('lead');
+    }
     if (leadType === 'prospecter') {
       return head('Prospection', 'Leads', 'Propriétaires à démarcher, étape par étape.',
         '<a class="se-btn ghost sm" href="#/import">Importer un fichier</a><a class="se-btn ghost sm" href="#/pipeline">Vue pipeline</a><button class="se-btn ghost sm" data-act="client-nouveau">' + ICONS.plus + ' Nouveau lead</button>') +
@@ -5470,7 +5498,7 @@
     const biensPossedes = ((state.biensServeur || []).concat(state.biens)).filter((b) => b.proprietaireId === c.id || b.leadId === c.serverId);
     const activites = (state.activites || []).filter((a) => a.leadId === c.serverId).slice().sort((a, b) => new Date(b.at) - new Date(a.at));
 
-    return '<div class="se-fiche-head">' +
+    return bandeauArchive('lead', c) + '<div class="se-fiche-head">' +
         '<span class="se-avatar">' + esc((c.prenom.charAt(0) + c.nom.charAt(0)).toUpperCase()) + '</span>' +
         '<div style="flex:1"><div class="kicker" style="color:var(--color-taupe)">' + (c.type === 'acquereur' ? 'Acquéreur' : c.type === 'vendeur' ? 'Vendeur' : 'Acquéreur & vendeur') + ' · ' + esc(c.source) + '</div>' +
         '<h1 class="display" style="font-size:30px;margin:4px 0 2px">' + esc(nomClient(c)) + '</h1>' +
@@ -5479,6 +5507,7 @@
           ((estCandidatOuMembre(c) && biensPossedes.some((x) => x.validation === 'en_attente')) ? '<button class="se-btn soft" data-act="bien-valider" data-id="' + biensPossedes.find((x) => x.validation === 'en_attente').id + '">Valider ce bien</button>' : '') +
           (biensPossedes.length ? '<a class="se-btn ghost" href="#/bien/' + biensPossedes[0].id + '">Voir son Bien</a>' : '') +
           (recherches.length ? '<a class="se-btn ghost" href="#/recherche/' + recherches[0].id + '">Voir sa Recherche</a>' : '') +
+          '<button class="se-btn ghost" data-act="historique" data-kind="lead" data-id="' + c.id + '">Historique</button>' +
           '<button class="se-btn ghost" data-act="client-editer" data-id="' + c.id + '">Modifier</button>' +
           '<button class="se-btn ghost" data-act="recherche-nouvelle" data-id="' + c.id + '">Nouvelle recherche</button>' +
           '<button class="se-btn" data-act="visite-nouvelle" data-id="' + c.id + '">Planifier une visite</button>' +
@@ -5601,10 +5630,16 @@
       return true;
     });
     const aVerifier = (state.biensServeur || []).filter((b) => b.importLot && !b.verifs).length;
+    const vueBiens = state.filtres.vueBiens || '';
+    const ongletsBiens = ongletsArchive('vueBiens', vueBiens, toutes.length, archivees('biens').length, 'Portefeuille');
+    if (vueBiens === 'archives') {
+      return head('Portefeuille', 'Biens archivés', 'Retirés du portefeuille, de la plateforme et du matching. Rien n’est supprimé.', '') + ongletsBiens + viewArchives('bien');
+    }
 
     return head('Portefeuille', 'Biens',
       list.length + ' bien(s) · ' + euro(list.reduce((n, b) => n + b.prix, 0)) + ' de valeur de présentation.',
       '<button class="se-btn" data-act="bien-nouveau">' + ICONS.plus + ' Nouveau bien</button>') +
+      ongletsBiens +
       carteImportFiches() +
       '<div class="se-card pad-sm" style="margin-bottom:18px"><div class="se-filters">' +
         '<select class="se-select" data-filter="statutBien"><option value="">Tous les statuts</option>' +
@@ -5764,11 +5799,12 @@
       }
     }
 
-    return '<div class="se-fiche-head">' +
+    return bandeauArchive('bien', b) + '<div class="se-fiche-head">' +
       '<div style="flex:1"><div class="kicker" style="color:var(--color-taupe)">' + esc(b.ref) + ' · ' + esc(b.type) + ' · ' + esc(qLabel(b.quartier)) + (prop ? ' · <a href="#/client/' + prop.id + '" style="color:var(--color-club-violet);text-decoration:none">Propriétaire : ' + esc(nomClient(prop)) + '</a>' : '') + '</div>' +
       '<h1 class="display" style="font-size:30px;margin:4px 0 2px">' + esc(b.titre) + '</h1>' +
       '<div class="se-row" style="gap:8px">' + badgeBien(b.statut) + badgeExclusivite(b) + badgeValidation(b) + badgeDemo(b) + '<span class="se-pill" title="Prix net vendeur">Net <b>' + euro(b.prix) + '</b></span><span class="se-pill" title="Prix affiché aux acquéreurs">HAI <b>' + euro(haiPour(b, null)) + '</b> · ' + tauxTxt(tauxPour(b, null)) + ' %</span><span class="se-pill" title="Prix affiché à un membre dont le bien a été VENDU par l’agence (statut Vendu)">Si son bien est vendu par nous : ' + euro(haiPour(b, REDUIT)) + '</span><span class="se-pill">' + euro(prixM2(b)) + ' /m² net</span></div></div>' +
       '<div class="se-actions">' +
+        '<button class="se-btn ghost" data-act="historique" data-kind="bien" data-id="' + b.id + '">Historique</button>' +
         '<button class="se-btn ghost" data-act="bien-editer" data-id="' + b.id + '">Modifier</button>' +
         '<button class="se-btn ghost" data-act="bien-statut" data-id="' + b.id + '">Changer le statut</button>' +
         '<button class="se-btn" data-act="visite-nouvelle" data-id="' + b.id + '" data-bien="' + b.id + '">Planifier une visite</button>' +
@@ -5864,10 +5900,16 @@
     list = tri === 'recent'
       ? list.sort((a, b) => (b.r.cree || '').localeCompare(a.r.cree || ''))
       : list.sort((a, b) => b.n - a.n);
+    const vueRech = state.filtres.vueRech || '';
+    const ongletsRech = ongletsArchive('vueRech', vueRech, list.length, archivees('recherches').length, 'Recherches actives');
+    if (vueRech === 'archives') {
+      return head('Matching', 'Recherches archivées', 'Elles ne reçoivent plus de biens compatibles. Rien n’est supprimé.', '') + ongletsRech + viewArchives('recherche');
+    }
     const triBtn = (id, label) => '<button class="se-btn ghost sm' + (tri === id ? ' is-on' : '') + '" data-act="recherches-tri" data-tri="' + id + '">' + label + '</button>';
     return head('Matching', 'Recherches',
       'Les critères de vos acquéreurs, confrontés en continu au portefeuille et aux données publiques.',
       '<button class="se-btn" data-act="recherche-nouvelle">' + ICONS.plus + ' Nouvelle recherche</button>') +
+      ongletsRech +
       '<div class="se-row" style="gap:6px;margin-bottom:12px">' + triBtn('recent', 'Plus récentes') + triBtn('match', 'Plus de correspondances') + '</div>' +
       '<div class="se-grid cols-2">' + list.map(({ r, n }) => {
         const c = client(r.clientId);
@@ -5901,7 +5943,8 @@
         }).join('') + '</div>'
       : '<p class="se-muted" style="margin-top:8px">Aucune opportunité détectée pour l’instant dans les données publiques.</p>';
 
-    return head(esc(nomClient(c)), esc(rec.titre), 'Critères confrontés à ' + state.biens.length + ' biens du portefeuille et aux données publiques.',
+    return bandeauArchive('recherche', rec) + head(esc(nomClient(c)), esc(rec.titre), 'Critères confrontés à ' + state.biens.length + ' biens du portefeuille et aux données publiques.',
+      '<button class="se-btn ghost" data-act="historique" data-kind="recherche" data-id="' + rec.id + '">Historique</button>' +
       '<button class="se-btn ghost" data-act="recherche-editer" data-id="' + rec.id + '">Modifier</button>' +
       '<button class="se-btn" data-act="recherche-envoyer" data-id="' + rec.id + '">Envoyer la sélection</button>') +
       '<div class="se-split">' +
@@ -6640,6 +6683,117 @@
       '</div>';
   }
 
+  /* ------------------------- archivage & historique ------------------------- */
+  const CLE_ARCHIVE = { lead: 'clients', bien: 'biens', recherche: 'recherches' };
+  const NOM_FICHE = { lead: 'ce lead', bien: 'ce bien', recherche: 'cette recherche' };
+  const ficheDe = (kind, id) => (kind === 'lead' ? client(id) : kind === 'bien' ? bien(id) : recherche(id));
+  const nomFiche = (kind, f) => (!f ? '—' : kind === 'lead' ? nomClient(f) : (f.titre || (kind === 'bien' ? 'Bien' : 'Recherche')));
+  const estArchivee = (kind, f) => !!f && (f.archive || archivees(CLE_ARCHIVE[kind]).indexOf(f) > -1);
+  const dateHeure = (iso) => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }); };
+  function boutonArchiver(kind, id) {
+    return '<button class="se-btn ghost se-btn-archiver" type="button" data-act="archiver-demander" data-kind="' + kind + '" data-id="' + esc(id) + '">Archiver</button>';
+  }
+  function bandeauArchive(kind, f) {
+    if (!estArchivee(kind, f)) return '';
+    return '<div class="se-archive-bandeau"><div><b>Fiche archivée</b>' + (f.archiveLe ? ' le ' + esc(dateHeure(f.archiveLe)) : '') + (f.archivePar ? ' par ' + esc(f.archivePar) : '') +
+      '<div class="se-hint">Elle n’apparaît plus dans les listes, ni sur la plateforme, ni dans le matching. Rien n’a été supprimé.</div></div>' +
+      '<button class="se-btn sm" data-act="restaurer" data-kind="' + kind + '" data-id="' + esc(f.id) + '">Restaurer</button></div>';
+  }
+  function archiveModal(kind, id) {
+    const f = ficheDe(kind, id);
+    const recs = kind === 'lead' && f ? ((state.recherchesServeur || []).concat(state.recherches)).filter((x) => x.clientId === f.id) : [];
+    return '<h3>Archiver ' + NOM_FICHE[kind] + ' ?</h3>' +
+      '<p class="se-muted">« ' + esc(nomFiche(kind, f)) + ' » quitte les listes' + (kind === 'bien' ? ', la plateforme' : '') + (kind !== 'lead' ? ' et le matching' : '') + '. Rien n’est supprimé : la fiche reste consultable dans l’onglet <b>Archivés</b>, avec son historique, et peut être restaurée à tout moment.</p>' +
+      (recs.length ? '<label class="se-row" style="gap:8px;margin-top:14px;align-items:flex-start"><input type="checkbox" data-archive-recherches checked/> <span>Archiver aussi ' + (recs.length > 1 ? 'ses ' + recs.length + ' recherches' : 'sa recherche') + ' (sinon elle' + (recs.length > 1 ? 's continuent' : ' continue') + ' de recevoir des biens compatibles)</span></label>' : '') +
+      (kind === 'lead' && f && f.serverId && estCandidatOuMembre(f) ? '<p class="se-hint" style="margin-top:10px">Son accès membre à la plateforme n’est pas modifié : utilisez « Suspendre » sur sa fiche si besoin.</p>' : '') +
+      '<div class="se-modal-foot"><button class="se-btn ghost" type="button" data-act="modal-close">Annuler</button><button class="se-btn" type="button" data-act="archiver-confirmer" data-kind="' + kind + '" data-id="' + esc(id) + '">Archiver</button></div>';
+  }
+  async function archiverFiche(kind, id, archiver, avecRecherches) {
+    const f = ficheDe(kind, id);
+    if (!f) { toast('Fiche introuvable.', 'warn'); return false; }
+    const auteur = ((state.agent && (state.agent.prenom + ' ' + state.agent.nom)) || 'Agent').trim();
+    if (f.serverId) {
+      try {
+        const r = await fetch('/api/archives', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: kind, id: f.serverId, archive: archiver, avecRecherches: !!avecRecherches }) });
+        const res = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(res.error || 'Erreur serveur');
+      } catch (e) { toast('Erreur : ' + (e.message || 'serveur'), 'warn'); return false; }
+    }
+    // Fiches locales (et recherches locales d'un lead archivé) : déplacées entre liste et archives.
+    const deplacer = (k, x) => {
+      const cle = CLE_ARCHIVE[k];
+      if (x.serverId) return;
+      const depuis = archiver ? state[cle] : state.archives[cle];
+      const vers = archiver ? state.archives[cle] : state[cle];
+      const i = depuis.indexOf(x);
+      if (i > -1) depuis.splice(i, 1);
+      if (vers.indexOf(x) === -1) vers.push(x);
+      if (archiver) { x.archive = true; x.archiveLe = nowISO(); x.archivePar = auteur; } else { delete x.archive; }
+      state.journal.push({ kind: k, id: x.id, leadLocalId: k === 'lead' ? x.id : (x.clientId || x.proprietaireId || null), type: archiver ? 'archive' : 'restauration', auteur: auteur, at: nowISO() });
+    };
+    deplacer(kind, f);
+    if (kind === 'lead' && avecRecherches) state.recherches.filter((x) => x.clientId === f.id && !x.serverId).forEach((x) => deplacer('recherche', x));
+    if (f.serverId || (kind === 'lead' && avecRecherches)) { try { await syncServeur(); } catch (e) { /* liste rafraîchie au prochain chargement */ } }
+    return true;
+  }
+  const CHAMPS_LOCAUX = {
+    lead: { prenom: 'Prénom', nom: 'Nom', email: 'Email', tel: 'Téléphone', adresse: 'Adresse', civilite: 'Civilité', natureLead: 'Le lead est', raisonSociale: 'Raison sociale', siren: 'SIREN', type: 'Type', statut: 'Statut', source: 'Source', notes: 'Notes' },
+    bien: { titre: 'Titre', adresse: 'Adresse', type: 'Type', quartier: 'Quartier', statut: 'Statut', surface: 'Surface', pieces: 'Pièces', chambres: 'Chambres', sdb: 'Salles de bain', etage: 'Étage', dpe: 'DPE', ges: 'GES', prix: 'Prix net vendeur', description: 'Description' },
+    recherche: { titre: 'Intitulé', types: 'Types', quartiers: 'Secteurs', prixMin: 'Budget min', prixMax: 'Budget max', piecesMin: 'Pièces min', chambresMin: 'Chambres min', surfaceMin: 'Surface min', surfaceMax: 'Surface max', dpe: 'DPE', epoque: 'Époque' }
+  };
+  function journaliserLocal(kind, avant, apres) {
+    const val = (v) => (v === undefined || v === null || v === '' ? '' : Array.isArray(v) ? v.join(', ') : typeof v === 'boolean' ? (v ? 'Oui' : 'Non') : String(v).slice(0, 140));
+    const lib = CHAMPS_LOCAUX[kind];
+    const detail = Object.keys(lib).filter((k) => val(avant[k]) !== val(apres[k])).map((k) => ({ champ: k, libelle: lib[k], avant: val(avant[k]), apres: val(apres[k]) }));
+    if (!detail.length) return;
+    state.journal.push({ kind: kind, id: avant.id, leadLocalId: kind === 'lead' ? avant.id : (avant.clientId || avant.proprietaireId || null), type: 'modification', auteur: ((state.agent && (state.agent.prenom + ' ' + state.agent.nom)) || 'Agent').trim(), at: nowISO(), detail: detail });
+  }
+  const valHisto = (v, champ) => (v === undefined || v === null || v === '' ? '—' : ['prix', 'prixMin', 'prixMax', 'budgetMin', 'budgetMax', 'apport', 'charges'].indexOf(champ) > -1 && /^\d+$/.test(String(v)) ? Number(v).toLocaleString('fr-FR') + ' €' : String(v));
+  function historiqueModal(kind, id, chargement) {
+    const f = ficheDe(kind, id);
+    const sid = f && f.serverId;
+    const serveur = (state.activites || []).filter((a) => sid && (kind === 'lead' ? a.leadId === sid : kind === 'bien' ? a.bienId === sid : a.rechercheId === sid));
+    const locaux = (state.journal || []).filter((j) => f && (j.id === f.id && j.kind === kind || (kind === 'lead' && j.leadLocalId === f.id)));
+    const tout = serveur.concat(locaux).sort((a, b) => new Date(b.at) - new Date(a.at));
+    const contexte = (a) => {
+      if (kind !== 'lead') return '';
+      if (a.rechercheId || a.kind === 'recherche') return '<span class="se-pill">Recherche</span>';
+      if (a.bienId || a.kind === 'bien') return '<span class="se-pill">Bien</span>';
+      return '';
+    };
+    const ligne = (a) => '<li class="se-histo-item">' +
+      '<div class="se-histo-tete"><b>' + esc((ACTIVITE[a.type] || { label: a.type }).label) + '</b>' + contexte(a) + '</div>' +
+      '<div class="se-hint">' + esc(dateHeure(a.at)) + (a.auteur ? ' · ' + esc(a.auteur) : '') + '</div>' +
+      ((a.detail || []).length ? '<ul class="se-histo-detail">' + a.detail.map((d) => '<li><span>' + esc(d.libelle) + '</span> ' + '<s>' + esc(valHisto(d.avant, d.champ)) + '</s> → <b>' + esc(valHisto(d.apres, d.champ)) + '</b></li>').join('') + '</ul>' : '') +
+      '</li>';
+    return '<h3>Historique</h3><p class="se-muted">' + esc(nomFiche(kind, f)) + (kind === 'lead' ? ' · y compris ses recherches et ses biens' : '') + '</p>' +
+      (chargement ? '<p class="se-muted" style="margin-top:14px">Chargement…</p>'
+        : tout.length ? '<ul class="se-histo">' + tout.map(ligne).join('') + '</ul>'
+        : '<p class="se-muted" style="margin-top:14px">Aucune action enregistrée pour l’instant. Les prochaines modifications, archivages et restaurations apparaîtront ici.</p>') +
+      '<div class="se-modal-foot"><button class="se-btn ghost" type="button" data-act="modal-close">Fermer</button></div>';
+  }
+  function viewArchives(kind) {
+    const list = archivees(CLE_ARCHIVE[kind]).slice().sort((a, b) => String(b.archiveLe || '').localeCompare(String(a.archiveLe || '')));
+    const lien = (f) => '#/' + (kind === 'lead' ? 'client' : kind) + '/' + f.id;
+    const sous = (f) => kind === 'lead' ? esc(f.email || f.tel || '')
+      : kind === 'bien' ? esc([f.type, qLabel(f.quartier), f.prix ? euro(f.prix) : ''].filter(Boolean).join(' · '))
+      : esc([nomClient(client(f.clientId)), f.prixMax ? '≤ ' + euro(f.prixMax) : ''].filter((x) => x && x !== '—').join(' · '));
+    if (!list.length) return '<div class="se-card se-empty"><div class="se-empty-title">Aucune fiche archivée</div><p class="se-muted">Pour archiver, ouvrez une fiche, cliquez sur « Modifier » puis « Archiver ».</p></div>';
+    return '<div class="se-card" style="padding:6px 16px"><div class="se-list">' + list.map((f) => '<div class="se-list-item se-archive-ligne">' +
+      '<a href="' + lien(f) + '" style="flex:1;min-width:0;text-decoration:none;color:inherit"><div style="font-size:14px">' + esc(nomFiche(kind, f)) + '</div>' +
+        '<div class="se-sub">' + sous(f) + '</div>' +
+        '<div class="se-hint">Archivé' + (kind === 'recherche' ? 'e' : '') + (f.archiveLe ? ' le ' + esc(dateHeure(f.archiveLe)) : '') + (f.archivePar ? ' par ' + esc(f.archivePar) : '') + '</div></a>' +
+      '<div class="se-row" style="gap:6px;flex-wrap:wrap"><button class="se-btn ghost sm" data-act="historique" data-kind="' + kind + '" data-id="' + esc(f.id) + '">Historique</button>' +
+      '<button class="se-btn sm" data-act="restaurer" data-kind="' + kind + '" data-id="' + esc(f.id) + '">Restaurer</button></div>' +
+    '</div>').join('') + '</div></div>';
+  }
+  function ongletsArchive(cle, valeur, nbActifs, nbArchives, libelle) {
+    return '<div class="se-tabs" style="margin-bottom:18px">' +
+      '<a href="#" data-act="filtre" data-id="' + cle + ':" class="' + (valeur !== 'archives' ? 'active' : '') + '">' + libelle + '<span>' + nbActifs + '</span></a>' +
+      '<a href="#" data-act="filtre" data-id="' + cle + ':archives" class="' + (valeur === 'archives' ? 'active' : '') + '">Archivés<span>' + nbArchives + '</span></a>' +
+    '</div>';
+  }
+
   function estSocieteLead(c) { return !!c && (c.natureLead === 'societe' || c.natureLead === 'sci'); }
   function clientModal(c) {
     const v = c || { type: 'acquereur', natureLead: 'personne', civilite: '', prenom: '', nom: '', email: '', tel: '', adresse: '', raisonSociale: '', siren: '', representant: '', statut: 'prospect', source: 'Candidature', notes: '', agent: state.agent.prenom + ' ' + state.agent.nom };
@@ -6661,7 +6815,7 @@
         field('Adresse', 'adresse', v.adresse || '', { full: true, placeholder: '12 rue de la Paix, 75002 Paris' }) +
         field('Source', 'source', v.source, { type: 'select', options: ['Candidature', 'Site web', 'Instagram', 'Recommandation', 'Bouche à oreille', 'Portail'].map((s) => ({ value: s, label: s })) }) +
         field('Notes', 'notes', v.notes, { type: 'textarea', full: true, placeholder: 'Ce qu’il faut retenir de ce lead…' }) +
-      '</div><div class="se-modal-foot"><button class="se-btn ghost" type="button" data-act="modal-close">Annuler</button><button class="se-btn" type="submit">' + (c ? 'Enregistrer' : 'Créer le lead') + '</button></div></form>';
+      '</div><div class="se-modal-foot">' + (c ? boutonArchiver('lead', c.id) : '') + '<button class="se-btn ghost" type="button" data-act="modal-close">Annuler</button><button class="se-btn" type="submit">' + (c ? 'Enregistrer' : 'Créer le lead') + '</button></div></form>';
   }
 
   function bienModal(b, proprietaireId) {
@@ -6698,7 +6852,7 @@
         field('Prix net vendeur (€)', 'prix', v.prix, { type: 'number' }) +
         field('Honoraires acquéreur (%)', 'tauxHonoraires', (v.tauxHonoraires === null || v.tauxHonoraires === undefined) ? '' : v.tauxHonoraires, { type: 'number', step: 'any', placeholder: 'Barème : ' + tauxTxt(BAREME.acq) + ' %' }) +
         field('Description', 'description', v.description, { type: 'textarea', full: true }) +
-      '</div><div class="se-modal-foot"><button class="se-btn ghost" type="button" data-act="modal-close">Annuler</button><button class="se-btn" type="submit">' + (b ? 'Enregistrer' : 'Créer le bien') + '</button></div></form>';
+      '</div><div class="se-modal-foot">' + (b ? boutonArchiver('bien', b.id) : '') + '<button class="se-btn ghost" type="button" data-act="modal-close">Annuler</button><button class="se-btn" type="submit">' + (b ? 'Enregistrer' : 'Créer le bien') + '</button></div></form>';
   }
 
   function rechercheModal(r, clientId) {
@@ -6734,7 +6888,7 @@
         '<div class="se-field full"><label>Secteurs</label><div class="se-chips">' +
           QUARTIERS.map((q) => '<button type="button" class="se-chip" data-act="q-toggle" data-group="quartiers" data-id="' + q.id + '" aria-pressed="' + ((v.quartiers || []).indexOf(q.id) > -1) + '">' + q.label + '</button>').join('') +
         '</div><p class="se-hint">Aucun secteur coché = tous secteurs acceptés.</p></div>' +
-      '</div><div class="se-modal-foot"><button class="se-btn ghost" type="button" data-act="modal-close">Annuler</button><button class="se-btn" type="submit">' + (r ? 'Enregistrer' : 'Créer la recherche') + '</button></div></form>';
+      '</div><div class="se-modal-foot">' + (r ? boutonArchiver('recherche', r.id) : '') + '<button class="se-btn ghost" type="button" data-act="modal-close">Annuler</button><button class="se-btn" type="submit">' + (r ? 'Enregistrer' : 'Créer la recherche') + '</button></div></form>';
   }
 
   // Petites modales de « suite logique » : après la création d'un lead, d'un
@@ -6934,6 +7088,33 @@
     },
     'client-nouveau': () => { modal = clientModal(null); render(); },
     'client-editer': (el, id) => { modal = clientModal(client(id)); render(); },
+    'archiver-demander': (el, id) => { modal = archiveModal(el.getAttribute('data-kind'), id); render(); },
+    'archiver-confirmer': async (el, id) => {
+      const kind = el.getAttribute('data-kind');
+      const avec = !!document.querySelector('[data-archive-recherches]:checked');
+      el.disabled = true; el.textContent = 'Archivage…';
+      if (!(await archiverFiche(kind, id, true, avec))) { el.disabled = false; el.textContent = 'Archiver'; return; }
+      modal = null;
+      location.hash = kind === 'lead' ? '#/clients' : kind === 'bien' ? '#/biens' : '#/recherches';
+      commit();
+      toast('Fiche archivée : retrouvez-la dans l’onglet « Archivés ».', 'ok');
+    },
+    'restaurer': async (el, id) => {
+      const kind = el.getAttribute('data-kind');
+      el.disabled = true;
+      if (!(await archiverFiche(kind, id, false, kind === 'lead'))) { el.disabled = false; return; }
+      commit();
+      toast('Fiche restaurée.', 'ok');
+    },
+    'historique': async (el, id) => {
+      const kind = el.getAttribute('data-kind');
+      modal = historiqueModal(kind, id, true); render();
+      try {
+        const r = await fetch('/api/activites', { headers: { accept: 'application/json' } });
+        if (r.ok) state.activites = (await r.json()).activites || state.activites;
+      } catch (e) { /* on affiche ce qui est déjà chargé */ }
+      modal = historiqueModal(kind, id, false); render();
+    },
     'bien-nouveau': () => {
       if (!state.clients.length) {
         toast('Créez d’abord le lead propriétaire à rattacher à ce bien.', 'warn');
@@ -8448,7 +8629,7 @@
         } catch (e) { toast('Erreur : ' + (e.message || 'serveur'), 'warn'); }
         return;
       }
-      if (id) { const i = state.clients.findIndex((c) => c.id === id); state.clients[i] = Object.assign(existing, obj); }
+      if (id) { journaliserLocal('lead', existing, obj); Object.assign(existing, obj); }
       else {
         // Un nouveau client vit désormais d'emblée côté serveur (et non plus
         // seulement dans le localStorage du navigateur) : c'est ce qui permet
@@ -8589,7 +8770,7 @@
         } catch (e) { toast('Erreur : ' + (e.message || 'serveur'), 'warn'); }
         return;
       }
-      if (id) { const i = state.biens.findIndex((b) => b.id === id); state.biens[i] = Object.assign(existing, obj); }
+      if (id) { journaliserLocal('bien', existing, obj); Object.assign(existing, obj); }
       else {
         // Un nouveau bien vit désormais d'emblée côté serveur (et non plus
         // seulement dans le localStorage de l'agent) : avant ce correctif,
@@ -8664,7 +8845,7 @@
         } catch (e) { toast('Erreur : ' + (e.message || 'serveur'), 'warn'); }
         return;
       }
-      if (id) { const i = state.recherches.findIndex((r) => r.id === id); state.recherches[i] = Object.assign(existing, obj); }
+      if (id) { journaliserLocal('recherche', existing, obj); Object.assign(existing, obj); }
       else {
         // Même logique que pour un nouveau client : la recherche est créée
         // d'emblée côté serveur, rattachée au lead serveur du client (et non

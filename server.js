@@ -279,10 +279,33 @@ function writeDb(db) {
 // à un lead/bien (candidature, admission, mise au catalogue, offres, relances
 // Réseau…), consommée par le CRM (fiche contact → bloc "Activité"). N'écrit
 // jamais dans data.json elle-même : appelant responsable de writeDb(db) après.
-function logActivite(db, { leadId, bienId, type, auteur }) {
+function logActivite(db, { leadId, bienId, rechercheId, type, auteur, detail }) {
   db.activites = Array.isArray(db.activites) ? db.activites : [];
-  db.activites.push({ id: uid('act'), leadId: leadId || null, bienId: bienId || null, type: type, auteur: auteur || 'Système', at: nowISO() });
+  const a = { id: uid('act'), leadId: leadId || null, bienId: bienId || null, type: type, auteur: auteur || 'Système', at: nowISO() };
+  if (rechercheId) a.rechercheId = rechercheId;
+  if (Array.isArray(detail) && detail.length) a.detail = detail.slice(0, 40);
+  db.activites.push(a);
 }
+
+// Historique des fiches : libellés lisibles des champs suivis, par type de fiche.
+const CHAMPS_JOURNAL = {
+  lead: { prenom: 'Prénom', nom: 'Nom', email: 'Email', tel: 'Téléphone', adresse: 'Adresse', ville: 'Ville', civilite: 'Civilité', natureLead: 'Le lead est', raisonSociale: 'Raison sociale', siren: 'SIREN', representant: 'Représentant', projet: 'Projet', source: 'Source', notes: 'Notes', statut: 'Statut', financement: 'Financement', apport: 'Apport', budgetMin: 'Budget min', budgetMax: 'Budget max', pipeline: 'Étape de relance', agentId: 'Agent attribué' },
+  bien: { titre: 'Titre', ref: 'Référence', adresse: 'Adresse', type: 'Type', quartier: 'Quartier', statut: 'Statut', surface: 'Surface', pieces: 'Pièces', chambres: 'Chambres', sdb: 'Salles de bain', etage: 'Étage', dpe: 'DPE', ges: 'GES', etat: 'État', exterieur: 'Extérieur', surfaceExterieur: 'Surface extérieure', charges: 'Charges', ascenseur: 'Ascenseur', anneeConstruction: 'Année de construction', prix: 'Prix net vendeur', tauxHonoraires: 'Honoraires', description: 'Description', surSeecret: 'Sur Seecret', notesLibres: 'Infos libres', etapeProposition: 'Étape proposition' },
+  recherche: { titre: 'Intitulé', types: 'Types', quartiers: 'Secteurs', prixMin: 'Budget min', prixMax: 'Budget max', piecesMin: 'Pièces min', chambresMin: 'Chambres min', sdbMin: 'Salles de bain min', surfaceMin: 'Surface min', surfaceMax: 'Surface max', etageMin: 'Étage min', etageMax: 'Étage max', dernierEtageOk: 'Dernier étage', dpe: 'DPE', epoque: 'Époque', etat: 'État', annexes: 'Indispensables', delai: 'Délai', financement: 'Financement', apport: 'Apport', statut: 'Statut' }
+};
+const valeurJournal = (v) => {
+  if (v === undefined || v === null || v === '') return '';
+  if (Array.isArray(v)) return v.join(', ');
+  if (typeof v === 'boolean') return v ? 'Oui' : 'Non';
+  const t = String(v);
+  return t.length > 140 ? t.slice(0, 140) + '…' : t;
+};
+function champsModifies(kind, avant, apres) {
+  const libelles = CHAMPS_JOURNAL[kind] || {};
+  return Object.keys(libelles).filter((k) => valeurJournal(avant[k]) !== valeurJournal(apres[k]))
+    .map((k) => ({ champ: k, libelle: libelles[k], avant: valeurJournal(avant[k]), apres: valeurJournal(apres[k]) }));
+}
+const copieJournal = (o) => JSON.parse(JSON.stringify(o || {}));
 
 // Notification client unifiée : chaque action de validation/refus côté CRM
 // (pièce d'identité, adhésion, bien, offre, demande de modification, visite…)
@@ -2561,7 +2584,7 @@ app.get('/api/admin/base', requireAdmin, (req, res) => {
 // active dans le CRM (un bien en prospection, un ancien bien… peut rester
 // dans le CRM sans être publié), qu'il est validé par l'agent, et qu'il est
 // en avant-première ou ouvert aux visites.
-function bienSurPlateforme(b) { return !!b && b.surSeecret !== false && b.validation === 'valide' && (b.statut === 'avant-premiere' || b.statut === 'ouvert'); }
+function bienSurPlateforme(b) { return !!b && !b.archive && b.surSeecret !== false && b.validation === 'valide' && (b.statut === 'avant-premiere' || b.statut === 'ouvert'); }
 // Agent qui suit le membre : l'agent attribué dans le CRM (agentId, ou
 // l'agent qui l'a créé), sinon l'agent par défaut de l'agence.
 function agentAttribue(db, lead) {
@@ -3081,6 +3104,7 @@ app.patch('/api/leads/:id', requireAdmin, (req, res) => {
     return res.status(403).json({ error: 'Ce client est attribué à un autre agent.' });
   }
   const body = req.body || {};
+  const avantLead = copieJournal(lead);
   // Seul le super-admin peut réattribuer un client à un autre agent.
   if (role === 'superadmin' && typeof body.agentId !== 'undefined') {
     lead.agentId = body.agentId ? String(body.agentId) : null;
@@ -3105,7 +3129,17 @@ app.patch('/api/leads/:id', requireAdmin, (req, res) => {
       logActivite(db, { leadId: lead.id, type: lead.pipeline === 'converti' ? 'converti' : 'retour_silence', auteur: 'Agent' });
     }
   }
-  if (typeof body.statut === 'string') lead.statut = body.statut.slice(0, 20);
+  // Le statut du formulaire CRM (prospect / actif / client…) n'est PAS le statut
+  // d'accès du membre (en_attente / accepte / suspendu / refuse) : l'écraser
+  // coupait la connexion d'un membre dès que l'agence enregistrait sa fiche.
+  // L'accès ne change que par les routes dédiées (décision, /statut).
+  if (typeof body.statut === 'string') {
+    const ACCES = ['en_attente', 'accepte', 'suspendu', 'refuse'];
+    if (ACCES.indexOf(lead.statut) > -1) lead.statutCrm = body.statut.slice(0, 20);
+    else lead.statut = body.statut.slice(0, 20);
+  }
+  const modifsLead = champsModifies('lead', avantLead, lead);
+  if (modifsLead.length) logActivite(db, { leadId: lead.id, type: 'modification', auteur: nomComplet(req.lead) || 'Agent', detail: modifsLead });
   writeDb(db);
   res.json({ ok: true, lead: lead });
 });
@@ -3161,6 +3195,7 @@ app.patch('/api/biens/:id', requireAdmin, (req, res) => {
   const bien = db.biens.find((b) => b.id === req.params.id);
   if (!bien) return res.status(404).json({ error: 'Bien introuvable' });
   const body = req.body || {};
+  const avantBien = copieJournal(bien);
   // Date d'ouverture aux visites : sert au « record du mois » de la Gazette.
   if (body.statut === 'ouvert' && bien.statut !== 'ouvert') bien.ouvertLe = nowISO();
   // « Vendu » : l'agent précise si la vente a été faite par l'agence — seule
@@ -3219,6 +3254,8 @@ app.patch('/api/biens/:id', requireAdmin, (req, res) => {
   if (['a_presenter', 'presentee', 'reponse_recue', ''].indexOf(body.etapeProposition) > -1) {
     bien.etapeProposition = body.etapeProposition || null;
   }
+  const modifsBien = champsModifies('bien', avantBien, bien);
+  if (modifsBien.length) logActivite(db, { leadId: bien.leadId, bienId: bien.id, type: 'modification', auteur: nomComplet(req.lead) || 'Agent', detail: modifsBien });
   writeDb(db);
   res.json({ ok: true, bien: prixPourCrm(bien), notif: notifValidation });
 });
@@ -3246,12 +3283,14 @@ app.post('/api/recherches', requireAdmin, (req, res) => {
     surfaceMin: Math.max(0, Number(body.surfaceMin) || 0), surfaceMax: Math.max(0, Number(body.surfaceMax) || 0),
     etageMin: Math.max(0, Number(body.etageMin) || 0), etageMax: Math.max(0, Number(body.etageMax) || 0),
     dernierEtageOk: !!body.dernierEtageOk,
-    dpe: String(body.dpe || ''), delai: String(body.delai || ''), financement: String(body.financement || ''),
+    dpe: String(body.dpe || ''), epoque: String(body.epoque || ''), etat: String(body.etat || ''), annexes: Array.isArray(body.annexes) ? body.annexes.map(String) : [],
+    delai: String(body.delai || ''), financement: String(body.financement || ''),
     apport: Math.max(0, Number(body.apport) || 0), courtier: !!body.courtier, bienAVendre: !!body.bienAVendre,
     quartiers: Array.isArray(body.quartiers) ? body.quartiers.map(String) : [],
     statut: 'active', alertes: true, cree: nowISO()
   };
   db.recherches.push(rec);
+  logActivite(db, { leadId: clientId, rechercheId: rec.id, type: 'recherche_creee', auteur: nomComplet(req.lead) || 'Agent' });
   writeDb(db);
   res.json({ ok: true, recherche: rec });
 });
@@ -3267,13 +3306,17 @@ app.patch('/api/recherches/:id', requireAdmin, (req, res) => {
     }
   }
   const body = req.body || {};
-  ['titre', 'type', 'delai', 'financement', 'dpe'].forEach((k) => { if (typeof body[k] === 'string') rec[k] = body[k]; });
+  const avantRec = copieJournal(rec);
+  ['titre', 'type', 'delai', 'financement', 'dpe', 'epoque', 'etat'].forEach((k) => { if (typeof body[k] === 'string') rec[k] = body[k]; });
+  if (Array.isArray(body.annexes)) rec.annexes = body.annexes.map(String);
   ['prixMin', 'prixMax', 'piecesMin', 'chambresMin', 'sdbMin', 'surfaceMin', 'surfaceMax', 'etageMin', 'etageMax', 'apport'].forEach((k) => { if (body[k] !== undefined) rec[k] = Math.max(0, Number(body[k]) || 0); });
   if (Array.isArray(body.quartiers)) rec.quartiers = body.quartiers.map(String);
   if (Array.isArray(body.types)) rec.types = body.types.map(String);
   if (typeof body.courtier === 'boolean') rec.courtier = body.courtier;
   if (typeof body.bienAVendre === 'boolean') rec.bienAVendre = body.bienAVendre;
   if (typeof body.dernierEtageOk === 'boolean') rec.dernierEtageOk = body.dernierEtageOk;
+  const modifsRec = champsModifies('recherche', avantRec, rec);
+  if (modifsRec.length) logActivite(db, { leadId: rec.clientId || rec.leadId, rechercheId: rec.id, type: 'modification', auteur: nomComplet(req.lead) || 'Agent', detail: modifsRec });
   writeDb(db);
   res.json({ ok: true, recherche: rec });
 });
@@ -3340,6 +3383,38 @@ app.post('/api/biens/:id/exclusivite-scan', requireAdmin, async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: 'Scan impossible : ' + ((e && e.message) || 'erreur') });
   }
+});
+
+// Archivage (jamais de suppression) : la fiche quitte les listes du CRM, la
+// plateforme et le matching, reste consultable dans « Archivés » et peut être
+// restaurée. Chaque archivage / restauration est inscrit dans l'historique.
+app.post('/api/archives', requireAdmin, (req, res) => {
+  const db = readDb();
+  const body = req.body || {};
+  const kind = ['lead', 'bien', 'recherche'].indexOf(body.kind) > -1 ? body.kind : '';
+  if (!kind) return res.status(400).json({ error: 'Type de fiche inconnu' });
+  const coll = kind === 'lead' ? db.leads : kind === 'bien' ? db.biens : db.recherches;
+  const fiche = coll.find((x) => x.id === String(body.id || ''));
+  if (!fiche) return res.status(404).json({ error: 'Fiche introuvable' });
+  const leadId = kind === 'lead' ? fiche.id : (fiche.leadId || fiche.clientId || null);
+  const lead = leadId ? db.leads.find((l) => l.id === leadId) : null;
+  if (roleOf(req.lead) !== 'superadmin' && lead && !leadVisibleParAgent(lead, req.lead.id)) {
+    return res.status(403).json({ error: 'Cette fiche appartient à un client attribué à un autre agent.' });
+  }
+  const archiver = body.archive !== false;
+  const auteur = nomComplet(req.lead) || 'Agent';
+  const appliquer = (k, f) => {
+    if (archiver) { f.archive = true; f.archiveLe = nowISO(); f.archivePar = auteur; }
+    else { delete f.archive; f.restaureLe = nowISO(); f.restaurePar = auteur; }
+    logActivite(db, { leadId: k === 'lead' ? f.id : (f.leadId || f.clientId), bienId: k === 'bien' ? f.id : null, rechercheId: k === 'recherche' ? f.id : null, type: archiver ? 'archive' : 'restauration', auteur: auteur });
+  };
+  appliquer(kind, fiche);
+  let recherchesAussi = 0;
+  if (kind === 'lead' && body.avecRecherches) {
+    db.recherches.filter((r) => (r.clientId === fiche.id || r.leadId === fiche.id) && !!r.archive !== archiver).forEach((r) => { appliquer('recherche', r); recherchesAussi++; });
+  }
+  writeDb(db);
+  res.json({ ok: true, archive: archiver, recherches: recherchesAussi });
 });
 
 app.get('/api/recherches', requireAdmin, (req, res) => {
@@ -4122,7 +4197,7 @@ function dpeVersRobotBien(s) {
 // chemin client, donc jamais à risque d'être effacé par inadvertance ;
 // côté CRM, robotBiens() lit désormais les deux collections combinées.
 async function scannerDpeRecherchesActives(db) {
-  const recherches = (db.recherches || []).filter((r) => r.statut !== 'archivee' && Array.isArray(r.quartiers) && r.quartiers.length);
+  const recherches = (db.recherches || []).filter((r) => r.statut !== 'archivee' && !r.archive && Array.isArray(r.quartiers) && r.quartiers.length);
   db.dpeAuto = Array.isArray(db.dpeAuto) ? db.dpeAuto : [];
   const dejaConnues = new Set((db.robotBiens || []).concat(db.dpeAuto).map((b) => adresseKeyServeur(b.adresse)));
   const nouveaux = [];
@@ -5602,7 +5677,7 @@ async function radarPrixM2(db, arr, type) {
 
 // Critères d'un client : sa recherche active (CRM) sinon sa fiche.
 function radarCriteres(db, l) {
-  const r = (db.recherches || []).filter((x) => x.clientId === l.id && x.statut !== 'archivee').sort((a, b) => radarAnnee(b.cree) - radarAnnee(a.cree))[0];
+  const r = (db.recherches || []).filter((x) => x.clientId === l.id && x.statut !== 'archivee' && !x.archive).sort((a, b) => radarAnnee(b.cree) - radarAnnee(a.cree))[0];
   const src = r || l;
   const types = [].concat(r && r.types && r.types.length ? r.types : [], r && r.type ? [r.type] : [], l.typeBien ? [l.typeBien] : []).join(' ').toLowerCase();
   return {
