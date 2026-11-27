@@ -5927,7 +5927,9 @@ async function radarCharger(cle, arrs, per) {
   if (RADAR_CHARGEMENTS[cle] && RADAR_CHARGEMENTS[cle].enCours) return;
   const job = RADAR_CHARGEMENTS[cle] = { enCours: true, faits: 0, total: arrs.length, lus: 0, erreurs: [] };
   const libre = placeLibreMo();
-  if (libre !== null && libre < RADAR_MARGE_MO) { job.enCours = false; job.erreurs.push('Disque du site presque plein (' + libre + ' Mo libres) : chargement des DPE suspendu.'); return; }
+  // Une commune ajoutée pèse peu (quelques centaines de DPE) : marge réduite.
+  const marge = arrs.every((a) => !/^p\d+$/.test(a.quartier)) ? Math.min(50, RADAR_MARGE_MO) : RADAR_MARGE_MO;
+  if (libre !== null && libre < marge) { job.enCours = false; job.erreurs.push('Disque du site presque plein (' + libre + ' Mo libres) : chargement des DPE suspendu.'); return; }
   const annee = (pmMeta() || {}).annee || null;
   // Les périodes récentes chargent 31 jours d'un coup (aujourd'hui, semaine et mois en même temps).
   const crit = per.recent ? { depuis: radarPeriode('mois').de, jusqua: '' } : { depuis: per.de, jusqua: per.a };
@@ -6011,7 +6013,9 @@ setTimeout(() => {
 // Toutes les heures : les DPE du mois pour tout Paris (pour « aujourd'hui »).
 if (RS) {
   const rafraichir = () => {
-    const per = radarPeriode('mois'); const arrs = radarZones().filter((a) => !radarCouvert(a, per)); if (arrs.length) radarCharger('auto|recent', arrs, per);
+    const per = radarPeriode('mois');
+    const arrs = RADAR_ARRONDISSEMENTS.filter((a) => !radarCouvert(a, per)); if (arrs.length) radarCharger('auto|recent', arrs, per);
+    const zs = RADAR_ZONES_SUP.filter((a) => !radarCouvert(a, per)); if (zs.length) radarCharger('auto|zones|recent', zs, per);
     // Propriétaires des zones ajoutées : on réessaie tant que ce n'est pas fait.
     const manq = RADAR_ZONES_SUP.filter((z) => !pmCommuneIndexee(z.insee)).map((z) => z.insee);
     if (manq.length) pmAjouterCommunes(manq).catch(() => {});
@@ -6205,7 +6209,12 @@ app.get('/api/radar/liste', requireAdmin, (req, res) => {
   const arrs = radarZones().filter((a) => !secteurs.length || secteurs.indexOf(a.quartier) > -1);
   const manquants = arrs.filter((a) => !radarCouvert(a, per));
   const cleCharg = (secteurs.length ? secteurs.join('+') : 'paris') + '|' + (per.recent ? 'recent' : per.annee || per.de);
-  if (manquants.length) radarCharger(cleCharg, manquants, per);
+  if (manquants.length) {
+    // Communes ajoutées chargées à part (marge disque réduite, voir radarCharger).
+    const mP = manquants.filter((a) => /^p\d+$/.test(a.quartier)); const mZ = manquants.filter((a) => !/^p\d+$/.test(a.quartier));
+    if (mP.length) radarCharger(cleCharg, mP, per);
+    if (mZ.length) radarCharger(cleCharg + '|zones', mZ, per);
+  }
   const db = readDb();
   const ctx = radarContexte(db);
   let rows = RS.liste.all({ de: per.de, a: per.a + 'z', q: secteur, t: type, smin: smin }).map(rsLire).filter(Boolean);
@@ -6259,7 +6268,8 @@ app.get('/api/radar/liste', requireAdmin, (req, res) => {
   const nbCli = (g) => g.acquereurs.club * 2 + g.acquereurs.leads;
   liste.sort(tri === 'ancien' ? (a, b) => d(a) - d(b) : tri === 'recent' ? (a, b) => d(b) - d(a) : tri === 'surface' ? (a, b) => b.surface - a.surface : tri === 'clients' ? (a, b) => nbCli(b) - nbCli(a) || b.chances.score - a.chances.score : (a, b) => b.chances.score - a.chances.score || d(b) - d(a));
   const page = Math.max(1, Number(req.query.page) || 1);
-  const job = RADAR_CHARGEMENTS[cleCharg] || null;
+  const jobP = RADAR_CHARGEMENTS[cleCharg] || null; const jobZ = RADAR_CHARGEMENTS[cleCharg + '|zones'] || null;
+  const job = jobP || jobZ ? { enCours: !!((jobP && jobP.enCours) || (jobZ && jobZ.enCours)), faits: ((jobP || {}).faits || 0) + ((jobZ || {}).faits || 0), total: ((jobP || {}).total || 0) + ((jobZ || {}).total || 0), lus: ((jobP || {}).lus || 0) + ((jobZ || {}).lus || 0), erreurs: ((jobP || {}).erreurs || []).concat((jobZ || {}).erreurs || []) } : null;
   // Vues d'ensemble (sur la sélection) : secteurs, portefeuilles des sociétés, carte.
   const vues = page > 1 ? null : (() => {
     const secteursV = radarZones().map((a) => {

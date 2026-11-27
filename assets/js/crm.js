@@ -4887,6 +4887,27 @@
   const rdDate = (iso) => iso ? new Date(iso).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
   const qLib = (q) => (QUARTIERS.find((x) => x.id === q) || (radar.zones || []).find((x) => x.quartier === q) || {}).label || q;
   const rdAnnees = () => { const a = new Date().getFullYear(); return [a, a - 1, a - 2, a - 3, a - 4, a - 5].map(String); };
+  // Secteurs : un bouton qui résume la sélection ; le panneau s'ouvre, on coche,
+  // on valide. Rien ne change tant qu'on n'a pas validé.
+  function rdChoixSecteurs(chip) {
+    const zones = radar.zones || [];
+    const resume = !radar.secteurs.length ? (zones.length ? 'Toutes les zones' : 'Tout Paris') : radar.secteurs.length <= 3 ? radar.secteurs.map((q) => qLib(q).replace('Paris ', '')).join(', ') : radar.secteurs.length + ' secteurs';
+    const enAttente = (radar.pmCommunes || []).filter((x) => !x.proprietaires).map((x) => (zones.find((z) => z.quartier === x.quartier) || {}).label).filter(Boolean);
+    const bouton = '<button type="button" class="rd-choix-btn" data-act="radar-secteurs-ouvrir" aria-expanded="' + (radar.choixSecteurs ? 'true' : 'false') + '"><span>' + esc(resume) + '</span><span aria-hidden="true">' + (radar.choixSecteurs ? '▴' : '▾') + '</span></button>';
+    if (!radar.choixSecteurs) return bouton + (enAttente.length ? '<p class="se-hint" style="margin:6px 0 0">⏳ Propriétaires sociétés en cours d’ajout pour ' + esc(enAttente.join(', ')) + '.</p>' : '');
+    const t = radar.secteursTemp || [];
+    const coche = (id, txt) => '<button type="button" class="rd-chip' + (t.indexOf(id) > -1 ? ' on' : '') + '" data-act="radar-secteur-temp" data-id="' + esc(id) + '">' + txt + '</button>';
+    return bouton + '<div class="rd-choix-panneau">' +
+      '<div class="rd-choix-titre">Paris</div><div class="rd-choix-grille">' + QUARTIERS.filter((q) => /^p\d+$/.test(q.id)).map((q) => coche(q.id, q.label.replace('Paris ', ''))).join('') + '</div>' +
+      '<div class="rd-choix-titre">Autres communes</div><div class="rd-chips">' +
+        zones.map((z) => { const pm = (radar.pmCommunes || []).find((x) => x.quartier === z.quartier); return '<span class="rd-zone">' + coche(z.quartier, esc(z.label) + (pm && !pm.proprietaires ? ' ⏳' : '')) + '<button type="button" class="rd-zone-x" data-act="radar-zone-retirer" data-id="' + esc(z.quartier) + '" aria-label="Retirer ' + esc(z.label) + '">×</button></span>'; }).join('') +
+        (radar.ajoutZone ? '<span class="rd-zone-form"><input class="se-input" inputmode="numeric" maxlength="5" placeholder="Code postal" data-rd-cp value="' + esc(radar.cpSaisi || '') + '"/><button type="button" class="se-btn sm" data-act="radar-zone-ajouter"' + (radar.ajoutEnCours ? ' disabled' : '') + '>' + (radar.ajoutEnCours ? '…' : 'Ajouter') + '</button><button type="button" class="se-btn ghost sm" data-act="radar-zone-annuler">Annuler</button></span>'
+          : '<button type="button" class="rd-chip rd-chip-ajout" data-act="radar-zone-form">+ Code postal</button>') +
+      '</div>' +
+      (enAttente.length ? '<p class="se-hint" style="margin:8px 0 0">⏳ Propriétaires sociétés en cours d’ajout pour ' + esc(enAttente.join(', ')) + ' : les DPE arrivent tout de suite, les SCI dans quelques minutes.</p>' : '') +
+      '<div class="rd-choix-actions"><button type="button" class="se-btn ghost sm" data-act="radar-secteurs-tout">' + (t.length ? 'Tout décocher' : (zones.length ? 'Toutes les zones' : 'Tout Paris')) + '</button><span class="se-hint">' + (t.length ? t.length + ' sélectionné' + (t.length > 1 ? 's' : '') : 'Aucun coché = tout') + '</span><button type="button" class="se-btn sm" data-act="radar-secteurs-valider">Valider</button></div>' +
+    '</div>';
+  }
   async function chargerRadar(ajout) {
     if (radar.chargement) return;
     radar.chargement = true; if (!ajout) render();
@@ -4963,14 +4984,7 @@
     const modifie = Object.keys(RD_CRIT()).some((k) => k !== 'periode' && k !== 'tri' && JSON.stringify(radar[k]) !== JSON.stringify(RD_CRIT()[k]));
     const barre = '<div class="se-card rd-barre-filtres">' +
       '<div class="rd-form-ligne"><span class="rd-form-l">DPE fait</span><div class="rd-chips">' + periodes.map((x) => chip(radar.periode === x[0], 'radar-periode', x[0], x[1])).join('') + '</div></div>' +
-      '<div class="rd-form-ligne"><span class="rd-form-l">Secteurs</span><div style="flex:1;min-width:0"><div class="rd-chips">' + chip(!radar.secteurs.length, 'radar-secteur', 'tout', (radar.zones || []).length ? 'Toutes les zones' : 'Tout Paris') + QUARTIERS.filter((q) => /^p\d+$/.test(q.id)).map((q) => chip(radar.secteurs.indexOf(q.id) > -1, 'radar-secteur', q.id, q.label.replace('Paris ', ''))).join('') +
-        (radar.zones || []).map((z) => {
-          const pm = (radar.pmCommunes || []).find((x) => x.quartier === z.quartier);
-          return '<span class="rd-zone">' + chip(radar.secteurs.indexOf(z.quartier) > -1, 'radar-secteur', esc(z.quartier), esc(z.label) + (pm && !pm.proprietaires ? ' ⏳' : '')) + '<button type="button" class="rd-zone-x" data-act="radar-zone-retirer" data-id="' + esc(z.quartier) + '" aria-label="Retirer ' + esc(z.label) + '">×</button></span>';
-        }).join('') +
-        (radar.ajoutZone ? '<span class="rd-zone-form"><input class="se-input" inputmode="numeric" maxlength="5" placeholder="Code postal" data-rd-cp value="' + esc(radar.cpSaisi || '') + '"/><button type="button" class="se-btn sm" data-act="radar-zone-ajouter"' + (radar.ajoutEnCours ? ' disabled' : '') + '>' + (radar.ajoutEnCours ? '…' : 'Ajouter') + '</button><button type="button" class="se-btn ghost sm" data-act="radar-zone-annuler">Annuler</button></span>'
-          : '<button type="button" class="rd-chip rd-chip-ajout" data-act="radar-zone-form">+ Code postal</button>') +
-        '</div>' + ((radar.pmCommunes || []).some((x) => !x.proprietaires) ? '<p class="se-hint" style="margin:6px 0 0">⏳ Propriétaires sociétés en cours d’ajout pour ' + esc((radar.zones || []).filter((z) => (radar.pmCommunes || []).some((x) => x.quartier === z.quartier && !x.proprietaires)).map((z) => z.label).join(', ')) + (radar.pmAjout && radar.pmAjout.etape ? ' : ' + esc(radar.pmAjout.etape) : '') + (radar.pmAjout && radar.pmAjout.erreur ? ' (erreur : ' + esc(radar.pmAjout.erreur) + ')' : '') + '. Les DPE arrivent tout de suite, les SCI dans quelques minutes.</p>' : '') + '</div></div>' +
+      '<div class="rd-form-ligne"><span class="rd-form-l">Secteurs</span><div style="flex:1;min-width:0">' + rdChoixSecteurs(chip) + '</div></div>' +
       '<div class="rd-form-ligne"><span class="rd-form-l">Classe DPE</span><div class="rd-chips">' + ['A', 'B', 'C', 'D', 'E', 'F', 'G'].map((k) => chip(radar.classes.indexOf(k) > -1, 'radar-classe', k, k)).join('') + '<span class="se-hint">' + (radar.classes.length ? '' : 'toutes') + '</span></div></div>' +
       '<div class="rd-criteres-grille">' +
         sel('type', ['Type de bien', [['', 'Appartements et maisons'], ['Appartement', 'Appartements'], ['Maison', 'Maisons']]]) +
@@ -6881,8 +6895,8 @@
         const noms = (d.ajoutees || []).map((z) => z.label);
         toast(noms.length ? noms.join(', ') + ' ajouté' + (noms.length > 1 ? 's' : '') + ' au Radar. Les DPE arrivent, les SCI suivent.' : 'Déjà dans le Radar.', 'ok');
         radar.ajoutZone = false; radar.cpSaisi = '';
-        radar.secteurs = (d.ajoutees || []).map((z) => z.quartier).concat(noms.length ? [] : radar.secteurs);
-        radar.page = 1; rdRelancer();
+        radar.secteursTemp = Array.from(new Set((radar.secteursTemp || []).concat((d.ajoutees || []).map((z) => z.quartier))));
+        radar.choixSecteurs = true;
       } catch (e) { toast('Ajout impossible : ' + (e.message || 'erreur'), 'warn'); }
       radar.ajoutEnCours = false; render();
     },
@@ -6897,7 +6911,8 @@
         if (!r.ok) throw new Error(d.error || 'erreur');
         radar.zones = (d.zones || []).map((x) => ({ quartier: x.quartier, label: x.label, cp: x.cp }));
         radar.secteurs = radar.secteurs.filter((x) => x !== id);
-        rdRelancer();
+        radar.secteursTemp = (radar.secteursTemp || []).filter((x) => x !== id);
+        render();
       } catch (e) { toast('Impossible : ' + (e.message || 'erreur'), 'warn'); }
     },
     'radar-vers-secteur': (el, id) => { radar.secteurs = [id]; radar.vue = 'liste'; rdRelancer(); },
@@ -6933,6 +6948,10 @@
       } catch (e) { toast(e.message, 'warn'); }
       render();
     },
+    'radar-secteurs-ouvrir': () => { radar.choixSecteurs = !radar.choixSecteurs; radar.secteursTemp = radar.secteurs.slice(); render(); },
+    'radar-secteur-temp': (el, id) => { const t = radar.secteursTemp || []; radar.secteursTemp = t.indexOf(id) > -1 ? t.filter((x) => x !== id) : t.concat([id]); render(); },
+    'radar-secteurs-tout': () => { radar.secteursTemp = []; render(); },
+    'radar-secteurs-valider': () => { radar.secteurs = (radar.secteursTemp || []).slice(); radar.choixSecteurs = false; radar.ajoutZone = false; radar.page = 1; rdRelancer(); },
     'radar-secteur': (el, id) => { radar.secteurs = id === 'tout' ? [] : (radar.secteurs.indexOf(id) > -1 ? radar.secteurs.filter((x) => x !== id) : radar.secteurs.concat([id])); render(); },
     'radar-classe': (el, id) => { radar.classes = radar.classes.indexOf(id) > -1 ? radar.classes.filter((x) => x !== id) : radar.classes.concat([id]).sort(); render(); },
     'radar-reset': () => { const p = radar.periode, t = radar.tri; Object.assign(radar, RD_CRIT(), { periode: p, tri: t }); render(); },
