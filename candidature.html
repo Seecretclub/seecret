@@ -392,13 +392,22 @@
     const QUARTIERS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
       .map((n) => ({ id: 'p' + n, label: 'Paris ' + n + (n === 1 ? 'ᵉʳ' : 'ᵉ') }))
       .concat([
-        { id: 'boulogne', label: 'Boulogne' },
-        { id: 'neuilly', label: 'Neuilly' },
+        { id: 'boulogne', label: 'Boulogne-Billancourt' },
+        { id: 'neuilly', label: 'Neuilly-sur-Seine' },
         { id: 'vincennes', label: 'Vincennes' }
       ]);
     const qLabel = (id) => (QUARTIERS.find((q) => q.id === id) || { label: id }).label;
 
-    const TYPES = ['Appartement', 'Maison', 'Duplex', 'Loft', 'Hôtel particulier', 'Terrain'];
+    // Mêmes listes que les fiches du CRM (assets/js/crm.js) : ce que le candidat
+    // choisit ici arrive tel quel dans son lead, sa recherche et son bien.
+    const TYPES = ['Appartement', 'Maison', 'Duplex', 'Triplex', 'Loft', 'Hôtel particulier', 'Villa', 'Maison de ville', 'Maison de village', 'Propriété', 'Château', 'Immeuble', 'Péniche', 'Terrain', 'Terrain constructible', 'Parking', 'Box', 'Bureau', 'Local commercial', 'Commerce'];
+    const EPOQUES = [
+      { id: '', label: 'Indifférent' },
+      { id: 'avant-1950', label: 'Ancien (avant 1950)' },
+      { id: '1950-2000', label: '1950 à 2000' },
+      { id: 'apres-2000', label: 'Récent (après 2000)' }
+    ];
+    const DPE_MIN = [{ id: '', label: 'Indifférent' }].concat(['A', 'B', 'C', 'D', 'E', 'F', 'G'].map((c) => ({ id: c, label: c + ' ou mieux' })));
     const PHOTOS = ['home-1.jpg', 'ilesaintlouis-1.jpg', 'saintgermain-1.jpg', 'home-3.jpg', 'trocadero-1.jpg', 'home-6.jpg', 'home-jardin.jpg', 'marais-1.jpg'];
 
   /* ------------------ estimation : ventes réelles DVF (Etalab) ------------------ */
@@ -642,11 +651,11 @@
 
     const rep = {
       projet: null,
-      recherche: { types: [], quartiers: [], prixMax: '', piecesMin: '', surfaceMin: '', surfaceMax: '', delai: '' },
+      recherche: { types: [], quartiers: [], prixMin: '', prixMax: '', piecesMin: '', chambresMin: '', sdbMin: '', surfaceMin: '', surfaceMax: '', etageMin: '', etageMax: '', dernierEtageOk: false, dpe: '', epoque: '', etat: '', annexes: [], delai: '' },
       budget: { apport: '', financement: '', courtier: false, bienAVendre: false },
-      bien: { adresse: '', codePostal: '', ville: '', lat: null, lon: null, type: '', quartier: '', surface: '', pieces: '', chambres: '', sdb: '', etage: '', dpe: '', ges: '', etat: '', exterieur: '', surfaceExterieur: '', annexes: [], charges: '', description: '', coupDeCoeur: '', photos: [] },
+      bien: { adresse: '', codePostal: '', ville: '', lat: null, lon: null, type: '', quartier: '', surface: '', pieces: '', chambres: '', sdb: '', etage: '', anneeConstruction: '', dpe: '', ges: '', etat: '', exterieur: '', surfaceExterieur: '', annexes: [], charges: '', description: '', coupDeCoeur: '', photos: [] },
       vente: { prix: '', delai: '', dejaEnVente: '', mandat: '', motif: '' },
-      vous: { prenom: '', nom: '', email: '', tel: '', ville: '' },
+      vous: { nature: 'personne', raisonSociale: '', siren: '', representant: '', civilite: '', prenom: '', nom: '', email: '', tel: '', adresse: '', ville: '' },
       verifs: { identite: '', financement: '', bien: '', consent: false }
     };
 
@@ -872,16 +881,26 @@
       if (id === 'recherche') {
         return bloc('Type de bien', chips('typeBien', TYPES, rep.recherche.types, true)) +
           bloc('Secteurs', chips('secteur', QUARTIERS, rep.recherche.quartiers, true)) +
-          bloc('Pièces minimum', chips('piecesMin', ['2', '3', '4', '5', '6+'], rep.recherche.piecesMin, false)) +
+          bloc('Pièces minimum', chips('piecesMin', ['1', '2', '3', '4', '5', '6'], rep.recherche.piecesMin, false)) +
+          bloc('Chambres minimum', chips('chambresMin', [{ id: '', label: 'Indifférent' }, '1', '2', '3', '4', '5'], rep.recherche.chambresMin, false)) +
+          bloc('Salles de bain minimum', chips('sdbMin', [{ id: '', label: 'Indifférent' }, '1', '2', '3'], rep.recherche.sdbMin, false)) +
           '<div class="se-form-grid" style="margin-bottom:18px">' +
             field('Surface min (m²)', 'recherche.surfaceMin', rep.recherche.surfaceMin, { type: 'number', placeholder: '60' }) +
             field('Surface max (m²)', 'recherche.surfaceMax', rep.recherche.surfaceMax, { type: 'number', placeholder: '120' }) +
+            field('Étage min', 'recherche.etageMin', rep.recherche.etageMin, { type: 'number', placeholder: '0 = RDC' }) +
+            field('Étage max', 'recherche.etageMax', rep.recherche.etageMax, { type: 'number', placeholder: 'Indifférent' }) +
           '</div>' +
+          bloc('Dernier étage', chips('dernierEtage', ['Accepté', 'Indifférent'], rep.recherche.dernierEtageOk ? 'Accepté' : 'Indifférent', false)) +
+          bloc('DPE (classe acceptée)', chips('dpeMin', DPE_MIN, rep.recherche.dpe, false)) +
+          bloc('Époque', chips('epoque', EPOQUES, rep.recherche.epoque, false)) +
+          bloc('État souhaité', chips('etatRecherche', [{ id: '', label: 'Indifférent' }, 'À rénover', 'Bon état', 'Rénové'], rep.recherche.etat, false)) +
+          bloc('Indispensables', chips('annexeRecherche', ['Balcon', 'Terrasse', 'Jardin', 'Ascenseur', 'Cave', 'Parking'], rep.recherche.annexes, true)) +
           bloc('Dans quel délai ?', chips('delai', ['Dès que possible', '3 mois', '6 mois', '12 mois', 'Sans urgence'], rep.recherche.delai, false));
       }
 
       if (id === 'budget') {
         return '<div class="se-form-grid">' +
+          field('Budget minimum (€)', 'recherche.prixMin', rep.recherche.prixMin, { type: 'number', placeholder: '800 000' }) +
           field('Budget maximum, honoraires inclus (€)', 'recherche.prixMax', rep.recherche.prixMax, { type: 'number', placeholder: '1 800 000' }) +
           field('Apport (€)', 'budget.apport', rep.budget.apport, { type: 'number', placeholder: '200 000' }) +
           '</div>' +
@@ -901,7 +920,8 @@
             field('Pièces', 'bien.pieces', rep.bien.pieces, { type: 'number' }) +
             field('Chambres', 'bien.chambres', rep.bien.chambres, { type: 'number' }) +
             field('Salles de bain', 'bien.sdb', rep.bien.sdb, { type: 'number' }) +
-            field('Étage', 'bien.etage', rep.bien.etage, { placeholder: '4ᵉ', full: true }) +
+            field('Étage', 'bien.etage', rep.bien.etage, { type: 'number', placeholder: '0 = RDC' }) +
+            field('Année de construction', 'bien.anneeConstruction', rep.bien.anneeConstruction, { type: 'number', placeholder: '1930' }) +
           '</div>' +
           bloc('Extérieur', chips('exterieur', ['Aucun', 'Balcon', 'Terrasse', 'Jardin'], rep.bien.exterieur || 'Aucun', false)) +
           (rep.bien.exterieur && rep.bien.exterieur !== 'Aucun'
@@ -952,11 +972,20 @@
       }
 
       if (id === 'vous') {
-        return '<div class="se-form-grid">' +
+        const societe = rep.vous.nature === 'sci' || rep.vous.nature === 'societe';
+        return bloc('Vous agissez', chips('nature', [{ id: 'personne', label: 'En votre nom' }, { id: 'sci', label: 'Pour une SCI' }, { id: 'societe', label: 'Pour une société' }], rep.vous.nature || 'personne', false)) +
+          (societe ? '<div class="se-form-grid" style="margin-bottom:18px">' +
+            field('Raison sociale', 'vous.raisonSociale', rep.vous.raisonSociale, { placeholder: 'SCI Les Tilleuls' }) +
+            field('SIREN', 'vous.siren', rep.vous.siren, { placeholder: '552 032 534' }) +
+            field('Votre qualité', 'vous.representant', rep.vous.representant, { full: true, placeholder: 'Gérant, associé, président…' }) +
+          '</div>' : '') +
+          bloc('Civilité', chips('civilite', [{ id: 'femme', label: 'Madame' }, { id: 'homme', label: 'Monsieur' }], rep.vous.civilite, false)) +
+          '<div class="se-form-grid">' +
           field('Prénom', 'vous.prenom', rep.vous.prenom, { placeholder: 'Camille' }) +
           field('Nom', 'vous.nom', rep.vous.nom, { placeholder: 'Renaud' }) +
           field('Email', 'vous.email', rep.vous.email, { type: 'email', placeholder: 'vous@exemple.fr' }) +
           field('Téléphone', 'vous.tel', rep.vous.tel, { type: 'tel', placeholder: '06 12 34 56 78' }) +
+          field('Votre adresse', 'vous.adresse', rep.vous.adresse, { full: true, placeholder: '12 rue de la Paix, 75002 Paris' }) +
           field('Ville', 'vous.ville', rep.vous.ville, { full: true, placeholder: 'Paris' }) +
           '</div>' +
           '<div class="se-note" style="margin-top:18px">Aucun engagement : votre candidature est étudiée avant tout accès.</div>';
@@ -1176,13 +1205,17 @@
         rep.recherche.types.join(', ') || 'Tous types',
         rep.recherche.quartiers.length ? rep.recherche.quartiers.map(qLabel).join(', ') : 'Tous secteurs',
         rep.recherche.piecesMin ? rep.recherche.piecesMin + ' pièces et +' : '',
+        rep.recherche.chambresMin ? rep.recherche.chambresMin + ' ch. et +' : '',
         rep.recherche.surfaceMin ? rep.recherche.surfaceMin + ' m² et +' : '',
+        rep.recherche.dpe ? 'DPE ' + rep.recherche.dpe + ' ou mieux' : '',
+        rep.recherche.annexes.length ? rep.recherche.annexes.join(', ') : '',
         rep.recherche.delai ? 'délai : ' + rep.recherche.delai : ''
       ].filter(Boolean).join(' · ');
     }
 
     function resumeBudget() {
       return [
+        rep.recherche.prixMin ? 'min ' + euro(rep.recherche.prixMin) : '',
         rep.recherche.prixMax ? 'max ' + euro(rep.recherche.prixMax) : 'budget non précisé',
         rep.budget.apport ? 'apport ' + euro(rep.budget.apport) : '',
         rep.budget.financement || ''
@@ -1262,6 +1295,7 @@
           if (!r.vente.delai) return 'Indiquez votre délai de vente.';
           return '';
         case 'vous':
+          if ((r.vous.nature === 'sci' || r.vous.nature === 'societe') && !String(r.vous.raisonSociale || '').trim()) return 'Indiquez la raison sociale de la société.';
           if (!r.vous.prenom || !r.vous.nom) return 'Indiquez votre prénom et votre nom.';
           if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(r.vous.email)) return 'Indiquez un email valide.';
           if (/@(example\.(com|org|net)|test\.com|localhost|invalid\.com|mailinator\.com)$/i.test(r.vous.email)) return 'Utilisez une adresse email réelle (les adresses de test ne sont pas acceptées).';
@@ -1541,6 +1575,15 @@
       else if (name === 'ges') r.bien.ges = value;
       else if (name === 'annexe') toggle(r.bien.annexes, value);
       else if (name === 'bienAVendre') r.budget.bienAVendre = value === 'Oui';
+      else if (name === 'chambresMin') r.recherche.chambresMin = value;
+      else if (name === 'sdbMin') r.recherche.sdbMin = value;
+      else if (name === 'dernierEtage') r.recherche.dernierEtageOk = value === 'Accepté';
+      else if (name === 'dpeMin') r.recherche.dpe = value;
+      else if (name === 'epoque') r.recherche.epoque = value;
+      else if (name === 'etatRecherche') r.recherche.etat = value;
+      else if (name === 'annexeRecherche') toggle(r.recherche.annexes, value);
+      else if (name === 'nature') r.vous.nature = value;
+      else if (name === 'civilite') r.vous.civilite = value;
     }
 
     function toggle(list, value) {

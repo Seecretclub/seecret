@@ -1390,6 +1390,10 @@
             documents: l.documents || 0, documentsValides: l.documentsValides || 0,
             bienInfo: l.bienInfo || null, agentId: l.agentId || null, demo: !!l.demo
           });
+          // Identité saisie dans la candidature : complète la fiche lead sans écraser l'agence.
+          ['civilite', 'adresse', 'raisonSociale', 'siren', 'representant', 'ville'].forEach((k) => { if (!c[k] && l[k]) c[k] = l[k]; });
+          if ((!c.natureLead || c.natureLead === 'personne') && (l.natureLead === 'sci' || l.natureLead === 'societe')) c.natureLead = l.natureLead;
+          if (!c.budgetMin && l.budgetMin) c.budgetMin = l.budgetMin;
           if (l.statut === 'accepte' && c.statut === 'prospect') c.statut = 'actif';
         } else {
           state.clients.push({
@@ -1398,7 +1402,7 @@
             prenom: l.prenom || '', nom: l.nom || '', email: l.email || '', tel: l.tel || '',
             statut: l.statut === 'accepte' ? 'actif' : l.statut === 'suspendu' ? 'suspendu' : 'prospect', source: /^Fichier/.test(l.source || '') ? l.source : 'Candidature',
             autresTelephones: l.autresTelephones || [], autresEmails: l.autresEmails || [], telAVerifier: !!l.telAVerifier,
-            budgetMin: 0, budgetMax: l.budgetMax || 0, quartiers: l.quartiers || [],
+            budgetMin: l.budgetMin || 0, budgetMax: l.budgetMax || 0, quartiers: l.quartiers || [], ville: l.ville || '',
             piecesMin: l.piecesMin || 0, surfaceMin: l.surfaceMin || 0, surfaceMax: l.surfaceMax || 0, delai: l.delai || '', typeBien: l.typeBien || '',
             apport: l.apport || 0, financement: l.financement || '', courtier: !!l.courtier, bienAVendre: !!l.bienAVendre,
             notes: l.notes || '', tags: Array.isArray(l.tags) ? l.tags.slice() : [], agent: 'Gabriel Taieb', cree: l.cree || nowISO(),
@@ -1808,7 +1812,7 @@
     return {
       id: 'srv-r-' + r.id, clientId: c ? c.id : r.clientId,
       titre: r.titre || 'Recherche', type: r.type || '', types: r.types || [],
-      prixMax: r.prixMax || 0, piecesMin: r.piecesMin || 0, surfaceMin: r.surfaceMin || 0, surfaceMax: r.surfaceMax || 0, delai: r.delai || '',
+      prixMin: r.prixMin || 0, prixMax: r.prixMax || 0, piecesMin: r.piecesMin || 0, chambresMin: r.chambresMin || 0, sdbMin: r.sdbMin || 0, surfaceMin: r.surfaceMin || 0, surfaceMax: r.surfaceMax || 0, dernierEtageOk: !!r.dernierEtageOk, delai: r.delai || '',
       apport: r.apport || 0, financement: r.financement || '', courtier: !!r.courtier, bienAVendre: !!r.bienAVendre,
       etageMin: r.etageMin || 0, etageMax: r.etageMax || 0, etat: r.etat || '', dpe: r.dpe || '', epoque: r.epoque || '', annexes: r.annexes || [], prixVenteEstime: r.prixVenteEstime || 0,
       quartiers: r.quartiers || [], statut: r.statut || 'active', alertes: true,
@@ -6684,7 +6688,13 @@
         field('Chambres', 'chambres', v.chambres, { type: 'number' }) +
         field('Salles de bain', 'sdb', v.sdb, { type: 'number' }) +
         field('Étage', 'etage', v.etage, { type: 'number', placeholder: '0 = RDC' }) + field('DPE', 'dpe', v.dpe, { type: 'select', options: ['A', 'B', 'C', 'D', 'E', 'F', 'G'].map((d) => ({ value: d, label: d })) }) +
+        field('GES', 'ges', v.ges || '', { type: 'select', options: [{ value: '', label: 'Non renseigné' }].concat(['A', 'B', 'C', 'D', 'E', 'F', 'G'].map((d) => ({ value: d, label: d }))) }) +
         field('Année de construction', 'anneeConstruction', v.anneeConstruction || '', { type: 'number', placeholder: '1975' }) +
+        field('État', 'etat', v.etat || '', { type: 'select', options: [{ value: '', label: 'Non renseigné' }].concat(['À rénover', 'Bon état', 'Rénové'].map((d) => ({ value: d, label: d }))) }) +
+        field('Extérieur', 'exterieur', v.exterieur || '', { type: 'select', options: [{ value: '', label: 'Aucun' }].concat(['Balcon', 'Terrasse', 'Jardin'].map((d) => ({ value: d, label: d }))) }) +
+        field('Surface extérieure (m²)', 'surfaceExterieur', v.surfaceExterieur || '', { type: 'number' }) +
+        field('Charges annuelles (€)', 'charges', v.charges || '', { type: 'number' }) +
+        '<div class="se-field"><label>Ascenseur</label><label class="se-row" style="gap:6px;margin-top:6px"><input type="checkbox" name="ascenseur" ' + (v.ascenseur ? 'checked' : '') + '/> L’immeuble a un ascenseur</label></div>' +
         field('Prix net vendeur (€)', 'prix', v.prix, { type: 'number' }) +
         field('Honoraires acquéreur (%)', 'tauxHonoraires', (v.tauxHonoraires === null || v.tauxHonoraires === undefined) ? '' : v.tauxHonoraires, { type: 'number', step: 'any', placeholder: 'Barème : ' + tauxTxt(BAREME.acq) + ' %' }) +
         field('Description', 'description', v.description, { type: 'textarea', full: true }) +
@@ -8551,6 +8561,8 @@
         pieces: chiffres(data.get('pieces')), chambres: chiffres(data.get('chambres')), sdb: chiffres(data.get('sdb')),
         etage: etageSaisie(data.get('etage')), dpe: data.get('dpe'),
         anneeConstruction: chiffres(data.get('anneeConstruction')) || null, prix: chiffres(data.get('prix')),
+        ges: String(data.get('ges') || ''), etat: String(data.get('etat') || ''), exterieur: String(data.get('exterieur') || ''),
+        surfaceExterieur: chiffres(data.get('surfaceExterieur')), charges: chiffres(data.get('charges')), ascenseur: data.get('ascenseur') === 'on',
         tauxHonoraires: String(data.get('tauxHonoraires') || '').trim() === '' ? null : Number(String(data.get('tauxHonoraires')).replace(',', '.')),
         statut: data.get('statut'), proprietaireId: data.get('proprio') || null,
         venduParAgence: data.get('statut') === 'vendu' && data.get('venduParAgence') ? data.get('venduParAgence') === 'oui' : undefined,
