@@ -1957,7 +1957,8 @@
       const lien = '#/demande/' + d.id;
       if (d.type === 'visite') add({ prio: 1, cat: 'demande', titre: 'Demande de visite à traiter', detail: nom + (b ? ' · ' + b.titre : '') + (d.mandat && d.mandat.statut === 'signe' ? ' · mandat signé' : ' · mandat de recherche à signer'), lien: lien, quand: d.cree });
       else if (d.type === 'offre') add({ prio: 1, cat: 'demande', titre: 'Offre reçue', detail: nom + (b ? ' · ' + b.titre : ''), lien: lien, quand: d.cree });
-      else if (d.type === 'candidature') add({ prio: 2, cat: 'demande', titre: 'Nouvelle candidature au club', detail: nom, lien: lien, quand: d.cree });
+      // Une candidature est la porte d'entrée du club : toujours en tête de « À faire tout de suite ».
+      else if (d.type === 'candidature') add({ prio: 1, score: 100, cat: 'demande', titre: 'Nouvelle candidature à valider', detail: nom + (d.cree ? ' · reçue ' + (Date.now() - new Date(d.cree).getTime() < 864e5 ? 'aujourd’hui' : 'le ' + dCourt(d.cree)) : ''), lien: lien, quand: d.cree });
       else if (d.type === 'modification' || d.type === 'statut') add({ prio: 2, cat: 'modif', titre: d.type === 'statut' ? 'Demande de changement de statut' : 'Demande de modification d’un bien', detail: nom + (b ? ' · ' + b.titre : ''), lien: lien, quand: d.cree });
       else add({ prio: 2, cat: 'demande', titre: 'Nouveau message depuis la plateforme', detail: nom + (d.message ? ' · « ' + String(d.message).slice(0, 70) + ' »' : ''), lien: lien, quand: d.cree });
     });
