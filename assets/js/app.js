@@ -1923,21 +1923,47 @@
     return '<a class="kicker" href="index.html" style="text-decoration:none;color:var(--color-taupe)">Seecret</a>';
   }
 
+  // Connexion en deux temps : d'abord l'email, puis (une fois l'email envoyé)
+  // le code reçu. Jamais de champ code avant l'envoi.
   function authLogin() {
+    const envoye = !!state.__codeEnvoye && !!state.__pendingEmail;
+    const erreur = state.__authErreur ? '<p class="se-hint" style="margin-top:12px;color:var(--color-alert)">' + esc(state.__authErreur) + '</p>' : '';
+    if (!envoye) {
+      return '<div class="se-auth"><div class="se-auth-card">' + authBrand() +
+        '<h1>Votre espace</h1>' +
+        '<p class="se-muted">Indiquez votre email : nous vous envoyons un code de connexion. Aucun mot de passe.</p>' +
+        '<form data-form="auth-etape-email">' +
+          '<div class="se-field"><label for="email">Email</label>' +
+          '<input class="se-input" id="email" name="email" type="email" autocomplete="email" required placeholder="vous@exemple.fr" value="' + esc(state.__pendingEmail || '') + '"/></div>' +
+          '<button class="se-btn block" type="submit" style="margin-top:16px"' + (state.__envoiCode ? ' disabled' : '') + '>' + (state.__envoiCode ? 'Envoi…' : 'Recevoir mon code par email') + '</button>' +
+        '</form>' + erreur +
+        '<p class="se-hint" style="margin-top:12px">Réservé aux membres dont la candidature est validée.</p>' +
+        '</div></div>';
+    }
     return '<div class="se-auth"><div class="se-auth-card">' + authBrand() +
-      '<h1>Votre espace</h1>' +
-      '<p class="se-muted">Recevez un code par email, puis saisissez-le. Aucun mot de passe.</p>' +
+      '<h1>Vérifiez vos emails</h1>' +
+      '<p class="se-muted">Un email vient de vous être envoyé à <b style="color:var(--color-ink,#141210);font-weight:600">' + esc(state.__pendingEmail) + '</b>. Entrez le code à 6 chiffres qu’il contient, ou cliquez sur le bouton de l’email.</p>' +
       '<form data-form="auth-code">' +
-        '<div class="se-field"><label for="email">Email</label>' +
-        '<input class="se-input" id="email" name="email" type="email" autocomplete="email" placeholder="vous@exemple.fr" value="' + esc(state.__pendingEmail || '') + '"/></div>' +
-        '<button class="se-btn ghost block" type="button" data-act="send-code" style="margin-top:10px">Recevoir mon code par email</button>' +
-        '<div class="se-field" style="margin-top:16px"><label for="code">Code à 6 chiffres</label>' +
-        '<input class="se-input" id="code" name="code" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="123456" style="letter-spacing:.35em;font-size:22px;text-align:center"/></div>' +
+        '<input type="hidden" name="email" value="' + esc(state.__pendingEmail) + '"/>' +
+        '<div class="se-field" style="margin-top:6px"><label for="code">Code reçu par email</label>' +
+        '<input class="se-input" id="code" name="code" inputmode="numeric" pattern="[0-9 ]*" maxlength="7" autocomplete="one-time-code" autofocus placeholder="••••••" style="letter-spacing:.35em;font-size:24px;text-align:center"/></div>' +
         '<button class="se-btn block" type="submit" style="margin-top:16px">Entrer dans Seecret</button>' +
-      '</form>' +
-      (state.__authErreur ? '<p class="se-hint" style="margin-top:12px;color:var(--color-alert)">' + esc(state.__authErreur) + '</p>' : '') +
-      '<p class="se-hint" style="margin-top:12px">Réservé aux membres dont la candidature est validée.</p>' +
+      '</form>' + erreur +
+      '<div class="se-row" style="justify-content:space-between;gap:10px;margin-top:14px;flex-wrap:wrap">' +
+        '<button class="se-btn ghost sm" type="button" data-act="auth-changer">Changer d’email</button>' +
+        '<button class="se-btn ghost sm" type="button" data-act="auth-renvoyer"' + (state.__envoiCode ? ' disabled' : '') + '>' + (state.__envoiCode ? 'Envoi…' : 'Renvoyer le code') + '</button>' +
+      '</div>' +
+      '<p class="se-hint" style="margin-top:12px">Rien reçu ? Regardez dans les courriers indésirables. Le code est valable 1 heure.</p>' +
       '</div></div>';
+  }
+  async function authEnvoyerCode(email) {
+    state.__envoiCode = true; state.__authErreur = ''; render();
+    try {
+      await API.send('POST', '/api/auth/enroll', { email: email, turnstileToken: window.SeecretTurnstile ? await window.SeecretTurnstile.jeton() : '' });
+      state.__pendingEmail = email; state.__codeEnvoye = true;
+    } catch (err) { state.__authErreur = err.message || 'Envoi impossible.'; }
+    state.__envoiCode = false; render();
+    setTimeout(() => { const c = document.getElementById('code'); if (c) c.focus(); }, 30);
   }
 
   // Après connexion : retour à l'écran demandé (lien d'un email de notification).
@@ -1948,6 +1974,10 @@
     } catch (e) { /* rien */ }
     return defaut || '/espace.html';
   }
+  try {
+    const qs = new URLSearchParams(location.search);
+    if (qs.has('email') || qs.has('code')) { qs.delete('email'); qs.delete('code'); history.replaceState(null, '', location.pathname + (qs.toString() ? '?' + qs.toString() : '') + location.hash); }
+  } catch (e) { /* rien */ }
   async function demarrer() {
     const token = new URLSearchParams(location.search).get('token');
     if (token) {
@@ -2619,6 +2649,8 @@
   /* ================================ actions ================================ */
 
   const actions = {
+    'auth-changer': () => { state.__codeEnvoye = false; state.__authErreur = ''; render(); setTimeout(() => { const i = document.getElementById('email'); if (i) i.focus(); }, 30); },
+    'auth-renvoyer': () => { if (state.__pendingEmail) authEnvoyerCode(state.__pendingEmail); },
     'send-code': async (el) => {
       const form = el.closest('form');
       const input = form ? form.querySelector('[name="email"]') : null;
@@ -3102,6 +3134,12 @@
       return;
     }
 
+    if (kind === 'auth-etape-email') {
+      const email = String(data.get('email') || '').trim().toLowerCase();
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { state.__authErreur = 'Saisissez un email valide.'; render(); return; }
+      await authEnvoyerCode(email);
+      return;
+    }
     if (kind === 'auth-code') {
       const email = String(data.get('email') || '').trim().toLowerCase();
       const code = String(data.get('code') || '').replace(/\D/g, '').slice(0, 6);
