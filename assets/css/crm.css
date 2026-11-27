@@ -663,3 +663,11 @@ body.se-maps-open { overflow: hidden; }
 .rd-chip-ajout{border-style:dashed !important}
 .rd-zone-form{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap}
 .rd-zone-form .se-input{width:110px}
+
+.rd-choix-btn{display:inline-flex;align-items:center;justify-content:space-between;gap:12px;min-width:200px;max-width:100%;padding:8px 14px;border:1px solid var(--color-line,#e5e2dc);border-radius:999px;background:var(--color-surface,#fff);cursor:pointer;font:inherit;color:inherit}
+.rd-choix-btn span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rd-choix-panneau{margin-top:10px;padding:14px;border:1px solid var(--color-line,#e5e2dc);border-radius:14px;background:var(--color-surface,#fff);box-shadow:0 8px 24px rgba(0,0,0,.06)}
+.rd-choix-titre{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--color-graphite,#777);margin:2px 0 8px}
+.rd-choix-grille{display:grid;grid-template-columns:repeat(auto-fill,minmax(52px,1fr));gap:6px;margin-bottom:14px}
+.rd-choix-grille .rd-chip{width:100%;justify-content:center}
+.rd-choix-actions{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:14px;flex-wrap:wrap}
