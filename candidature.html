@@ -1369,6 +1369,17 @@
       const bouton = document.querySelector('[data-act="suivant"]');
       if (bouton) { bouton.disabled = true; bouton.textContent = 'Envoi en cours…'; }
       try {
+        // L'estimation montrée au vendeur part avec le dossier : l'agent la
+        // retrouve dans la fiche bien du CRM, à côté du prix souhaité.
+        try {
+          const pe = rep.projet !== 'acheteur' ? estim() : 0;
+          if (pe) {
+            const an = ventesAnalyse();
+            dossier.estimation = { prix: pe, bas: Math.round(pe * 0.96 / 1000) * 1000, haut: Math.round(pe * 1.04 / 1000) * 1000,
+              prixM2: Math.round(an ? an.median : (MEDIANES[rep.bien.codePostal] || 0)), ventes: an ? an.n : 0, rayon: an ? an.rayon : 0,
+              source: an ? 'Ventes DVF autour du bien' : 'Médiane de l’arrondissement', at: new Date().toISOString() };
+          }
+        } catch (e) { /* estimation indisponible */ }
         const turnstileToken = window.SeecretTurnstile ? await window.SeecretTurnstile.jeton() : '';
         const r = await fetch('/api/candidature', {
           method: 'POST',
