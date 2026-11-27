@@ -96,7 +96,7 @@
     brouillon: { label: 'En préparation', cls: 'muted', aide: 'Fiche en cours (vendeur ou agence) : pas visible des membres.' },
     a_valider: { label: 'À valider', cls: 'warn', aide: 'Le vendeur a demandé la mise en ligne : vérifiez la fiche puis passez-la en Avant-première.' },
     'avant-premiere': { label: 'Avant-première', cls: '', aide: 'Visible des membres, qui peuvent le suivre ; les visites ne sont pas encore ouvertes.' },
-    ouvert: { label: 'En vente', cls: 'open', aide: 'Visible des membres, visites ouvertes (mandat de recherche signé par l’acquéreur avant chaque visite).' },
+    ouvert: { label: 'Ouvert aux visites', cls: 'open', aide: 'Visible des membres, visites ouvertes (mandat de recherche signé par l’acquéreur avant chaque visite).' },
     'sous-offre': { label: 'Sous offre', cls: 'offer', aide: 'Une offre est acceptée ou en négociation.' },
     'sous-compromis': { label: 'Sous compromis', cls: 'offer', aide: 'Compromis signé, en attente de l’acte.' },
     vendu: { label: 'Vendu', cls: 'muted', aide: 'Vente conclue.' },
@@ -105,6 +105,32 @@
     en_attente_offmarket: { label: 'Bloqué : annonce publique trouvée', cls: 'warn', ancien: true }
   };
   const ST_BIEN_CHOIX = () => Object.keys(ST_BIEN).filter((k) => !ST_BIEN[k].ancien);
+
+  // Deux réglages distincts sur un bien :
+  //  · le STATUT, où en est le bien (en préparation, en vente, sous offre…) ;
+  //  · la DIFFUSION, pour un bien en vente : Avant-première ou Ouvert aux
+  //    visites (interrupteur). Côté serveur, « en vente » = statut
+  //    'avant-premiere' ou 'ouvert' : rien ne change dans les données.
+  const ETAPES_BIEN = {
+    brouillon: { label: 'En préparation', cls: 'muted', aide: ST_BIEN.brouillon.aide },
+    a_valider: { label: 'À valider', cls: 'warn', aide: ST_BIEN.a_valider.aide },
+    en_vente: { label: 'En vente', cls: 'open', aide: 'Publié sur la plateforme. Réglez sa diffusion avec l’interrupteur : Avant-première (les membres le suivent) ou Ouvert aux visites.' },
+    'sous-offre': ST_BIEN['sous-offre'],
+    'sous-compromis': ST_BIEN['sous-compromis'],
+    vendu: ST_BIEN.vendu
+  };
+  const etapeBien = (statut) => (statut === 'avant-premiere' || statut === 'ouvert') ? 'en_vente' : (statut === 'mandat' || !ETAPES_BIEN[statut] ? (statut === 'en_attente_offmarket' ? 'a_valider' : 'brouillon') : statut);
+  const statutDepuis = (etape, phase) => etape === 'en_vente' ? (phase === 'ouvert' ? 'ouvert' : 'avant-premiere') : etape;
+  function interrupteurPhase(b, opts) {
+    const o = opts || {}; const enVente = etapeBien(b && b.statut) === 'en_vente';
+    const ouvert = o.valeur ? o.valeur === 'ouvert' : (b && b.statut === 'ouvert');
+    return '<div class="se-phase' + (ouvert ? ' droite' : '') + (enVente || o.formulaire ? '' : ' inactif') + '" ' + (o.formulaire ? 'data-phase-form' : '') + '>' +
+      '<button type="button" class="se-phase-opt' + (ouvert ? '' : ' on') + '" data-act="bien-phase" data-id="' + esc(b ? b.id : '') + '" data-phase="avant-premiere"' + (enVente || o.formulaire ? '' : ' disabled') + '>Avant-première</button>' +
+      '<button type="button" class="se-phase-rail" data-act="bien-phase" data-id="' + esc(b ? b.id : '') + '" data-phase="' + (ouvert ? 'avant-premiere' : 'ouvert') + '" aria-label="Basculer la diffusion"' + (enVente || o.formulaire ? '' : ' disabled') + '><span></span></button>' +
+      '<button type="button" class="se-phase-opt' + (ouvert ? ' on' : '') + '" data-act="bien-phase" data-id="' + esc(b ? b.id : '') + '" data-phase="ouvert"' + (enVente || o.formulaire ? '' : ' disabled') + '>Ouvert aux visites</button>' +
+      (o.formulaire ? '<input type="hidden" name="phase" value="' + (ouvert ? 'ouvert' : 'avant-premiere') + '"/>' : '') +
+    '</div>';
+  }
 
   const ST_CLIENT = {
     prospect: { label: 'Prospect', cls: 'warn' },
@@ -1738,8 +1764,10 @@
   }
 
   function badgeBien(s) {
-    const st = ST_BIEN[s] || ST_BIEN.brouillon;
-    return '<span class="se-badge ' + st.cls + '">' + st.label + '</span>';
+    if (s === 'en_attente_offmarket') return '<span class="se-badge warn">' + ST_BIEN[s].label + '</span>';
+    const e = ETAPES_BIEN[etapeBien(s)];
+    return '<span class="se-badge ' + e.cls + '">' + e.label + '</span>' +
+      (etapeBien(s) === 'en_vente' ? ' <span class="se-badge ' + (s === 'ouvert' ? 'open' : '') + '">' + ST_BIEN[s].label + '</span>' : '');
   }
   function badgeClient(s) {
     const st = ST_CLIENT[s] || ST_CLIENT.prospect;
@@ -4108,7 +4136,7 @@
     if (b.surSeecret === false) return 'Option « Sur Seecret » désactivée : le bien reste dans le CRM uniquement.';
     const manque = [];
     if (b.validation !== 'valide') manque.push('valider le bien');
-    if (!(b.statut === 'avant-premiere' || b.statut === 'ouvert')) manque.push('le passer en Avant-première ou En vente (statut actuel : ' + ((ST_BIEN[b.statut] || {}).label || b.statut || '—') + ')');
+    if (!(b.statut === 'avant-premiere' || b.statut === 'ouvert')) manque.push('le passer en vente (statut actuel : ' + ((ETAPES_BIEN[etapeBien(b.statut)] || {}).label || b.statut || '—') + ')');
     return manque.length ? 'Option active, mais pas encore visible : il reste à ' + manque.join(' et à ') + '.' : '';
   }
   // Import de fiches vendeurs préparées (.json) : envoi par paquets de 15.
@@ -5654,7 +5682,7 @@
     const toutes = (state.biensServeur || []).concat(state.biens);
     const sources = Array.from(new Set(toutes.map((b) => b.source).filter(Boolean)));
     const list = toutes.filter((b) => {
-      if (st && b.statut !== st) return false;
+      if (st && (st === 'en_vente' || st === 'brouillon' || st === 'a_valider' ? etapeBien(b.statut) !== st : b.statut !== st)) return false;
       if (src && b.source !== src) return false;
       if (mk) {
         const v = b.verifs || {};
@@ -5683,7 +5711,7 @@
       carteImportFiches() +
       '<div class="se-card pad-sm" style="margin-bottom:18px"><div class="se-filters">' +
         '<select class="se-select" data-filter="statutBien"><option value="">Tous les statuts</option>' +
-          Object.keys(ST_BIEN).map((k) => '<option value="' + k + '"' + (st === k ? ' selected' : '') + '>' + ST_BIEN[k].label + '</option>').join('') +
+          [['brouillon', 'En préparation'], ['a_valider', 'À valider'], ['en_vente', 'En vente (tout)'], ['avant-premiere', '· En vente : Avant-première'], ['ouvert', '· En vente : Ouvert aux visites'], ['sous-offre', 'Sous offre'], ['sous-compromis', 'Sous compromis'], ['vendu', 'Vendu']].map((k) => '<option value="' + k[0] + '"' + (st === k[0] ? ' selected' : '') + '>' + k[1] + '</option>').join('') +
         '</select>' +
         (sources.length ? '<select class="se-select" data-filter="sourceBien"><option value="">Toutes les origines</option>' + sources.map((x) => '<option' + (src === x ? ' selected' : '') + '>' + esc(x) + '</option>').join('') + '</select>' : '') +
         '<select class="se-select" data-filter="marcheBien"><option value="">Marché : tout</option>' +
@@ -5842,6 +5870,7 @@
     return bandeauArchive('bien', b) + '<div class="se-fiche-head">' +
       '<div style="flex:1"><div class="kicker" style="color:var(--color-taupe)">' + esc(b.ref) + ' · ' + esc(b.type) + ' · ' + esc(qLabel(b.quartier)) + (prop ? ' · <a href="#/client/' + prop.id + '" style="color:var(--color-club-violet);text-decoration:none">Propriétaire : ' + esc(nomClient(prop)) + '</a>' : '') + '</div>' +
       '<h1 class="display" style="font-size:30px;margin:4px 0 2px">' + esc(b.titre) + '</h1>' +
+      '<div class="se-row" style="gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px"><span class="se-hint" style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;margin:0">Diffusion</span>' + interrupteurPhase(b) + (etapeBien(b.statut) === 'en_vente' ? '' : '<span class="se-hint">Disponible une fois le bien en vente.</span>') + '</div>' +
       '<div class="se-row" style="gap:8px">' + badgeBien(b.statut) + badgeExclusivite(b) + badgeValidation(b) + badgeDemo(b) + '<span class="se-pill" title="Prix net vendeur">Net <b>' + euro(b.prix) + '</b></span><span class="se-pill" title="Prix affiché aux acquéreurs">HAI <b>' + euro(haiPour(b, null)) + '</b> · ' + tauxTxt(tauxPour(b, null)) + ' %</span><span class="se-pill" title="Prix affiché à un membre dont le bien a été VENDU par l’agence (statut Vendu)">Si son bien est vendu par nous : ' + euro(haiPour(b, REDUIT)) + '</span><span class="se-pill">' + euro(prixM2(b)) + ' /m² net</span></div></div>' +
       '<div class="se-actions">' +
         '<button class="se-btn ghost" data-act="historique" data-kind="bien" data-id="' + b.id + '">Historique</button>' +
@@ -6870,8 +6899,9 @@
         field('Adresse', 'adresse', v.adresse, { full: true, placeholder: '12 rue de la Verrerie, Paris 4e' }) +
         field('Type', 'type', v.type, { type: 'select', options: TYPES.map((t) => ({ value: t, label: t })) }) +
         field('Quartier', 'quartier', v.quartier, { type: 'select', options: QUARTIERS.map((q) => ({ value: q.id, label: q.label })) }) +
-        field('Statut', 'statut', v.statut === 'mandat' ? 'brouillon' : v.statut, { type: 'select', options: ST_BIEN_CHOIX().map((k, i) => ({ value: k, label: (i + 1) + '. ' + ST_BIEN[k].label })) }) +
-        '<div class="se-field full"><p class="se-hint" data-aide-statut style="margin:0">' + esc((ST_BIEN[v.statut === 'mandat' ? 'brouillon' : v.statut] || {}).aide || '') + ' Passer en Avant-première ou En vente valide le bien et le publie sur la plateforme.</p></div>' +
+        field('Statut', 'statut', etapeBien(v.statut), { type: 'select', options: Object.keys(ETAPES_BIEN).map((k, i) => ({ value: k, label: (i + 1) + '. ' + ETAPES_BIEN[k].label })) }) +
+        '<div class="se-field" data-si-en-vente' + (etapeBien(v.statut) === 'en_vente' ? '' : ' hidden') + '><label>Diffusion</label>' + interrupteurPhase(b, { formulaire: true, valeur: v.statut === 'ouvert' ? 'ouvert' : 'avant-premiere' }) + '</div>' +
+        '<div class="se-field full"><p class="se-hint" data-aide-statut style="margin:0">' + esc(ETAPES_BIEN[etapeBien(v.statut)].aide || '') + ' Passer en vente valide le bien et le publie sur la plateforme.</p></div>' +
         '<div class="se-field" data-si-vendu' + (v.statut === 'vendu' ? '' : ' hidden') + '><label>Vendu par Seecret ?</label>' +
           '<select class="se-select" name="venduParAgence"><option value="">— Choisir —</option>' +
           '<option value="oui"' + (v.venduParAgence === true ? ' selected' : '') + '>Oui, vendu par l’agence</option>' +
@@ -8485,6 +8515,31 @@
       try { localStorage.removeItem(KEY); } catch (e) {}
       state = seed(); mergeShared(state); render(); toast('CRM réinitialisé.');
     },
+    'bien-phase': async (el, id) => {
+      const phase = el.getAttribute('data-phase') === 'ouvert' ? 'ouvert' : 'avant-premiere';
+      // Dans le formulaire : on bascule seulement le champ caché.
+      const zone = el.closest('[data-phase-form]');
+      if (zone) {
+        zone.querySelector('[name="phase"]').value = phase;
+        zone.classList.toggle('droite', phase === 'ouvert');
+        zone.querySelectorAll('.se-phase-opt').forEach((x) => x.classList.toggle('on', x.getAttribute('data-phase') === phase));
+        zone.querySelector('.se-phase-rail').setAttribute('data-phase', phase === 'ouvert' ? 'avant-premiere' : 'ouvert');
+        return;
+      }
+      const b = bien(id);
+      if (!b || etapeBien(b.statut) !== 'en_vente' || b.statut === phase) return;
+      if (b.serverId) {
+        try {
+          const r = await fetch('/api/biens/' + b.serverId, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ statut: phase }) });
+          const res = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(res.error || 'Erreur serveur');
+          b.statut = (res.bien && res.bien.statut) || phase;
+          if (phase === 'ouvert' && !b.ouvertLe) b.ouvertLe = nowISO();
+        } catch (e) { toast('Erreur : ' + (e.message || 'serveur'), 'warn'); return; }
+      } else b.statut = phase;
+      commit();
+      toast(phase === 'ouvert' ? 'Ouvert aux visites : les membres peuvent demander une visite.' : 'Repassé en Avant-première : visible des membres, visites fermées.', 'ok');
+    },
     'bien-statut': (el, id) => {
       const b = bien(id);
       if (!b) return;
@@ -8613,7 +8668,8 @@
       const lib = e.target.form.querySelector('[data-libelle-personne]'); if (lib) lib.textContent = soc ? 'La personne qui représente la société (c’est elle que vous contactez) :' : 'La personne :';
     }
     if (e.target.matches('form[data-form="bien"] [name="statut"]')) {
-      const aide = e.target.form.querySelector('[data-aide-statut]'); if (aide) aide.textContent = ((ST_BIEN[e.target.value] || {}).aide || '') + ' Passer en Avant-première ou En vente valide le bien et le publie sur la plateforme.';
+      const aide = e.target.form.querySelector('[data-aide-statut]'); if (aide) aide.textContent = ((ETAPES_BIEN[e.target.value] || {}).aide || '') + ' Passer en vente valide le bien et le publie sur la plateforme.';
+      const diff = e.target.form.querySelector('[data-si-en-vente]'); if (diff) diff.hidden = e.target.value !== 'en_vente';
       const bloc = e.target.form.querySelector('[data-si-vendu]');
       if (bloc) bloc.hidden = e.target.value !== 'vendu';
     }
@@ -8827,7 +8883,7 @@
         ges: String(data.get('ges') || ''), etat: String(data.get('etat') || ''), exterieur: String(data.get('exterieur') || ''),
         surfaceExterieur: chiffres(data.get('surfaceExterieur')), charges: chiffres(data.get('charges')), ascenseur: data.get('ascenseur') === 'on',
         tauxHonoraires: String(data.get('tauxHonoraires') || '').trim() === '' ? null : Number(String(data.get('tauxHonoraires')).replace(',', '.')),
-        statut: data.get('statut'), proprietaireId: data.get('proprio') || null,
+        statut: statutDepuis(data.get('statut'), data.get('phase')), proprietaireId: data.get('proprio') || null,
         venduParAgence: data.get('statut') === 'vendu' && data.get('venduParAgence') ? data.get('venduParAgence') === 'oui' : undefined,
         exclusivite: { statut: 'scan_en_cours', liens: [] },
         description: String(data.get('description') || ''),
