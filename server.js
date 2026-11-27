@@ -5086,6 +5086,13 @@ function pmTriNiveau(a, b) {
 }
 
 // --- Import (téléchargement + indexation) -----------------------------------
+// Départements à lire dans le fichier DGFiP : ceux de PM_DEPTS, plus ceux des
+// communes ajoutées au Radar (dont on ne garde que ces communes).
+function pmDepartementsSuivis() {
+  const d = PM_DEPTS.slice();
+  (typeof RADAR_ZONES_SUP !== 'undefined' ? RADAR_ZONES_SUP : []).forEach((z) => { const dep = String(z.insee).slice(0, 2); if (d.indexOf(dep) === -1) d.push(dep); });
+  return d;
+}
 async function pmTrouverFichiers() {
   if (process.env.PM_LOCAUX_URL) return { annee: null, fichiers: [{ id: 'PM_LOCAUX_URL', url: process.env.PM_LOCAUX_URL }] };
   const r = await fetch(PM_ATTACHMENTS, { headers: { Accept: 'application/json', 'User-Agent': 'Seecret/1.0' }, signal: AbortSignal.timeout(30000) });
@@ -5101,7 +5108,7 @@ async function pmTrouverFichiers() {
   if (!tous.length) throw new Error('aucun fichier « locaux » trouvé dans la liste DGFiP');
   const annee = Math.max.apply(null, tous.map((f) => f.annee));
   const fichiers = [];
-  PM_DEPTS.forEach((dep) => {
+  pmDepartementsSuivis().forEach((dep) => {
     const n = parseInt(dep, 10);
     const f = tous.filter((x) => x.annee === annee && n >= x.de && n <= x.a)[0];
     if (f && !fichiers.some((x) => x.id === f.id)) fichiers.push({ id: f.id, url: PM_ATTACHMENTS + '/' + f.id });
@@ -5133,7 +5140,8 @@ function pmLireZip(fichierZip, onLigne, dossierTmp) {
         if (/\/$/.test(nom)) return zip.readEntry();
         // Fichiers nommés PM_AA_B_DDD… : on saute d'emblée les départements non suivis.
         const mDep = /PM_\d{2}_B_(\d{2}|2A|2B)/i.exec(path.basename(nom));
-        if (mDep && PM_DEPTS.indexOf(mDep[1].toUpperCase()) === -1 && PM_DEPTS.indexOf(String(parseInt(mDep[1], 10))) === -1) return zip.readEntry();
+        const suivis = pmDepartementsSuivis();
+        if (mDep && suivis.indexOf(mDep[1].toUpperCase()) === -1 && suivis.indexOf(String(parseInt(mDep[1], 10))) === -1) return zip.readEntry();
         const estZip = /\.zip$/i.test(nom);
         const estTexte = /\.(txt|csv)$/i.test(nom);
         if (!estZip && !estTexte) return zip.readEntry();
@@ -6196,6 +6204,19 @@ app.delete('/api/radar/zones/:quartier', requireAdmin, (req, res) => {
   res.json({ ok: true, zones: RADAR_ZONES_SUP });
 });
 setTimeout(radarZonesCharger, 0);
+setTimeout(() => {
+  try {
+    const m = pmMeta();
+    if (!m || m.correctionCommunesSup) return;
+    let n = 0;
+    Object.keys(m.communes || {}).forEach((k) => { if (m.communes[k] === '(aucune société)') { delete m.communes[k]; n++; } });
+    m.communesSup = (m.communesSup || []).filter((k) => m.communes && m.communes[k]);
+    m.correctionCommunesSup = nowISO();
+    fs.writeFileSync(path.join(PM_DIR, 'meta.json'), JSON.stringify(m, null, 1));
+    pmFermerBase(); PM_CACHE.clear();
+    if (n) console.log('[pm-locaux] ' + n + ' commune(s) à réindexer (département sauté par erreur)');
+  } catch (e) { console.error('[pm-locaux] correction communes', e.message); }
+}, 3000);
 
 // Liste : période + filtres ; charge les DPE manquants en tâche de fond.
 app.get('/api/radar/liste', requireAdmin, (req, res) => {
