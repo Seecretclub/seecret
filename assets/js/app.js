@@ -1940,12 +1940,20 @@
       '</div></div>';
   }
 
+  // Après connexion : retour à l'écran demandé (lien d'un email de notification).
+  function suiteConnexion(defaut) {
+    try {
+      const sx = new URLSearchParams(location.search).get('suite') || '';
+      if (/^\/(crm|espace)\.html(\?[\w=%.\-\/&]*)?$/.test(sx)) return sx;
+    } catch (e) { /* rien */ }
+    return defaut || '/espace.html';
+  }
   async function demarrer() {
     const token = new URLSearchParams(location.search).get('token');
     if (token) {
       try {
-        await API.send('POST', '/api/auth/verify-token', { token: token });
-        location.href = '/espace.html';
+        const rt = await API.send('POST', '/api/auth/verify-token', { token: token });
+        location.href = suiteConnexion(rt && rt.redirect);
         return;
       } catch (e) {
         state.__authErreur = (e && e.message) || 'Lien invalide ou expiré.';
@@ -3099,8 +3107,8 @@
       const code = String(data.get('code') || '').replace(/\D/g, '').slice(0, 6);
       if (!email || code.length !== 6) { toast('Email et code à 6 chiffres requis.', 'warn'); return; }
       try {
-        await API.send('POST', '/api/auth/verify-code', { email: email, code: code });
-        location.href = '/espace.html';
+        const rc = await API.send('POST', '/api/auth/verify-code', { email: email, code: code });
+        location.href = suiteConnexion(rc && rc.redirect);
       } catch (err) {
         state.__authErreur = err.message || 'Code invalide.';
         render();

@@ -473,11 +473,23 @@ app.post('/api/candidature', async (req, res) => {
   }
   if (mailer && process.env.EMAIL_USER) {
     const nomClient = ((lead.prenom || '') + ' ' + (lead.nom || '')).trim() || 'Candidat';
+    const projet = { acquereur: 'Acheter', vendeur: 'Vendre', mixte: 'Acheter et vendre' }[lead.projet] || lead.projet || '';
+    const eur = (n) => (Number(n) ? Math.round(Number(n)).toLocaleString('fr-FR') + ' €' : '');
+    const budget = lead.budgetMax ? (lead.budgetMin ? eur(lead.budgetMin) + ' – ' : 'jusqu’à ') + eur(lead.budgetMax) : '';
+    const secteurs = (lead.quartiers || []).map((q) => /^p(\d+)$/.test(q) ? 'Paris ' + q.slice(1) + (q === 'p1' ? 'er' : 'e') : q).join(', ');
+    const b = result.bien;
+    const cible = result.demande ? 'demande/' + result.demande.id : 'client/' + lead.id;
     mailer.sendMail({
       from: '"Seecret Notifications" <' + FROM_EMAIL + '>',
       to: process.env.EMAIL_USER,
-      subject: 'Nouvelle candidature reçue : ' + nomClient,
-      html: 'Une nouvelle demande d’adhésion vient d’être soumise par <b>' + nomClient + '</b>. Connectez-vous au CRM pour la traiter.'
+      subject: 'Nouvelle candidature : ' + nomClient + (projet ? ' · ' + projet : ''),
+      html: emailAgent({
+        etiquette: 'Candidature', titre: 'Nouvelle candidature de ' + escHtml(nomClient),
+        intro: 'Une demande d’adhésion vient d’arriver sur la plateforme. Elle attend votre validation.',
+        lignes: [['Projet', projet], ['Budget', budget], ['Secteurs', secteurs], ['Bien proposé', b ? [b.type, b.surface ? b.surface + ' m²' : '', b.ville || b.quartier || ''].filter(Boolean).join(' · ') : ''], ['Email', lead.email], ['Téléphone', lead.tel], ['Reçue le', new Date().toLocaleString('fr-FR', { timeZone: 'Europe/Paris', dateStyle: 'long', timeStyle: 'short' })]],
+        bouton: { texte: 'Traiter la candidature', lien: lienCrm(req, cible), ecran: 'la fiche de cette candidature' },
+        pied: 'Candidatures'
+      })
     }).catch((err) => console.error('[email] notification agent échouée :', err.message));
   }
   writeDb(db);
@@ -1061,6 +1073,36 @@ function emailBienPreview(bien, nom, message) {
   ].join('');
 }
 
+// Email pour l'agence (notifications) : même univers que les emails clients,
+// avec les informations utiles et un bouton qui ouvre directement le bon écran
+// du CRM (après connexion si besoin).
+function lienCrm(req, cible) {
+  return originOf(req) + '/crm.html?ouvrir=' + encodeURIComponent(String(cible || '').replace(/^#?\/?/, ''));
+}
+function emailAgent(o) {
+  const lignes = (o.lignes || []).filter((l) => l && l[1] !== undefined && l[1] !== null && String(l[1]).trim() !== '');
+  return [
+    '<!doctype html><html><body style="margin:0;padding:0;background:#faf9f7;font-family:Georgia,\'Times New Roman\',serif;">',
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:40px 16px;">',
+    '<div style="max-width:520px;width:100%;background:#ffffff;border:1px solid #eeebe6;border-radius:24px;padding:40px 36px;text-align:left;">',
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>',
+    '<td style="font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:#5f5a54;font-weight:600;">Seecret · Agence</td>',
+    '<td align="right"><span style="display:inline-block;font-family:Helvetica,Arial,sans-serif;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#7a5c1e;background:#f6efe1;border-radius:999px;padding:5px 12px;">' + escHtml(o.etiquette || 'Notification') + '</span></td>',
+    '</tr></table>',
+    '<h1 style="font-family:Georgia,serif;font-weight:400;font-size:26px;line-height:1.2;color:#141210;margin:18px 0 8px;">' + o.titre + '</h1>',
+    o.intro ? '<p style="font-size:15px;line-height:1.65;color:#5f5a54;margin:0 0 22px;">' + o.intro + '</p>' : '',
+    lignes.length ? '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #eeebe6;margin:0 0 26px;font-family:Helvetica,Arial,sans-serif;">' + lignes.map((l) =>
+      '<tr><td style="padding:11px 0;border-bottom:1px solid #f1eee9;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#9a948c;width:38%;vertical-align:top;">' + escHtml(l[0]) + '</td>' +
+      '<td style="padding:11px 0;border-bottom:1px solid #f1eee9;font-size:14px;line-height:1.5;color:#141210;vertical-align:top;">' + (l[2] ? l[1] : escHtml(String(l[1]))) + '</td></tr>').join('') + '</table>' : '',
+    o.citation ? '<div style="border-left:3px solid #e6dcc7;padding:4px 0 4px 16px;margin:0 0 26px;font-size:15px;line-height:1.65;color:#3a3631;font-style:italic;">« ' + o.citation + ' »</div>' : '',
+    o.bouton ? '<div style="text-align:center;"><a href="' + o.bouton.lien + '" style="display:inline-block;background:#141210;color:#ffffff;text-decoration:none;padding:15px 34px;border-radius:999px;font-family:Helvetica,Arial,sans-serif;font-size:15px;font-weight:600;">' + escHtml(o.bouton.texte) + '</a></div>' : '',
+    o.bouton ? '<p style="font-family:Helvetica,Arial,sans-serif;font-size:12px;line-height:1.6;color:#9a948c;margin:14px 0 0;text-align:center;">Le lien ouvre directement ' + escHtml(o.bouton.ecran || 'le bon écran du CRM') + '. Si vous n’êtes pas connecté, Seecret vous y amène juste après votre code.</p>' : '',
+    '</div>',
+    '<p style="font-family:Helvetica,Arial,sans-serif;font-size:11px;color:#b3ada4;margin:18px 0 0;">Notification interne · ' + escHtml(o.pied || 'CRM Seecret') + '</p>',
+    '</td></tr></table>',
+    '</body></html>'
+  ].join('');
+}
 function emailValidationLegere(prenom, texte) {
   const hello = prenom ? 'Bonjour ' + prenom : 'Bonjour';
   return [
@@ -2590,7 +2632,7 @@ app.post('/api/mes-messages', requireAuth, (req, res) => {
     mailer.sendMail({
       from: '"Bonjour Seecret" <' + FROM_EMAIL + '>', to: dest.join(','),
       subject: 'Nouveau message de ' + nomComplet(req.lead),
-      html: emailValidationLegere('', escHtml(nomComplet(req.lead)) + ' vous écrit : « ' + escHtml(texte) + ' ». Répondez depuis le CRM, rubrique Messages : ' + originOf(req) + '/crm.html#/messages')
+      html: emailAgent({ etiquette: 'Message', titre: escHtml(nomComplet(req.lead)) + ' vous a écrit', intro: 'Nouveau message reçu depuis l’espace membre.', citation: escHtml(String(texte).slice(0, 1200)), lignes: [['Membre', nomComplet(req.lead)], ['Email', req.lead.email], ['Téléphone', req.lead.tel]], bouton: { texte: 'Répondre', lien: lienCrm(req, 'messages/' + req.lead.id), ecran: 'la conversation' }, pied: 'Messages' })
     }).catch((err) => console.error('[messages] email agence échoué :', err.message));
   }
   res.json({ ok: true, message: messageSortant(m) });
@@ -8783,12 +8825,14 @@ app.patch('/api/rappels/:id', requireAdmin, (req, res) => {
 // compte agent de bout en bout, pas seulement via l'API).
 app.get('/crm.html', (req, res, next) => {
   const token = getCookie(req, SESSION_COOKIE);
-  if (!token) return res.redirect('/espace.html');
+  const versConnexion = () => res.redirect('/espace.html' + (req.query.ouvrir ? '?suite=' + encodeURIComponent(req.originalUrl) : ''));
+  if (!token) return versConnexion();
   const db = readDb();
   pruneAuth(db);
   const session = db.sessions.find((s) => s.id === sha256(token));
   const lead = session ? db.leads.find((l) => l.id === session.leadId) : null;
   const role = roleOf(lead);
+  if (!lead) return versConnexion();
   if (ROLES_STAFF.indexOf(role) === -1) return res.redirect('/espace.html');
   next();
 });

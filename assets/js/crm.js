@@ -1294,6 +1294,11 @@
     showPremiumNotification(titre, message, type);
   }
 
+  // Lien d'un email de notification : /crm.html?ouvrir=demande/xxx → #/demande/xxx
+  try {
+    const ouvrir = new URLSearchParams(location.search).get('ouvrir');
+    if (ouvrir && /^[\w\-\/]+$/.test(ouvrir)) history.replaceState(null, '', '/crm.html#/' + ouvrir);
+  } catch (e) { /* rien */ }
   function parseRoute() {
     const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
     return { name: parts[0] || 'tableau', param: parts[1] || null };
