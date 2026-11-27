@@ -180,6 +180,16 @@ const COMPARABLES_FILE = path.join(__dirname, 'data-comparables.json');
 app.use(cors());
 // Relevé à 8 Mo (au lieu de 1 Mo) pour laisser passer l'audio dicté à Célia
 // (quelques dizaines de secondes de voix encodées en base64).
+// Adresse officielle du site. L'ancienne adresse Railway redirige vers elle
+// (pages seulement : les appels /api continuent de fonctionner partout).
+const SITE_OFFICIEL = (process.env.PUBLIC_URL || 'https://www.seecret.fr').replace(/\/+$/, '');
+function hoteTechnique(h) { return /\.up\.railway\.app$/i.test(String(h || '')); }
+app.use((req, res, next) => {
+  if (process.env.REDIRECTION_DOMAINE !== '0' && (req.method === 'GET' || req.method === 'HEAD') && hoteTechnique(req.hostname) && !req.path.startsWith('/api/') && req.path !== '/sante' && req.path !== '/health') {
+    return res.redirect(301, SITE_OFFICIEL + req.originalUrl);
+  }
+  next();
+});
 app.use(express.json({ limit: '20mb' }));
 // Si le corps de la requête est invalide ou trop gros (ex. un audio dicté
 // trop long envoyé à Célia), express renvoie par défaut une page d'erreur
@@ -537,7 +547,8 @@ function getCookie(req, name) {
 }
 
 function originOf(req) {
-  const base = process.env.PUBLIC_URL || (req.protocol + '://' + req.get('host'));
+  // Les liens des emails pointent toujours vers l'adresse officielle.
+  const base = process.env.PUBLIC_URL || (hoteTechnique(req.get('host')) ? SITE_OFFICIEL : (req.protocol + '://' + req.get('host')));
   return base.replace(/\/+$/, '');
 }
 
