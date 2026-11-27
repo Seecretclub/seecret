@@ -1503,8 +1503,15 @@ function bienDuMembre(db, lead) {
   return b;
 }
 
-function rechercheDuMembre(db, lead) {
-  let r = db.recherches.find((x) => x.clientId === lead.id);
+// Lire la recherche d'un membre ne la crée jamais : un vendeur seul n'a pas de
+// recherche (acquéreur = recherche, vendeur = bien). Sans recherche, on renvoie
+// une fiche vide non enregistrée ; elle n'est créée que si le membre enregistre
+// réellement des critères (creer = true).
+function rechercheDuMembre(db, lead, creer) {
+  let r = db.recherches.find((x) => x.clientId === lead.id && !x.archive);
+  if (!r && !creer) {
+    return { id: null, clientId: lead.id, leadId: lead.id, titre: '', types: [], type: '', quartiers: [], prixMax: 0, piecesMin: 0, surfaceMin: 0, surfaceMax: 0, delai: '', apport: 0, financement: '', courtier: false, bienAVendre: false, etageMin: 0, etageMax: 0, etat: '', dpe: '', annexes: [], prixVenteEstime: 0, statut: 'active', alertes: true };
+  }
   if (!r) {
     r = { id: uid('r'), clientId: lead.id, leadId: lead.id, titre: 'Recherche de ' + ((lead.prenom || '') + ' ' + (lead.nom || '')).trim(), types: [], type: '', quartiers: [], prixMax: 0, piecesMin: 0, surfaceMin: 0, surfaceMax: 0, delai: '', apport: 0, financement: '', courtier: false, bienAVendre: false, etageMin: 0, etageMax: 0, etat: '', dpe: '', annexes: [], prixVenteEstime: 0, statut: 'active', alertes: true, cree: nowISO() };
     db.recherches.push(r);
@@ -2915,7 +2922,7 @@ app.get('/api/mon-recherche', requireAuth, (req, res) => {
 });
 
 app.patch('/api/mon-recherche', requireAuth, (req, res) => {
-  const r = rechercheDuMembre(req.db, req.lead);
+  const r = rechercheDuMembre(req.db, req.lead, true);
   const body = req.body || {};
   if (typeof body.prixMax !== 'undefined') r.prixMax = Math.max(0, Number(body.prixMax) || 0);
   if (typeof body.piecesMin !== 'undefined') r.piecesMin = Math.max(0, Number(body.piecesMin) || 0);
