@@ -730,3 +730,11 @@ body.se-maps-open { overflow: hidden; }
 .se-phase.droite .se-phase-rail span { transform: translateX(20px); }
 .se-phase.inactif { opacity: .45; }
 .se-phase.inactif button { cursor: not-allowed; }
+
+/* Carte Prix de la fiche bien */
+.se-prix { display: grid; gap: 12px; }
+.se-prix-l { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding-bottom: 12px; border-bottom: 1px solid var(--color-stroke-faint, #eeebe6); }
+.se-prix-l:last-child { border-bottom: 0; padding-bottom: 0; }
+.se-prix-l span { font-size: 13px; color: var(--color-taupe); }
+.se-prix-l b { font-family: var(--font-serif); font-weight: 420; font-size: 19px; white-space: nowrap; }
+.se-prix-l em { grid-column: 1 / -1; font-style: normal; font-size: 12px; color: var(--color-taupe); line-height: 1.45; }

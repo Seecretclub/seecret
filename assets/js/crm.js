@@ -1849,7 +1849,8 @@
       tauxHonoraires: (b.tauxHonoraires === null || b.tauxHonoraires === undefined) ? null : b.tauxHonoraires,
       historiquePrix: Array.isArray(b.historiquePrix) ? b.historiquePrix : [],
       ascenseur: !!b.ascenseur, exterieur: b.exterieur || '', surfaceExterieur: b.surfaceExterieur || 0,
-      delai: b.delai || '', dejaEnVente: b.dejaEnVente || '', motif: b.motif || '',
+      delai: b.delai || '', dejaEnVente: b.dejaEnVente || '', motif: b.motif || '', mandatAilleurs: typeof b.mandat === 'string' ? b.mandat : '',
+      prixSouhaite: b.prixSouhaite || 0, estimation: b.estimation || null, codePostal: b.codePostal || '',
       statut: b.statut || 'brouillon', etapeProposition: b.etapeProposition || '', proprietaireId: lead ? lead.id : null,
       photos: b.photos || [], description: b.description || '',
       coupDeCoeur: b.coupDeCoeur || '', editorial: b.editorial || null, video: b.video || null, videoVerticale: b.videoVerticale || null, visite: b.visite || null, panoramas: b.panoramas || [], venduParAgence: b.venduParAgence === true ? true : (b.venduParAgence === false ? false : null),
@@ -5722,18 +5723,62 @@
       '<div class="se-bien-grid">' + list.map(carteBien).join('') + '</div>';
   }
 
+  // Tous les prix d'un bien au même endroit : ce que veut le vendeur, ce que
+  // l'estimation lui a proposé, le net vendeur retenu, les honoraires et le prix affiché.
+  function cartePrixBien(b) {
+    const e = b.estimation || null;
+    const hai = haiPour(b, null); const net = Number(b.prix) || 0; const hon = Math.max(0, hai - net);
+    const ecart = (a, ref) => ref ? Math.round((a - ref) / ref * 100) : 0;
+    const signe = (x) => (x > 0 ? '+' : '') + x + ' %';
+    const ligne = (k, v, sub) => '<div class="se-prix-l"><span>' + k + '</span><b>' + v + '</b>' + (sub ? '<em>' + sub + '</em>' : '') + '</div>';
+    return '<div class="se-card"><h3>Prix</h3><div class="se-prix" style="margin-top:12px">' +
+      (b.prixSouhaite ? ligne('Prix souhaité par le vendeur', euro(b.prixSouhaite), 'net vendeur, saisi dans sa candidature' + (e ? ' · ' + signe(ecart(b.prixSouhaite, e.prix)) + ' par rapport à l’estimation' : '')) : '') +
+      (e ? ligne('Estimation proposée au vendeur', euro(e.prix), 'fourchette ' + euro(e.bas) + ' – ' + euro(e.haut) + ' · ' + num(e.prixM2) + ' €/m² · ' + esc(e.source || 'DVF') + (e.ventes ? ' (' + e.ventes + ' ventes' + (e.rayon ? ' à ' + e.rayon + ' m' : '') + ')' : '') + (e.at ? ' · ' + dFR(e.at) : '')) : '') +
+      ligne('Prix net vendeur retenu', net ? euro(net) : '—', net && b.prixSouhaite && net !== b.prixSouhaite ? signe(ecart(net, b.prixSouhaite)) + ' par rapport au souhait du vendeur' : (net ? euro(prixM2(b)) + ' /m² net' : 'à fixer dans « Modifier »')) +
+      ligne('Honoraires Seecret', net ? euro(hon) : '—', tauxTxt(tauxPour(b, null)) + ' %' + (b.tauxHonoraires == null ? ' (taux par défaut)' : '')) +
+      ligne('Prix affiché aux acquéreurs', net ? euro(hai) : '—', net && b.surface ? euro(Math.round(hai / b.surface)) + ' /m² honoraires inclus' : '') +
+    '</div></div>';
+  }
+  // Toute la fiche visible d'un coup d'œil : « Modifier » ne sert qu'à changer.
+  function carteLeBien(b) {
+    const oui = (x) => x ? 'Oui' : 'Non';
+    const v = (x) => (x === undefined || x === null || x === '' || x === 0) ? '<span class="se-hint">—</span>' : x;
+    const q = (QUARTIERS.find((x) => x.id === b.quartier) || {}).label || b.quartier || '';
+    const adresse = adresseComplete(b);
+    return '<div class="se-card"><h3>Le bien</h3><div class="se-kv" style="margin-top:12px">' +
+      kv('Adresse', adresse ? esc(adresse) + ' <button class="se-btn ghost sm" style="margin-left:6px" data-act="bien-maps" data-id="' + esc(b.id) + '">Voir la façade</button>' : v('')) +
+      kv('Référence', esc(b.refAgence ? b.refAgence + ' (fichier)' : b.ref)) +
+      kv('Type', v(esc(b.type || ''))) + kv('Quartier', v(esc(q))) +
+      kv('Surface', b.surface ? num(b.surface) + ' m²' : v('')) +
+      kv('Pièces', v(b.pieces)) + kv('Chambres', v(b.chambres)) + kv('Salles de bain', v(b.sdb)) +
+      kv('Étage', b.etage != null && b.etage !== '' ? (Number(b.etage) === 0 ? 'RDC' : esc(String(b.etage))) : v('')) + kv('Ascenseur', oui(b.ascenseur)) +
+      kv('Année de construction', v(b.anneeConstruction)) + kv('État', v(esc(b.etat || ''))) +
+      kv('DPE', v(esc(b.dpe || ''))) + kv('GES', v(esc(b.ges || ''))) +
+      kv('Extérieur', b.exterieur ? esc(b.exterieur) + (b.surfaceExterieur ? ' · ' + num(b.surfaceExterieur) + ' m²' : '') : v('')) +
+      kv('Annexes', (b.annexes || []).length ? esc(b.annexes.join(', ')) : v('')) +
+      kv('Charges annuelles', b.charges ? euro(b.charges) : v('')) + kv('Statut', badgeBien(b.statut)) +
+    '</div>' +
+    ((b.delai || b.dejaEnVente || b.mandatAilleurs || b.motif || b.coupDeCoeur) ? '<div class="se-divider"></div><div class="se-hint" style="text-transform:uppercase;letter-spacing:.06em;font-size:11px">Son projet de vente</div><div class="se-kv" style="margin-top:8px">' +
+      kv('Délai souhaité', v(esc(b.delai || ''))) + kv('Déjà en vente ailleurs', v(esc(b.dejaEnVente || ''))) + kv('Mandat en cours', v(esc(b.mandatAilleurs || ''))) + kv('Motif', v(esc(b.motif || ''))) +
+      (b.coupDeCoeur ? kv('Son coup de cœur', '« ' + esc(b.coupDeCoeur) + ' »') : '') +
+    '</div>' : '') +
+    '</div>';
+  }
   function carteSurSeecret(b) {
     if (!b.serveur) return '';
     const visible = surPlateforme(b);
-    const actif = b.surSeecret !== false;
+    // Avant la validation, l'option reste coupée (et grisée) : elle passe à
+    // « oui » au moment où l'agent valide le bien.
+    const valide = b.validation === 'valide';
+    const actif = valide && b.surSeecret !== false;
     return '<div class="se-card"><div class="se-row" style="justify-content:space-between;align-items:center;gap:12px;flex-wrap:nowrap">' +
         '<div style="min-width:0"><h3>Sur Seecret</h3><p class="se-hint" style="margin:4px 0 0">Publier ce bien sur la plateforme des membres.</p></div>' +
-        '<button type="button" class="se-switch' + (actif ? ' on' : '') + '" role="switch" aria-checked="' + actif + '" aria-label="Sur Seecret" data-act="bien-sur-seecret" data-id="' + b.id + '"><span></span></button>' +
+        '<button type="button" class="se-switch' + (actif ? ' on' : '') + '" role="switch" aria-checked="' + actif + '" aria-label="Sur Seecret" data-act="bien-sur-seecret" data-id="' + b.id + '"' + (valide ? '' : ' disabled style="opacity:.45;cursor:not-allowed"') + '><span></span></button>' +
       '</div>' +
       (visible
         ? '<p class="se-hint" style="margin-top:10px;color:var(--color-ok)">Visible par les membres · <a href="#/biens-club">Voir dans Biens du club</a></p>'
-        : '<p class="se-hint" style="margin-top:10px">' + esc(raisonHorsPlateforme(b)) + '</p>' +
-          (actif && !(b.statut === 'avant-premiere' || b.statut === 'ouvert') && ['brouillon', 'a_valider', 'mandat'].indexOf(b.statut) > -1 ? '<button class="se-btn soft sm" style="margin-top:8px" data-act="bien-valider" data-id="' + b.id + '">Valider et mettre en Avant-première</button>' : '')) +
+        : '<p class="se-hint" style="margin-top:10px">' + (valide ? esc(raisonHorsPlateforme(b)) : 'Pas encore sur Seecret : l’option s’activera quand vous validerez le bien.') + '</p>' +
+          (!valide && !(b.statut === 'avant-premiere' || b.statut === 'ouvert') && ['brouillon', 'a_valider', 'mandat'].indexOf(b.statut) > -1 ? '<button class="se-btn soft sm" style="margin-top:8px" data-act="bien-valider" data-id="' + b.id + '">Valider et mettre en Avant-première</button>' : '')) +
     '</div>';
   }
   function photosCrm(b) {
@@ -5922,11 +5967,8 @@
           '</div>' +
         '</div>' +
         '<div class="se-grid" style="gap:18px">' +
-          '<div class="se-card"><h3>Le bien</h3><div class="se-kv" style="margin-top:12px">' +
-            kv('Référence', esc(b.refAgence ? b.refAgence + ' (fichier)' : b.ref)) + kv('Surface', num(b.surface) + ' m²') +
-            kv('Pièces', b.pieces + ' · ' + b.chambres + ' ch. · ' + b.sdb + ' sdb') +
-            kv('Étage', b.etage != null ? (b.etage === 0 ? 'RDC' : esc(String(b.etage))) : '—') + kv('DPE', esc(b.dpe)) + kv('Année de construction', b.anneeConstruction || '—') + kv('Statut', badgeBien(b.statut)) +
-          '</div></div>' +
+          cartePrixBien(b) +
+          carteLeBien(b) +
           carteSuiviAgence(b) +
           carteVerifsMarche(b) +
           '<div class="se-card"><h3>Propriétaire' + (b.mandatOrigine ? ' & mandat d’origine' : '') + '</h3><div class="se-kv" style="margin-top:12px">' +
@@ -6920,9 +6962,17 @@
         field('Surface extérieure (m²)', 'surfaceExterieur', v.surfaceExterieur || '', { type: 'number' }) +
         field('Charges annuelles (€)', 'charges', v.charges || '', { type: 'number' }) +
         '<div class="se-field"><label>Ascenseur</label><label class="se-row" style="gap:6px;margin-top:6px"><input type="checkbox" name="ascenseur" ' + (v.ascenseur ? 'checked' : '') + '/> L’immeuble a un ascenseur</label></div>' +
+        '<div class="se-field full"><label>Annexes</label><div class="se-row" style="gap:12px;flex-wrap:wrap;margin-top:6px">' + ['Cave', 'Parking', 'Box', 'Chambre de service', 'Jardin', 'Terrasse', 'Balcon'].map((x) => '<label class="se-row" style="gap:5px"><input type="checkbox" name="annexes" value="' + x + '"' + ((v.annexes || []).indexOf(x) > -1 ? ' checked' : '') + '/> ' + x + '</label>').join('') + '</div></div>' +
+        (b && b.serveur ? field('Prix souhaité par le vendeur (€)', 'prixSouhaite', v.prixSouhaite || '', { type: 'number' }) : '') +
         field('Prix net vendeur (€)', 'prix', v.prix, { type: 'number' }) +
         field('Honoraires acquéreur (%)', 'tauxHonoraires', (v.tauxHonoraires === null || v.tauxHonoraires === undefined) ? '' : v.tauxHonoraires, { type: 'number', step: 'any', placeholder: 'Barème : ' + tauxTxt(BAREME.acq) + ' %' }) +
         field('Description', 'description', v.description, { type: 'textarea', full: true }) +
+        (b && b.serveur ? '<div class="se-field full"><p class="se-hint" style="margin:6px 0 0;text-transform:uppercase;letter-spacing:.06em;font-size:11px">Son projet de vente</p></div>' +
+          field('Délai souhaité', 'delai', v.delai || '', { placeholder: '3 mois' }) +
+          field('Déjà en vente ailleurs', 'dejaEnVente', v.dejaEnVente || '', { type: 'select', options: ['', 'Non', 'Oui'].map((x) => ({ value: x, label: x || '—' })) }) +
+          field('Mandat en cours', 'mandatAilleurs', v.mandatAilleurs || '', { type: 'select', options: ['', 'Non', 'Oui'].map((x) => ({ value: x, label: x || '—' })) }) +
+          field('Motif de la vente', 'motif', v.motif || '') +
+          field('Son coup de cœur', 'coupDeCoeur', v.coupDeCoeur || '', { full: true }) : '') +
       '</div><div class="se-modal-foot">' + (b ? boutonArchiver('bien', b.id) : '') + '<button class="se-btn ghost" type="button" data-act="modal-close">Annuler</button><button class="se-btn" type="submit">' + (b ? 'Enregistrer' : 'Créer le bien') + '</button></div></form>';
   }
 
@@ -7573,7 +7623,7 @@
         const r = await fetch('/api/biens/' + serverId + '/valider', { method: 'PATCH' });
         const res = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(res.error || 'Erreur');
-        if (b) { b.validation = 'valide'; if (['brouillon', 'a_valider', 'mandat', ''].indexOf(b.statut || '') > -1) b.statut = 'avant-premiere'; if (b.surSeecret === undefined) b.surSeecret = true; }
+        if (b) { b.validation = 'valide'; if (['brouillon', 'a_valider', 'mandat', ''].indexOf(b.statut || '') > -1) b.statut = 'avant-premiere'; b.surSeecret = true; }
         commit();
         toast('Bien validé et mis en Avant-première : il est visible des membres.', 'ok');
         ouvrirNotifieModal(res.notif, 'Bien validé');
@@ -7959,6 +8009,7 @@
     },
     'bodacc-verifier': () => { verifierBodacc(); },
     'robot-cascade': async (el) => { await enrichirCascade(el.getAttribute('data-id')); },
+    'bien-maps': (el, id) => { const b = bien(id); if (b) ouvrirCarte(b); },
     'radar-maps': (el, id) => {
       const F = radar.fiches[id]; const x = F && F.fiche; if (!x) return;
       ouvrirCarte({ id: x.id, adresse: x.adresse, codePostal: x.cp || '', ville: x.ville || '', coords: x.lat ? [x.lat, x.lon] : null });
@@ -8882,6 +8933,10 @@
         anneeConstruction: chiffres(data.get('anneeConstruction')) || null, prix: chiffres(data.get('prix')),
         ges: String(data.get('ges') || ''), etat: String(data.get('etat') || ''), exterieur: String(data.get('exterieur') || ''),
         surfaceExterieur: chiffres(data.get('surfaceExterieur')), charges: chiffres(data.get('charges')), ascenseur: data.get('ascenseur') === 'on',
+        annexes: data.getAll('annexes').map(String),
+        delai: String(data.get('delai') || ''), dejaEnVente: String(data.get('dejaEnVente') || ''), mandatAilleurs: String(data.get('mandatAilleurs') || ''),
+        motif: String(data.get('motif') || ''), coupDeCoeur: String(data.get('coupDeCoeur') || ''),
+        prixSouhaite: data.get('prixSouhaite') !== null ? chiffres(data.get('prixSouhaite')) : (existing ? existing.prixSouhaite || 0 : 0),
         tauxHonoraires: String(data.get('tauxHonoraires') || '').trim() === '' ? null : Number(String(data.get('tauxHonoraires')).replace(',', '.')),
         statut: statutDepuis(data.get('statut'), data.get('phase')), proprietaireId: data.get('proprio') || null,
         venduParAgence: data.get('statut') === 'vendu' && data.get('venduParAgence') ? data.get('venduParAgence') === 'oui' : undefined,

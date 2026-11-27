@@ -365,6 +365,14 @@ function resumeDemande(dossier) {
 const TYPES_BIEN_CRM = ['Appartement', 'Maison', 'Duplex', 'Triplex', 'Loft', 'Hôtel particulier', 'Villa', 'Maison de ville', 'Maison de village', 'Propriété', 'Château', 'Immeuble', 'Péniche', 'Terrain', 'Terrain constructible', 'Parking', 'Box', 'Bureau', 'Local commercial', 'Commerce'];
 // Complète une fiche existante avec une fiche fraîche, sans écraser ce que
 // l'agence a déjà saisi : seuls les champs vides (0, '', [], null) sont remplis.
+// Estimation calculée dans le formulaire d'adhésion (ventes DVF) : on ne garde
+// que des nombres et des libellés courts.
+function estimationPropre(e) {
+  if (!e || typeof e !== 'object') return null;
+  const n = (x) => Math.max(0, Math.round(Number(x) || 0));
+  if (!n(e.prix)) return null;
+  return { prix: n(e.prix), bas: n(e.bas), haut: n(e.haut), prixM2: n(e.prixM2), ventes: n(e.ventes), rayon: n(e.rayon), source: String(e.source || '').slice(0, 60), at: String(e.at || '').slice(0, 30) };
+}
 function completerFiche(cible, source, exclus) {
   const vide = (x) => x === undefined || x === null || x === '' || x === 0 || (Array.isArray(x) && !x.length);
   Object.keys(source || {}).forEach((k) => {
@@ -399,13 +407,13 @@ function decoupe(dossier) {
 
   // Le bien reprend les champs de la fiche « bien » du CRM (+ ce que seul le candidat sait : motif, coup de cœur…).
   const annexesBien = liste(b.annexes);
-  const bien = projet !== 'acheteur' ? { id: uid('mb'), leadId: lead.id, email: email, nom: nom, titre: '', adresse: b.adresse || '', codePostal: b.codePostal || '', ville: b.ville || '', type: TYPES_BIEN_CRM.indexOf(b.type) > -1 ? b.type : 'Appartement', quartier: b.quartier || '', transaction: 'Vente', surface: n(b.surface), pieces: n(b.pieces), chambres: n(b.chambres), sdb: n(b.sdb), etage: String(b.etage == null ? '' : b.etage).replace(/[^\d-]/g, ''), anneeConstruction: n(b.anneeConstruction) || null, dpe: classe(b.dpe), ges: classe(b.ges), etat: b.etat || '', exterieur: b.exterieur && b.exterieur !== 'Aucun' ? b.exterieur : '', surfaceExterieur: n(b.surfaceExterieur), prix: n(vente.prix), delai: vente.delai || '', dejaEnVente: vente.dejaEnVente || '', mandat: vente.mandat || '', motif: vente.motif || '', description: String(b.description || '').trim(), coupDeCoeur: String(b.coupDeCoeur || '').trim().slice(0, 280), photos: Array.isArray(b.photos) ? b.photos.slice(0, 12) : [], atouts: liste(b.atouts).concat(annexesBien).concat(b.exterieur && b.exterieur !== 'Aucun' ? [b.exterieur] : []).filter((x, i, a) => a.indexOf(x) === i), annexes: annexesBien, charges: n(b.charges), ascenseur: !!b.ascenseur || annexesBien.indexOf('Ascenseur') > -1, lat: b.lat || null, lon: b.lon || null, exclusivite: { statut: 'scan_en_cours', liens: [] }, validation: 'en_attente', statut: 'brouillon', statutDemande: null, suiveurs: 0, agent: DEFAULT_AGENT_NOM, cree: nowISO() } : null;
+  const bien = projet !== 'acheteur' ? { id: uid('mb'), leadId: lead.id, email: email, nom: nom, titre: '', adresse: b.adresse || '', codePostal: b.codePostal || '', ville: b.ville || '', type: TYPES_BIEN_CRM.indexOf(b.type) > -1 ? b.type : 'Appartement', quartier: b.quartier || '', transaction: 'Vente', surface: n(b.surface), pieces: n(b.pieces), chambres: n(b.chambres), sdb: n(b.sdb), etage: String(b.etage == null ? '' : b.etage).replace(/[^\d-]/g, ''), anneeConstruction: n(b.anneeConstruction) || null, dpe: classe(b.dpe), ges: classe(b.ges), etat: b.etat || '', exterieur: b.exterieur && b.exterieur !== 'Aucun' ? b.exterieur : '', surfaceExterieur: n(b.surfaceExterieur), prix: n(vente.prix), prixSouhaite: n(vente.prix), estimation: estimationPropre(dossier.estimation), delai: vente.delai || '', dejaEnVente: vente.dejaEnVente || '', mandat: vente.mandat || '', motif: vente.motif || '', description: String(b.description || '').trim(), coupDeCoeur: String(b.coupDeCoeur || '').trim().slice(0, 280), photos: Array.isArray(b.photos) ? b.photos.slice(0, 12) : [], atouts: liste(b.atouts).concat(annexesBien).concat(b.exterieur && b.exterieur !== 'Aucun' ? [b.exterieur] : []).filter((x, i, a) => a.indexOf(x) === i), annexes: annexesBien, charges: n(b.charges), ascenseur: !!b.ascenseur || annexesBien.indexOf('Ascenseur') > -1, lat: b.lat || null, lon: b.lon || null, exclusivite: { statut: 'scan_en_cours', liens: [] }, validation: 'en_attente', statut: 'brouillon', statutDemande: null, suiveurs: 0, agent: DEFAULT_AGENT_NOM, cree: nowISO() } : null;
   if (bien) {
     // Titre éditorial sans l'adresse (off-market), comme pour les biens importés.
     try { bien.titre = titreEditorialImport(bien); } catch (e) { bien.titre = ''; }
   }
 
-  const dossierGarde = JSON.parse(JSON.stringify({ projet: projet, vous: v, recherche: r, budget: budget, bien: b, vente: vente }));
+  const dossierGarde = JSON.parse(JSON.stringify({ projet: projet, vous: v, recherche: r, budget: budget, bien: b, vente: vente, estimation: estimationPropre(dossier.estimation) }));
   const demande = { id: uid('d'), type: 'candidature', nom: nom || 'Candidat', email: email, tel: v.tel || '', leadId: lead.id, clientId: lead.id, role: projet, montant: 0, message: resumeDemande(dossier), dossier: dossierGarde, source: 'Site', statut: 'nouvelle', cree: nowISO() };
 
   return { lead, recherche, bien, demande };
@@ -3255,6 +3263,12 @@ app.patch('/api/biens/:id', requireAdmin, (req, res) => {
   }
   const statutAvant = bien.statut;
   ['ref', 'titre', 'adresse', 'ville', 'codePostal', 'type', 'quartier', 'dpe', 'ges', 'etat', 'statut', 'description', 'exterieur'].forEach((k) => { if (typeof body[k] === 'string') bien[k] = body[k]; });
+  // Projet de vente saisi par le vendeur (modifiable par l'agence).
+  ['delai', 'dejaEnVente', 'motif'].forEach((k) => { if (typeof body[k] === 'string') bien[k] = body[k].slice(0, 200); });
+  if (typeof body.mandatAilleurs === 'string') bien.mandat = body.mandatAilleurs.slice(0, 60);
+  if (typeof body.coupDeCoeur === 'string') bien.coupDeCoeur = body.coupDeCoeur.slice(0, 280);
+  if (Array.isArray(body.annexes)) bien.annexes = body.annexes.map(String).slice(0, 20);
+  if (body.prixSouhaite !== undefined) bien.prixSouhaite = Math.max(0, Number(body.prixSouhaite) || 0);
   if (bien.statut === 'mandat') bien.statut = 'brouillon'; // ancien statut, retiré
   // Avant-première / En vente choisis par l'agent = bien validé et publié.
   let notifValidation = null;
