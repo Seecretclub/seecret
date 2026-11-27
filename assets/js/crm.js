@@ -4885,7 +4885,7 @@
   const etageTxt = (e) => e == null ? '' : e === 0 ? 'RDC' : e === 1 ? '1er étage' : e + 'e étage';
   const rdJours = (iso) => Math.max(0, Math.floor((Date.now() - new Date(iso || 0).getTime()) / 864e5));
   const rdDate = (iso) => iso ? new Date(iso).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
-  const qLib = (q) => (QUARTIERS.find((x) => x.id === q) || {}).label || q;
+  const qLib = (q) => (QUARTIERS.find((x) => x.id === q) || (radar.zones || []).find((x) => x.quartier === q) || {}).label || q;
   const rdAnnees = () => { const a = new Date().getFullYear(); return [a, a - 1, a - 2, a - 3, a - 4, a - 5].map(String); };
   async function chargerRadar(ajout) {
     if (radar.chargement) return;
@@ -4897,6 +4897,7 @@
       const r = await fetch('/api/radar/liste?' + q.toString(), { credentials: 'same-origin' });
       const d = await r.json(); if (!r.ok) throw new Error(d.error || 'erreur');
       radar.lignes = radar.page > 1 ? radar.lignes.concat(d.lignes) : d.lignes;
+      if (d.zones) { radar.zones = d.zones; radar.pmCommunes = d.pmCommunes || []; radar.pmAjout = d.pmAjout || null; }
       radar.data = d; radar.erreur = '';
     } catch (e) { radar.erreur = e.message; }
     radar.chargement = false; render();
@@ -4962,7 +4963,14 @@
     const modifie = Object.keys(RD_CRIT()).some((k) => k !== 'periode' && k !== 'tri' && JSON.stringify(radar[k]) !== JSON.stringify(RD_CRIT()[k]));
     const barre = '<div class="se-card rd-barre-filtres">' +
       '<div class="rd-form-ligne"><span class="rd-form-l">DPE fait</span><div class="rd-chips">' + periodes.map((x) => chip(radar.periode === x[0], 'radar-periode', x[0], x[1])).join('') + '</div></div>' +
-      '<div class="rd-form-ligne"><span class="rd-form-l">Secteurs</span><div class="rd-chips">' + chip(!radar.secteurs.length, 'radar-secteur', 'tout', 'Tout Paris') + QUARTIERS.filter((q) => /^p\d+$/.test(q.id)).map((q) => chip(radar.secteurs.indexOf(q.id) > -1, 'radar-secteur', q.id, q.label.replace('Paris ', ''))).join('') + '</div></div>' +
+      '<div class="rd-form-ligne"><span class="rd-form-l">Secteurs</span><div class="rd-chips">' + chip(!radar.secteurs.length, 'radar-secteur', 'tout', (radar.zones || []).length ? 'Toutes les zones' : 'Tout Paris') + QUARTIERS.filter((q) => /^p\d+$/.test(q.id)).map((q) => chip(radar.secteurs.indexOf(q.id) > -1, 'radar-secteur', q.id, q.label.replace('Paris ', ''))).join('') +
+        (radar.zones || []).map((z) => {
+          const pm = (radar.pmCommunes || []).find((x) => x.quartier === z.quartier);
+          return '<span class="rd-zone">' + chip(radar.secteurs.indexOf(z.quartier) > -1, 'radar-secteur', esc(z.quartier), esc(z.label) + (pm && !pm.proprietaires ? ' ⏳' : '')) + '<button type="button" class="rd-zone-x" data-act="radar-zone-retirer" data-id="' + esc(z.quartier) + '" aria-label="Retirer ' + esc(z.label) + '">×</button></span>';
+        }).join('') +
+        (radar.ajoutZone ? '<span class="rd-zone-form"><input class="se-input" inputmode="numeric" maxlength="5" placeholder="Code postal" data-rd-cp value="' + esc(radar.cpSaisi || '') + '"/><button type="button" class="se-btn sm" data-act="radar-zone-ajouter"' + (radar.ajoutEnCours ? ' disabled' : '') + '>' + (radar.ajoutEnCours ? '…' : 'Ajouter') + '</button><button type="button" class="se-btn ghost sm" data-act="radar-zone-annuler">Annuler</button></span>'
+          : '<button type="button" class="rd-chip rd-chip-ajout" data-act="radar-zone-form">+ Code postal</button>') +
+        '</div>' + ((radar.pmCommunes || []).some((x) => !x.proprietaires) ? '<p class="se-hint" style="margin:6px 0 0">⏳ Propriétaires sociétés en cours d’ajout pour ' + esc((radar.zones || []).filter((z) => (radar.pmCommunes || []).some((x) => x.quartier === z.quartier && !x.proprietaires)).map((z) => z.label).join(', ')) + (radar.pmAjout && radar.pmAjout.etape ? ' : ' + esc(radar.pmAjout.etape) : '') + (radar.pmAjout && radar.pmAjout.erreur ? ' (erreur : ' + esc(radar.pmAjout.erreur) + ')' : '') + '. Les DPE arrivent tout de suite, les SCI dans quelques minutes.</p>' : '') + '</div>' +
       '<div class="rd-form-ligne"><span class="rd-form-l">Classe DPE</span><div class="rd-chips">' + ['A', 'B', 'C', 'D', 'E', 'F', 'G'].map((k) => chip(radar.classes.indexOf(k) > -1, 'radar-classe', k, k)).join('') + '<span class="se-hint">' + (radar.classes.length ? '' : 'toutes') + '</span></div></div>' +
       '<div class="rd-criteres-grille">' +
         sel('type', ['Type de bien', [['', 'Appartements et maisons'], ['Appartement', 'Appartements'], ['Maison', 'Maisons']]]) +
@@ -6858,6 +6866,40 @@
     'radar-periode': (el, id) => { radar.periode = id; render(); },
     'radar-rechercher': () => { rdRelancer(); },
     'radar-vue': (el, id) => { radar.vue = id; render(); },
+    'radar-zone-form': () => { radar.ajoutZone = true; render(); setTimeout(() => { const i = document.querySelector('[data-rd-cp]'); if (i) i.focus(); }, 30); },
+    'radar-zone-annuler': () => { radar.ajoutZone = false; radar.cpSaisi = ''; render(); },
+    'radar-zone-ajouter': async () => {
+      const i = document.querySelector('[data-rd-cp]');
+      const cp = String((i && i.value) || '').trim();
+      if (!/^\d{5}$/.test(cp)) { toast('Code postal à 5 chiffres.', 'warn'); return; }
+      radar.ajoutEnCours = true; radar.cpSaisi = cp; render();
+      try {
+        const r = await fetch('/api/radar/zones', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cp: cp }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || 'erreur');
+        radar.zones = (d.zones || []).map((z) => ({ quartier: z.quartier, label: z.label, cp: z.cp }));
+        const noms = (d.ajoutees || []).map((z) => z.label);
+        toast(noms.length ? noms.join(', ') + ' ajouté' + (noms.length > 1 ? 's' : '') + ' au Radar. Les DPE arrivent, les SCI suivent.' : 'Déjà dans le Radar.', 'ok');
+        radar.ajoutZone = false; radar.cpSaisi = '';
+        radar.secteurs = (d.ajoutees || []).map((z) => z.quartier).concat(noms.length ? [] : radar.secteurs);
+        radar.page = 1; rdRelancer();
+      } catch (e) { toast('Ajout impossible : ' + (e.message || 'erreur'), 'warn'); }
+      radar.ajoutEnCours = false; render();
+    },
+    'radar-zone-retirer': async (el, id) => {
+      const z = (radar.zones || []).find((x) => x.quartier === id);
+      if (!z) return;
+      if (radar.zoneARetirer !== id) { radar.zoneARetirer = id; toast('Touchez encore × pour retirer ' + z.label + ' du Radar (les fiches déjà trouvées restent).', 'warn'); setTimeout(() => { if (radar.zoneARetirer === id) radar.zoneARetirer = null; }, 5000); return; }
+      radar.zoneARetirer = null;
+      try {
+        const r = await fetch('/api/radar/zones/' + encodeURIComponent(id), { method: 'DELETE' });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || 'erreur');
+        radar.zones = (d.zones || []).map((x) => ({ quartier: x.quartier, label: x.label, cp: x.cp }));
+        radar.secteurs = radar.secteurs.filter((x) => x !== id);
+        rdRelancer();
+      } catch (e) { toast('Impossible : ' + (e.message || 'erreur'), 'warn'); }
+    },
     'radar-vers-secteur': (el, id) => { radar.secteurs = [id]; radar.vue = 'liste'; rdRelancer(); },
     'radar-siren': (el, id) => { radar.siren = id || ''; radar.sirenNom = el.getAttribute('data-nom') || ''; radar.vue = 'liste'; rdRelancer(); },
     'radar-coord-ouvrir': (el, id) => { radar.coordOuvert = id; radar.coordChoix = radar.coordChoix || {}; render(); rdChargerOutils(false); },
@@ -8569,6 +8611,7 @@
   });
 
   document.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target.hasAttribute && e.target.hasAttribute('data-rd-cp')) { e.preventDefault(); const b = document.querySelector('[data-act="radar-zone-ajouter"]'); if (b) b.click(); return; }
     if (e.key === 'Enter' && e.target.hasAttribute && e.target.hasAttribute('data-rdf') && e.target.tagName === 'INPUT') { e.preventDefault(); radar[e.target.getAttribute('data-rdf')] = e.target.value; rdRelancer(); }
   });
   document.addEventListener('input', (e) => {

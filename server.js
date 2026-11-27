@@ -4933,7 +4933,7 @@ function pmInseeDepuisCp(cp) {
   if (/^750(0[1-9]|1[0-9]|20)$/.test(c)) return '751' + c.slice(3);
   if (c === '75116') return '75116';
   const table = { '92100': '92012', '92200': '92051', '94300': '94080' };
-  return table[c] || '';
+  return table[c] || RADAR_CP_INSEE[c] || '';
 }
 
 function pmParserAdresse(adresse) {
@@ -5220,8 +5220,9 @@ async function pmImporter(raison) {
         const c = ligne.split(';');
         if (c.length < 24) return;
         const dep = c[0].trim();
-        if (!/^(\d{2}|2A|2B|97)$/.test(dep) || PM_DEPTS.indexOf(dep) === -1) return;
+        if (!/^(\d{2}|2A|2B|97)$/.test(dep)) return;
         const insee = dep + String(c[2].trim()).padStart(3, '0');
+        if (PM_DEPTS.indexOf(dep) === -1 && !RADAR_ZONES_SUP.some((z) => z.insee === insee)) return;
         const siren = c[19].trim();
         const row = [siren, c[23].trim(), c[22].trim(), c[17].trim(), c[7].trim(), c[8].trim(), c[9].trim(), c[10].trim(),
           String(parseInt(c[11], 10) || c[11].trim()), c[12].trim(), c[15].trim(), c[16].trim(), c[5].trim(), c[6].trim(), c[20].trim(), insee, c[21].trim()];
@@ -5339,6 +5340,20 @@ app.get('/api/robot/pm/siren/:siren', requireAdmin, (req, res) => {
 // ============================================================================
 const RADAR_ARRONDISSEMENTS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
   .map((n) => ({ quartier: 'p' + n, cp: n === 16 ? '75016' : '750' + String(n).padStart(2, '0'), insee: '751' + String(n).padStart(2, '0'), label: 'Paris ' + n + (n === 1 ? 'ᵉʳ' : 'ᵉ') }));
+// Zones ajoutées par l'agence (un code postal → une ou plusieurs communes).
+// Enregistrées dans la base ; Paris reste toujours présent.
+let RADAR_ZONES_SUP = [];
+const RADAR_CP_INSEE = {};
+function radarZonesCharger() {
+  try {
+    RADAR_ZONES_SUP = (readDb().radarZones || []).filter((z) => z && z.quartier && z.cp && z.insee);
+    Object.keys(RADAR_CP_INSEE).forEach((k) => delete RADAR_CP_INSEE[k]);
+    const parCp = {};
+    RADAR_ZONES_SUP.forEach((z) => { (parCp[z.cp] = parCp[z.cp] || []).push(z.insee); });
+    Object.keys(parCp).forEach((cp) => { if (parCp[cp].length === 1) RADAR_CP_INSEE[cp] = parCp[cp][0]; });
+  } catch (e) { RADAR_ZONES_SUP = []; }
+}
+function radarZones() { return RADAR_ARRONDISSEMENTS.concat(RADAR_ZONES_SUP); }
 const RADAR_INSTITUTIONNELS = /\b(ASSURANCE|ASSURANCES|MUTUELLE|BANQUE|CAISSE|CREDIT|SCPI|OPCI|FONCIERE|REIT|HABITAT|LOGEMENT|BAILLEUR|PARIS HABITAT|RIVP|ICF|CDC|ALLIANZ|AXA|GENERALI|MACIF|MAIF|COVEA|AVIVA|PREDICA|AMUNDI|GECINA|ICADE|COVIVIO|UNIBAIL|SOCIETE GENERALE|BNP|LCL)\b/;
 const radarAnnee = (d) => { const t = new Date(d || 0).getTime(); return isFinite(t) ? t : 0; };
 
@@ -5346,6 +5361,7 @@ const radarAnnee = (d) => { const t = new Date(d || 0).getTime(); return isFinit
 const RADAR_SELECT = 'numero_dpe,date_reception_dpe,adresse_ban,adresse_brut,code_postal_ban,identifiant_ban,type_batiment,surface_habitable_logement,numero_etage_appartement,complement_adresse_logement,complement_adresse_batiment,etiquette_dpe,nombre_niveau_immeuble,_geopoint,annee_construction,periode_construction';
 function radarQsAdeme(arr, c) {
   const q = ['code_postal_ban:' + arr.cp];
+  if (arr.plusieursCommunes) q.push('code_insee_ban:' + arr.insee);
   q.push('date_reception_dpe:[' + (c.depuis || '*') + ' TO ' + (c.jusqua || '*') + ']');
   if (c.type === 'appartement' || c.type === 'maison') q.push('type_batiment:' + c.type); else q.push('(type_batiment:appartement OR type_batiment:maison)');
   q.push('surface_habitable_logement:[' + (c.surfaceMin || 9) + ' TO ' + (c.surfaceMax || '*') + ']');
@@ -5395,6 +5411,7 @@ function radarProprietaire(f, lotsFournis) {
   if (lotsFournis) lots = lotsFournis.filter((l) => /^[PUN]$/.test(l.droit || 'P'));
   else {
     const q = pmParserAdresse(f.adresse + ' ' + f.cp);
+    if (f.insee) q.insee = f.insee;
     if (!q.insee || !q.numero) return { statut: 'non_identifie' };
     lots = pmLotsImmeuble(q).filter((l) => /^[PUN]$/.test(l.droit || 'P'));
   }
@@ -5586,12 +5603,12 @@ async function enParallele(liste, n, fn) {
   await Promise.all(Array.from({ length: Math.min(n, liste.length) }, async () => { while (i < liste.length) { const k = i++; await fn(liste[k], k); } }));
 }
 // Critères par défaut : tout Paris, DPE des 4 derniers mois.
-function radarCriteresDefaut() { return { secteurs: RADAR_ARRONDISSEMENTS.map((a) => a.quartier), type: '', surfaceMin: 25, surfaceMax: 0, etageMin: 0, etageMax: 0, classes: [], depuis: new Date(Date.now() - 120 * 864e5).toISOString().slice(0, 10), jusqua: '', proprio: '' }; }
+function radarCriteresDefaut() { return { secteurs: radarZones().map((a) => a.quartier), type: '', surfaceMin: 25, surfaceMax: 0, etageMin: 0, etageMax: 0, classes: [], depuis: new Date(Date.now() - 120 * 864e5).toISOString().slice(0, 10), jusqua: '', proprio: '' }; }
 function radarCriteresPropres(b) {
   const d = radarCriteresDefaut();
   const n = (v) => Math.max(0, Math.round(Number(v) || 0));
   const date = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : '';
-  const secteurs = Array.isArray(b.secteurs) ? b.secteurs.filter((q) => RADAR_ARRONDISSEMENTS.some((a) => a.quartier === q)) : [];
+  const secteurs = Array.isArray(b.secteurs) ? b.secteurs.filter((q) => radarZones().some((a) => a.quartier === q)) : [];
   return {
     secteurs: secteurs.length ? secteurs : d.secteurs, type: ['appartement', 'maison'].indexOf(b.type) > -1 ? b.type : '',
     surfaceMin: n(b.surfaceMin), surfaceMax: n(b.surfaceMax), etageMin: n(b.etageMin), etageMax: n(b.etageMax),
@@ -5683,7 +5700,7 @@ function radarJob(id) { return RADAR_JOBS[id] || null; }
 async function radarRechercher(rechercheId, criteres) {
   const job = RADAR_JOBS[rechercheId] = { enCours: true, etape: 'Lecture des DPE…', trouves: 0, total: 0, enrichis: 0, aEnrichir: 0, debut: Date.now(), erreurs: [] };
   try {
-    const arrs = RADAR_ARRONDISSEMENTS.filter((a) => criteres.secteurs.indexOf(a.quartier) > -1);
+    const arrs = radarZones().filter((a) => criteres.secteurs.indexOf(a.quartier) > -1);
     const lus = [];
     let faits = 0;
     const max = Math.floor(6000 / Math.max(1, arrs.length)) + 200;
@@ -5993,7 +6010,12 @@ setTimeout(() => {
 }, 20 * 1000);
 // Toutes les heures : les DPE du mois pour tout Paris (pour « aujourd'hui »).
 if (RS) {
-  const rafraichir = () => { const per = radarPeriode('mois'); const arrs = RADAR_ARRONDISSEMENTS.filter((a) => !radarCouvert(a, per)); if (arrs.length) radarCharger('auto|recent', arrs, per); };
+  const rafraichir = () => {
+    const per = radarPeriode('mois'); const arrs = radarZones().filter((a) => !radarCouvert(a, per)); if (arrs.length) radarCharger('auto|recent', arrs, per);
+    // Propriétaires des zones ajoutées : on réessaie tant que ce n'est pas fait.
+    const manq = RADAR_ZONES_SUP.filter((z) => !pmCommuneIndexee(z.insee)).map((z) => z.insee);
+    if (manq.length) pmAjouterCommunes(manq).catch(() => {});
+  };
   setTimeout(rafraichir, 90 * 1000);
   setInterval(rafraichir, 3600e3).unref();
 }
@@ -6053,16 +6075,134 @@ function radarLigne(g) {
     acquereurs: g.acquereurs };
 }
 
+// ---- Zones du Radar ajoutées par code postal ----
+function pmCommuneIndexee(insee) {
+  const m = pmMeta();
+  if (!m) return false;
+  return PM_DEPTS.indexOf(String(insee).slice(0, 2)) > -1 || !!(m.communes && m.communes[insee]);
+}
+const PM_AJOUT = { enCours: false, etape: '', erreur: '' };
+// Ajoute au fichier propriétaires (DGFiP) les locaux des sociétés de quelques
+// communes, sans tout réimporter : le zip national est lu dans le dossier
+// temporaire du conteneur, seules les lignes de ces communes sont ajoutées.
+async function pmAjouterCommunes(insees) {
+  if (PM_AJOUT.enCours || PM_IMPORT.enCours) return;
+  const meta = pmMeta();
+  if (!meta) return; // pas encore de fichier : l'import complet inclura ces communes
+  const aFaire = insees.filter((i) => !pmCommuneIndexee(i));
+  if (!aFaire.length) return;
+  Object.assign(PM_AJOUT, { enCours: true, etape: 'Recherche du fichier DGFiP…', erreur: '' });
+  let base = null;
+  const tmpZip = fs.mkdtempSync(path.join(require('os').tmpdir(), 'pm-aj-'));
+  try {
+    const libre = placeLibreMo();
+    if (libre !== null && libre < 40) throw new Error('disque presque plein (' + libre + ' Mo libres)');
+    const { fichiers } = await pmTrouverFichiers();
+    pmFermerBase();
+    const Database = require('better-sqlite3');
+    base = new Database(path.join(PM_DIR, 'pm.db'));
+    const socId = base.prepare('SELECT id FROM soc WHERE siren = ? AND nom = ? AND forme = ? LIMIT 1');
+    const voieId = base.prepare('SELECT id FROM voie WHERE nature = ? AND nom = ? LIMIT 1');
+    const insSoc = base.prepare('INSERT INTO soc (siren, nom, forme, groupe, formeCode) VALUES (?, ?, ?, ?, ?)');
+    const insVoie = base.prepare('INSERT INTO voie (nature, nom) VALUES (?, ?)');
+    const insLot = base.prepare('INSERT INTO lot VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    const viser = new Set(aFaire);
+    const communes = {};
+    let lignes = [];
+    const vider = base.transaction((l) => l.forEach((c) => {
+      const insee = c[0].trim() + String(c[2].trim()).padStart(3, '0');
+      const siren = c[19].trim(); const nom = c[23].trim(); const forme = c[22].trim();
+      let s1 = socId.get(siren, nom, forme); const idS = s1 ? s1.id : insSoc.run(siren, nom, forme, c[17].trim(), c[20].trim()).lastInsertRowid;
+      let v1 = voieId.get(c[9].trim(), c[10].trim()); const idV = v1 ? v1.id : insVoie.run(c[9].trim(), c[10].trim()).lastInsertRowid;
+      insLot.run(insee, String(parseInt(c[11], 10) || c[11].trim()), c[12].trim(), idV, idS, c[21].trim(), c[15].trim(), c[16].trim(), c[5].trim(), c[6].trim(), c[7].trim(), c[8].trim());
+      communes[insee] = c[3].trim();
+    }));
+    let n = 0;
+    for (const f of fichiers) {
+      const zipLocal = path.join(tmpZip, 'source.zip');
+      PM_AJOUT.etape = 'Téléchargement du fichier DGFiP…';
+      await pmTelecharger(f.url, zipLocal);
+      PM_AJOUT.etape = 'Lecture des locaux des sociétés (' + aFaire.join(', ') + ')…';
+      await pmLireZip(zipLocal, (ligne) => {
+        const c = ligne.split(';');
+        if (c.length < 24) return;
+        const insee = c[0].trim() + String(c[2].trim()).padStart(3, '0');
+        if (!viser.has(insee)) return;
+        lignes.push(c); n++;
+        if (lignes.length >= 2000) { vider(lignes); lignes = []; }
+      }, tmpZip);
+      try { fs.unlinkSync(zipLocal); } catch (e) { /* rien */ }
+    }
+    if (lignes.length) vider(lignes);
+    base.close(); base = null;
+    const m = pmMeta() || {};
+    m.communes = Object.assign({}, m.communes || {}, communes);
+    aFaire.forEach((i) => { if (!m.communes[i]) m.communes[i] = '(aucune société)'; });
+    m.communesSup = Array.from(new Set((m.communesSup || []).concat(aFaire)));
+    fs.writeFileSync(path.join(PM_DIR, 'meta.json'), JSON.stringify(m, null, 1));
+    pmFermerBase(); PM_CACHE.clear();
+    Object.assign(PM_AJOUT, { enCours: false, etape: n + ' locaux de sociétés ajoutés pour ' + aFaire.join(', ') });
+    console.log('[pm-locaux] ' + PM_AJOUT.etape);
+    setTimeout(() => { radarReidentifier().catch((e) => console.error('[radar] ré-identification :', e.message)); }, 1000);
+  } catch (e) {
+    try { if (base) base.close(); } catch (x) { /* rien */ }
+    Object.assign(PM_AJOUT, { enCours: false, erreur: String(e.message || e), etape: 'Échec' });
+    console.error('[pm-locaux] ajout de communes :', e.message || e);
+  } finally { fs.rmSync(tmpZip, { recursive: true, force: true }); }
+}
+app.get('/api/radar/zones', requireAdmin, (req, res) => {
+  res.json({ ok: true, zones: RADAR_ZONES_SUP, proprietaires: PM_AJOUT });
+});
+app.post('/api/radar/zones', requireAdmin, async (req, res) => {
+  const cp = String((req.body && req.body.cp) || '').trim();
+  if (!/^\d{5}$/.test(cp)) return res.status(400).json({ error: 'Code postal à 5 chiffres.' });
+  if (/^75\d{3}$/.test(cp)) return res.status(400).json({ error: 'Paris est déjà couvert par le Radar.' });
+  let communes = [];
+  try {
+    const r = await fetch('https://geo.api.gouv.fr/communes?codePostal=' + cp + '&fields=nom,code&format=json', { signal: AbortSignal.timeout(10000) });
+    communes = (await r.json().catch(() => [])) || [];
+  } catch (e) { return res.status(502).json({ error: 'Service des communes injoignable, réessayez.' }); }
+  if (!communes.length) return res.status(404).json({ error: 'Aucune commune pour le code postal ' + cp + '.' });
+  const db = readDb();
+  db.radarZones = db.radarZones || [];
+  const ajoutees = [];
+  communes.forEach((c) => {
+    const quartier = 'c' + c.code;
+    if (db.radarZones.some((z) => z.quartier === quartier)) return;
+    const z = { quartier: quartier, cp: cp, insee: c.code, label: c.nom + (communes.length > 1 ? ' (' + cp + ')' : ''), plusieursCommunes: communes.length > 1, ajouteLe: nowISO(), ajoutePar: nomComplet(req.lead) };
+    db.radarZones.push(z); ajoutees.push(z);
+  });
+  writeDb(db);
+  radarZonesCharger();
+  if (ajoutees.length) {
+    // DPE récents de la zone tout de suite, et propriétaires sociétés en tâche de fond.
+    if (RS) { const per = radarPeriode('mois'); radarCharger('zone|' + cp, ajoutees, per); }
+    setTimeout(() => pmAjouterCommunes(ajoutees.map((z) => z.insee)).catch(() => {}), 500);
+  }
+  res.json({ ok: true, ajoutees: ajoutees, zones: RADAR_ZONES_SUP });
+});
+app.delete('/api/radar/zones/:quartier', requireAdmin, (req, res) => {
+  // Retire la zone de la liste des secteurs ; les fiches déjà trouvées restent.
+  const db = readDb();
+  const avant = (db.radarZones || []).length;
+  db.radarZones = (db.radarZones || []).filter((z) => z.quartier !== req.params.quartier);
+  if (db.radarZones.length === avant) return res.status(404).json({ error: 'Zone introuvable' });
+  writeDb(db);
+  radarZonesCharger();
+  res.json({ ok: true, zones: RADAR_ZONES_SUP });
+});
+setTimeout(radarZonesCharger, 0);
+
 // Liste : période + filtres ; charge les DPE manquants en tâche de fond.
 app.get('/api/radar/liste', requireAdmin, (req, res) => {
   if (!RS) return res.status(503).json({ error: 'Base du Radar indisponible sur ce serveur.' });
   const per = radarPeriode(String(req.query.periode || 'mois'));
   const Q = req.query;
-  const secteurs = String(Q.secteurs || Q.secteur || '').split(',').filter((q) => RADAR_ARRONDISSEMENTS.some((a) => a.quartier === q));
+  const secteurs = String(Q.secteurs || Q.secteur || '').split(',').filter((q) => radarZones().some((a) => a.quartier === q));
   const secteur = secteurs.length === 1 ? secteurs[0] : '';
   const type = Q.type === 'Maison' || Q.type === 'Appartement' ? String(Q.type) : '';
   const smin = Math.max(0, Number(Q.surfaceMin) || 0);
-  const arrs = RADAR_ARRONDISSEMENTS.filter((a) => !secteurs.length || secteurs.indexOf(a.quartier) > -1);
+  const arrs = radarZones().filter((a) => !secteurs.length || secteurs.indexOf(a.quartier) > -1);
   const manquants = arrs.filter((a) => !radarCouvert(a, per));
   const cleCharg = (secteurs.length ? secteurs.join('+') : 'paris') + '|' + (per.recent ? 'recent' : per.annee || per.de);
   if (manquants.length) radarCharger(cleCharg, manquants, per);
@@ -6122,7 +6262,7 @@ app.get('/api/radar/liste', requireAdmin, (req, res) => {
   const job = RADAR_CHARGEMENTS[cleCharg] || null;
   // Vues d'ensemble (sur la sélection) : secteurs, portefeuilles des sociétés, carte.
   const vues = page > 1 ? null : (() => {
-    const secteursV = RADAR_ARRONDISSEMENTS.map((a) => {
+    const secteursV = radarZones().map((a) => {
       const l = liste.filter((g) => g.quartier === a.quartier);
       return { quartier: a.quartier, label: a.label, dpe: l.length, identifies: l.filter((g) => pr(g).statut === 'identifie').length, fortes: l.filter((g) => g.chances.niveau === 'forte').length, clients: ctx.clients.filter((x) => x.c.quartiers.indexOf(a.quartier) > -1).length };
     }).filter((x) => x.dpe || x.clients).sort((a, b) => (b.fortes * 3 + b.dpe + b.clients * 5) - (a.fortes * 3 + a.dpe + a.clients * 5));
@@ -6132,7 +6272,7 @@ app.get('/api/radar/liste', requireAdmin, (req, res) => {
     const carte = liste.filter((g) => g.lat && g.lon).slice(0, 1500).map((g) => ({ id: g.id, lat: g.lat, lon: g.lon, n: g.chances.niveau, s: g.chances.score, t: g.type + ' · ' + g.surface + ' m² · ' + (g.etage == null ? '' : g.etage === 0 ? 'RDC' : g.etage + 'e') + ' · DPE ' + (g.dpe || '?'), a: g.adresse, p: pr(g).statut === 'identifie' ? pr(g).nom : '' }));
     return { secteurs: secteursV, portefeuilles: portefeuilles, carte: carte };
   })();
-  res.json({ ok: true, periode: per, total: liste.length, page: page, lignes: liste.slice((page - 1) * 50, page * 50).map(radarLigne), une: une, vues: vues,
+  res.json({ ok: true, zones: RADAR_ZONES_SUP.map((z) => ({ quartier: z.quartier, label: z.label, cp: z.cp })), pmCommunes: RADAR_ZONES_SUP.map((z) => ({ quartier: z.quartier, proprietaires: pmCommuneIndexee(z.insee) })), pmAjout: { enCours: PM_AJOUT.enCours, etape: PM_AJOUT.etape, erreur: PM_AJOUT.erreur }, periode: per, total: liste.length, page: page, lignes: liste.slice((page - 1) * 50, page * 50).map(radarLigne), une: une, vues: vues,
     chargement: job && job.enCours ? { faits: job.faits, total: job.total, lus: job.lus } : null, erreurs: job ? job.erreurs.slice(0, 3) : [],
     proprietaires: { disponible: !!pmMeta(), millesime: (pmMeta() || {}).annee || null, import: PM_IMPORT }, exa: !!process.env.EXA_API_KEY,
     plafond: rows.length >= 20000 });
@@ -6162,6 +6302,7 @@ async function radarPermisCommune(insee) {
 }
 function radarPermisAdresse(liste, f) {
   const q = pmParserAdresse(f.adresse + ' ' + f.cp);
+  if (f.insee) q.insee = f.insee;
   const siren = f.proprietaire && f.proprietaire.siren;
   return (liste || []).filter((p) => {
     if (siren && String(p.applicant_siren || '') === siren) return true;
@@ -6244,7 +6385,7 @@ async function radarEnrichirFiche(f) {
       if (dm.probable) Object.assign(p, { statut: 'identifie', confiance: 'siège SIRENE au même étage', siren: dm.probable.siren, nom: dm.probable.nom, estSci: true, source: 'sirene', dirigeantsSirene: dm.probable.dirigeants });
     }).catch(() => null)));
   }
-  const arr = RADAR_ARRONDISSEMENTS.find((a) => a.insee === f.insee);
+  const arr = radarZones().find((a) => a.insee === f.insee);
   if (arr) t.push(avant(avecCache('prix', 'radarPrix', arr.insee + '|' + f.type, 30, (tmp) => radarPrixM2(tmp, arr, f.type)).catch(() => null)));
   await Promise.all(t);
   // Adresse non reconnue dans le fichier DGFiP : on essaie la parcelle cadastrale.
@@ -6312,7 +6453,7 @@ app.get('/api/radar/fiche/:id', requireAdmin, async (req, res) => {
   res.json({ ok: true, enCours: enCours, fiche: Object.assign({}, g, { _acq: undefined }), acquereurs: g._acq,
     biensSociete: p.statut === 'identifie' ? radarBiensSociete(p.siren).slice(0, 30) : [],
     memeImmeuble: memes.slice(0, 12).map((x) => ({ id: x.id, etage: x.etage, surface: x.surface, dpeDate: x.dpeDate, dpe: x.dpe })),
-    lotsImmeuble: pmMeta() ? (() => { const q = pmParserAdresse(f.adresse + ' ' + f.cp); return q.insee && q.numero ? pmLotsImmeuble(q).sort(pmTriNiveau).slice(0, 120).map((l) => ({ niveau: l.niveauLibelle, porte: l.porte, batiment: l.batiment, nom: l.nom, siren: l.siren, type: l.type, droit: l.droitLibelle })) : []; })() : [],
+    lotsImmeuble: pmMeta() ? (() => { const q = pmParserAdresse(f.adresse + ' ' + f.cp); if (f.insee) q.insee = f.insee; return q.insee && q.numero ? pmLotsImmeuble(q).sort(pmTriNiveau).slice(0, 120).map((l) => ({ niveau: l.niveauLibelle, porte: l.porte, batiment: l.batiment, nom: l.nom, siren: l.siren, type: l.type, droit: l.droitLibelle })) : []; })() : [],
     kaspr: fournisseurConfigure('KASPR_API_KEY'), fournisseursPro: ['SOCIETEINFO_API_KEY', 'DROPCONTACT_API_KEY', 'DATAGMA_API_KEY', 'FULLENRICH_API_KEY'].filter(fournisseurConfigure).length,
     agent: { nom: agent, email: req.lead.email || '', tel: req.lead.tel || '' }, lead: g.leadId ? (db.leads.find((l) => l.id === g.leadId) ? { id: g.leadId } : null) : null });
 });

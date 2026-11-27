@@ -655,3 +655,11 @@ body.se-maps-open { overflow: hidden; }
 .se-video.horizontal { width: 100%; aspect-ratio: 16 / 9; }
 .se-video.vertical { width: min(100%, 260px); aspect-ratio: 9 / 16; }
 .se-video.vertical { object-fit: cover; }
+
+/* Radar : zones ajoutées par code postal */
+.rd-zone{display:inline-flex;align-items:center;gap:0}
+.rd-zone .rd-chip{border-top-right-radius:0;border-bottom-right-radius:0}
+.rd-zone-x{border:1px solid var(--color-line,#e5e2dc);border-left:0;background:transparent;border-radius:0 999px 999px 0;padding:0 8px;height:30px;cursor:pointer;color:var(--color-graphite,#555);font-size:15px;line-height:1}
+.rd-chip-ajout{border-style:dashed !important}
+.rd-zone-form{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap}
+.rd-zone-form .se-input{width:110px}
