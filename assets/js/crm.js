@@ -203,7 +203,7 @@
 
     return {
       v: 1,
-      agent: { prenom: 'Gabriel', nom: 'Taieb', email: 'gabriel.taieb@seecret.club', tel: '06 81 29 21 02', agence: 'Seecret — Paris centre' },
+      agent: { prenom: 'Gabriel', nom: 'Taieb', email: 'contact@seecret.fr', tel: '06 81 29 21 02', agence: 'Seecret — Paris centre' },
       // Identité réelle de la personne connectée (serveur, via /api/auth/me) —
       // distincte de `agent` ci-dessus qui n'est qu'un profil d'affichage local.
       // null jusqu'au premier appel réussi à syncIdentite().
@@ -270,6 +270,8 @@
         if (parsed && parsed.v === 1) {
           const s = Object.assign(seed(), parsed);
           s.filtres = s.filtres || {};
+          // Ancienne adresse du profil agent (domaine seecret.club) → adresse officielle.
+          if (s.agent && /@seecret\.club$/i.test(s.agent.email || '')) s.agent.email = 'contact@seecret.fr';
           // La recherche texte ne survit pas à un rechargement : sinon un ancien
           // mot (« romain ») filtre en silence toutes les listes.
           delete s.filtres.q;
