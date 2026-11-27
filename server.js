@@ -330,7 +330,7 @@ function notifierClient(db, { leadId, email, tel, prenom, titre, message, lien }
   if (mailer && dest) {
     mailer.sendMail({
       from: '"Bonjour Seecret" <' + FROM_EMAIL + '>', to: dest, subject: titre,
-      html: emailValidationLegere(prenom || '', message)
+      html: emailValidationLegere(prenom || '', String(message || '').replace(/\n/g, '<br>'))
     }).catch((err) => console.error('[notif] email échoué :', err.message));
   }
   return { tel: tel || '', prenom: prenom || '', message: message, lien: lien || '', waMessage: 'Bonjour ' + (prenom || '') + ', ' + message + (lien ? ' ' + lien : '') };
@@ -8118,6 +8118,37 @@ app.post('/api/demandes/:id/decision', requireAdmin, async (req, res) => {
 
   let lien = originOf(req) + '/espace.html';
   let emailEnvoye = false, emailErreur = '';
+  if (decision === 'refuser' && d.type === 'candidature') {
+    d.statut = 'refusee';
+    d.traiteeAt = nowISO();
+    // Candidature refusée : la fiche lead et ses recherches / biens partent aux
+    // Archivés (rien n'est supprimé, tout reste restaurable) pour ne pas
+    // encombrer le CRM.
+    const auteur = nomComplet(req.lead) || 'Agent';
+    if (lead) {
+      lead.statut = 'refuse';
+      const archiver = (k, f) => {
+        if (f.archive) return;
+        f.archive = true; f.archiveLe = nowISO(); f.archivePar = auteur; f.archiveMotif = 'Candidature refusée';
+        logActivite(db, { leadId: lead.id, bienId: k === 'bien' ? f.id : null, rechercheId: k === 'recherche' ? f.id : null, type: 'archive', auteur: auteur, detail: 'Candidature refusée' });
+      };
+      archiver('lead', lead);
+      db.recherches.filter((r) => r.clientId === lead.id || r.leadId === lead.id).forEach((r) => archiver('recherche', r));
+      db.biens.filter((b) => b.leadId === lead.id).forEach((b) => archiver('bien', b));
+    }
+    const notif = notifierClient(db, {
+      leadId: lead ? lead.id : (d.leadId || null), email: d.email, tel: tel, prenom: prenom,
+      titre: 'Votre candidature au club Seecret',
+      message: 'Merci sincèrement pour l’intérêt que vous portez à Seecret et pour le temps consacré à votre candidature.\n\n' +
+        'Le club réunit volontairement un cercle restreint de membres, et nous ne sommes malheureusement pas en mesure de donner une suite favorable à votre demande pour le moment.\n\n' +
+        'Cette décision ne dit rien de la qualité de votre projet : nos critères évoluent avec les biens que nous accompagnons, et nous serions heureux d’étudier à nouveau votre candidature à l’avenir.\n\n' +
+        'Nous vous souhaitons pleine réussite dans votre projet immobilier.',
+      lien: null
+    });
+    writeDb(db);
+    return res.json({ ok: true, decision: 'refuser', lien: '', tel: tel, prenom: prenom, notif: notif, archive: !!lead });
+  }
+
   if (decision === 'refuser') {
     d.statut = 'refusee';
     d.traiteeAt = nowISO();
