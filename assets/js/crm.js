@@ -5324,17 +5324,43 @@
     try { const r = await fetch('/api/radar/credits' + (rafraichir ? '?rafraichir=1' : ''), { credentials: 'same-origin' }); const d = await r.json(); if (r.ok) radar.outilsCoord = d.outils; } catch (e) { /* hors ligne */ }
     render();
   }
+  // Lettre au propriétaire : ton maison de transactions confidentielles, signée
+  // avec le profil de l'agent du CRM (nom, téléphone, email de la fiche agent).
+  // Polices de la marque (Fraunces, Instrument Sans) recopiées depuis les feuilles
+  // déjà chargées par le CRM, pour les documents ouverts dans une autre fenêtre.
+  function policesMarque() {
+    let css = '';
+    try {
+      Array.prototype.forEach.call(document.styleSheets, (sh) => {
+        let regles; try { regles = sh.cssRules; } catch (e) { return; }
+        Array.prototype.forEach.call(regles || [], (r) => { if (r.type === 5 && /Fraunces|Instrument Sans/.test(r.cssText)) css += r.cssText; });
+      });
+    } catch (e) { /* polices de repli */ }
+    return css;
+  }
+  function rdSignataire(F) {
+    const a = state.agent || {}; const srv = F.agent || {};
+    const nom = ((a.prenom || '') + ' ' + (a.nom || '')).trim() || srv.nom || '';
+    return { nom: nom, tel: a.tel || srv.tel || '', email: a.email || srv.email || '' };
+  }
   function rdLettre(F) {
-    const x = F.fiche; const p = x.proprietaire || {}; const d = p.dirigeant; const ag = F.agent || {};
-    const ou = x.adresse + (x.etage != null ? ', ' + etageTxt(x.etage) : '') + (x.porte ? ', porte ' + x.porte : '');
-    const dest = p.statut === 'identifie' ? (p.nom + (d ? '\nÀ l’attention de ' + (d.prenom || '') + ' ' + (d.nom || '') : '') + '\n' + ((p.societe && p.societe.siege) || '')) : 'Madame, Monsieur le Propriétaire\n' + ou;
-    const corps = (p.statut === 'identifie' && d ? 'Madame, Monsieur,' : 'Madame, Monsieur,') + '\n\n' +
-      'Je suis ' + (ag.nom || 'agent immobilier') + ', de Seecret, un club immobilier parisien qui vend des biens en toute discrétion, sans annonce publique, à des acquéreurs déjà vérifiés.\n\n' +
-      (function () { const n = ((F.acquereurs || {}).club || []).length + ((F.acquereurs || {}).leads || []).length; return n >= 2 ? 'Plusieurs de nos clients recherchent précisément un ' + x.type.toLowerCase() + ' comme le vôtre (' + ou + ').' : n === 1 ? 'L’un de nos clients recherche précisément un ' + x.type.toLowerCase() + ' comme le vôtre (' + ou + ').' : 'Nos clients recherchent des biens dans votre quartier, et votre ' + x.type.toLowerCase() + ' (' + ou + ') pourrait les intéresser.'; })() +
-      (x.prixBas ? ' Les ventes récentes du quartier situent un bien de ' + x.surface + ' m² entre ' + mEuro(x.prixBas) + ' et ' + mEuro(x.prixHaut) + '.' : '') + '\n\n' +
-      'Si vous envisagez de vendre, ou si vous souhaitez simplement connaître la valeur de votre bien aujourd’hui, je serais heureux de vous rencontrer, sans engagement.\n\n' +
-      'Bien cordialement,\n\n' + (ag.nom || '') + '\nSeecret' + (ag.tel ? '\n' + ag.tel : '') + (ag.email ? '\n' + ag.email : '');
-    return { dest: dest, corps: corps };
+    const x = F.fiche; const p = x.proprietaire || {}; const d = p.dirigeant; const ag = rdSignataire(F);
+    const type = String(x.type || 'bien').toLowerCase();
+    const etage = x.etage != null ? etageTxt(x.etage) : '';
+    const ou = x.adresse + (etage ? ', ' + etage : '') + (x.porte ? ', porte ' + x.porte : '');
+    const dest = p.statut === 'identifie' ? (p.nom + (d ? '\nÀ l’attention de ' + ((d.prenom || '') + ' ' + (d.nom || '')).trim() : '') + '\n' + ((p.societe && p.societe.siege) || '')) : 'Madame, Monsieur le Propriétaire\n' + ou;
+    const n = ((F.acquereurs || {}).club || []).length + ((F.acquereurs || {}).leads || []).length;
+    const lieu = x.adresse + (etage ? ' (' + etage + ')' : '');
+    const interet = n >= 2 ? 'Plusieurs de nos clients recherchent aujourd’hui précisément un ' + type + ' tel que le vôtre, au ' + lieu + '.'
+      : n === 1 ? 'L’un de nos clients recherche aujourd’hui précisément un ' + type + ' tel que le vôtre, au ' + lieu + '.'
+      : 'Votre ' + type + ' du ' + lieu + ' correspond en tous points au type de bien que notre clientèle recherche dans le quartier.';
+    const corps = 'Madame, Monsieur,\n\n' +
+      'Je me permets de vous écrire au nom de Seecret, club immobilier privé à Paris dédié aux transactions confidentielles. Nous accompagnons un cercle restreint d’acquéreurs, dont le financement est vérifié, à la recherche de biens d’exception qui ne paraissent jamais sur les sites d’annonces.\n\n' +
+      interet + (x.prixBas ? ' À titre indicatif, les transactions récentes du quartier situent un bien de ' + x.surface + ' m² entre ' + mEuro(x.prixBas) + ' et ' + mEuro(x.prixHaut) + ' ; une estimation précise tiendrait compte de ses qualités propres.' : '') + '\n\n' +
+      'Si une cession est envisageable, aujourd’hui ou à plus long terme, nous pouvons vous présenter ces acquéreurs en toute discrétion : sans annonce, sans visites inutiles, et selon le calendrier qui vous convient. Je serais également heureux de vous proposer une estimation confidentielle, sans aucun engagement de votre part.\n\n' +
+      'Je me tiens à votre entière disposition pour convenir d’un rendez-vous, au moment et à l’endroit qui vous conviendront, et vous prie d’agréer, Madame, Monsieur, l’expression de mes salutations distinguées.\n\n' +
+      (ag.nom || '') + '\nSeecret · Club immobilier privé' + (ag.tel ? '\n' + ag.tel : '') + (ag.email ? '\n' + ag.email : '');
+    return { dest: dest, corps: corps, signataire: ag };
   }
   function viewRadarFiche(r) {
     const id = decodeURIComponent(r.param || '');
@@ -5389,10 +5415,9 @@
     const listeAcq = (l, vide) => l.length ? '<div class="se-list">' + l.map((cl) => '<a class="se-list-item" href="#/client/srv-' + esc(cl.id) + '" style="text-decoration:none;color:inherit;flex-wrap:wrap;gap:6px"><div style="flex:1;min-width:160px"><b>' + esc(cl.nom || 'Client') + '</b>' + (cl.aReconfirmer ? ' <span class="rd-pastille orange">à reconfirmer</span>' : '') + '<div class="rd-criteres">' + cl.criteres.map((k) => '<span class="' + (k.ok ? 'ok' : 'ko') + '">' + (k.ok ? '✓' : '!') + ' ' + esc(k.c) + ' : ' + esc(k.d) + '</span>').join('') + '</div></div></a>').join('') + '</div>' : '<p class="se-hint">' + vide + '</p>';
     const clients = '<div class="se-card"><h3>Clients intéressés · ' + (A.club.length + A.leads.length) + '</h3><div class="rd-acq-cols" style="margin-top:10px"><div><span class="se-kicker">CLUB · ' + A.club.length + '</span>' + listeAcq(A.club, 'Aucun membre du club.') + '</div><div><span class="se-kicker">LEADS · ' + A.leads.length + '</span>' + listeAcq(A.leads, 'Aucun lead du CRM.') + '</div></div></div>';
     // 4. Le bien
-    const carteMaps = x.lat ? 'https://www.google.com/maps?q=' + x.lat + ',' + x.lon : 'https://www.google.com/maps/search/' + encodeURIComponent(x.adresse);
     const ventes = x.ventes ? ((x.ventes.ventes || []).length ? '<ul class="rd-ul">' + x.ventes.ventes.slice(0, 8).map((v) => '<li>' + esc(v.date ? new Date(v.date).toLocaleDateString('fr-FR') : '') + ' · ' + euro(v.valeur) + (v.surface ? ' · ' + num(v.surface) + ' m²' : '') + ((x.ventes.memeLogement || []).some((m) => m.date === v.date && m.valeur === v.valeur) ? ' <span class="rd-pastille vert">même surface</span>' : '') + '</li>').join('') + '</ul>' : '<p class="se-hint">Aucune vente enregistrée à cette adresse depuis 2014.</p>') : '<p class="se-hint">' + (F.enrichi ? 'Position GPS inconnue.' : 'Recherche…') + '</p>';
     const bien = '<div class="se-card"><h3>Le bien</h3><div class="se-kv" style="margin-top:12px">' +
-      kv('Adresse', esc(x.adresse) + ' · <a href="' + carteMaps + '" target="_blank" rel="noopener">carte</a>') + kv('Étage', esc(etageTxt(x.etage)) + (x.niveauxImmeuble ? ' (immeuble de ' + x.niveauxImmeuble + ' niveaux)' : '')) +
+      kv('Adresse', esc(x.adresse) + '<div style="margin-top:6px"><button class="se-btn ghost sm" data-act="radar-maps" data-id="' + esc(x.id) + '">Voir la façade</button></div>') + kv('Étage', esc(etageTxt(x.etage)) + (x.niveauxImmeuble ? ' (immeuble de ' + x.niveauxImmeuble + ' niveaux)' : '')) +
       kv('Porte / bâtiment', esc([x.porte && 'porte ' + x.porte, x.batiment && 'bât. ' + x.batiment, x.escalier && 'esc. ' + x.escalier].filter(Boolean).join(' · '))) + kv('Surface', num(x.surface) + ' m²') +
       kv('DPE', esc(x.dpe || '?') + ' · fait le ' + rdDate(x.dpeDate) + ' (n° ' + esc(x.numeroDpe || '') + ')') + kv('Construction', esc(x.annee || x.periode || '')) +
       kv('Prix estimé', x.prixBas ? mEuro(x.prixBas) + ' – ' + mEuro(x.prixHaut) + ' <span class="se-hint">(' + num(x.prixM2) + ' €/m² médian du quartier, ± 7 %)</span>' : '') + '</div>' +
@@ -7426,8 +7451,34 @@
       const l = rdLettre(F);
       const w = window.open('', '_blank');
       if (!w) { toast('Autorisez les fenêtres pour imprimer la lettre.', 'warn'); return; }
-      w.document.write('<!doctype html><meta charset="utf-8"><title>Lettre au propriétaire</title><style>body{font:15px/1.6 Georgia,serif;max-width:640px;margin:60px auto;padding:0 24px;color:#111}pre{white-space:pre-wrap;font:inherit}.dest{margin-left:55%;margin-bottom:48px}@media print{button{display:none}}</style>' +
-        '<button onclick="print()">Imprimer</button><pre class="dest">' + esc(l.dest) + '</pre><p>Paris, le ' + new Date().toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' }) + '</p><pre>' + esc(l.corps) + '</pre>');
+      const date = new Date().toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+      const corps = l.corps.split('\n\n').map((para) => '<p>' + esc(para).replace(/\n/g, '<br/>') + '</p>').join('');
+      w.document.write('<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Seecret · Lettre au propriétaire</title>' +
+        '<style>' + policesMarque() +
+        '@page{size:A4;margin:22mm 22mm 20mm}' +
+        ':root{--ink:#141210;--taupe:#7a7068;--sand:#f0ede7;--line:#e4dfd6}' +
+        'html,body{margin:0;background:#fff;color:var(--ink)}' +
+        'body{font-family:"Instrument Sans","Instrument Sans Fallback",ui-sans-serif,system-ui,sans-serif;font-size:11.5pt;line-height:1.62}' +
+        '.page{max-width:170mm;margin:0 auto;padding:18mm 0}' +
+        '.tete{display:flex;align-items:center;gap:12px;padding-bottom:14px;border-bottom:1px solid var(--line)}' +
+        '.logo{width:34px;height:34px;border-radius:9px;background:var(--ink);color:#fff;display:grid;place-items:center;font-family:Fraunces,"Fraunces Fallback",Georgia,serif;font-size:19px}' +
+        '.marque b{display:block;font-family:Fraunces,"Fraunces Fallback",Georgia,serif;font-weight:420;font-size:20px;letter-spacing:-.01em;line-height:1.1}' +
+        '.marque span{font-size:8.5pt;letter-spacing:.18em;text-transform:uppercase;color:var(--taupe)}' +
+        '.dest{margin:16mm 0 0 55%;white-space:pre-line}' +
+        '.date{margin:12mm 0 8mm;color:var(--taupe)}' +
+        '.objet{font-family:Fraunces,"Fraunces Fallback",Georgia,serif;font-size:13pt;font-weight:420;margin:0 0 6mm}' +
+        '.corps p{margin:0 0 4.2mm}.corps p:last-child{margin-top:8mm}' +
+        '.pied{margin-top:16mm;padding-top:10px;border-top:1px solid var(--line);font-size:8.5pt;letter-spacing:.08em;color:var(--taupe);display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}' +
+        '.outil{position:fixed;top:14px;right:14px;font:inherit;font-size:10pt;padding:9px 16px;border-radius:999px;border:0;background:var(--ink);color:#fff;cursor:pointer}' +
+        '@media print{.outil{display:none}.page{padding:0}}' +
+        '</style></head><body><button class="outil" onclick="print()">Imprimer</button><div class="page">' +
+        '<div class="tete"><div class="logo">S</div><div class="marque"><b>Seecret</b><span>Club immobilier privé · Paris</span></div></div>' +
+        '<div class="dest">' + esc(l.dest) + '</div>' +
+        '<div class="date">Paris, le ' + date + '</div>' +
+        '<div class="objet">Objet : votre ' + esc(String(F.fiche.type || 'bien').toLowerCase()) + ', ' + esc(F.fiche.adresse) + '</div>' +
+        '<div class="corps">' + corps + '</div>' +
+        '<div class="pied"><span>SEECRET · TRANSACTIONS CONFIDENTIELLES</span><span>www.seecret.fr</span></div>' +
+        '</div></body></html>');
       w.document.close();
     },
     'import-appliquer': () => {
@@ -7875,6 +7926,10 @@
     },
     'bodacc-verifier': () => { verifierBodacc(); },
     'robot-cascade': async (el) => { await enrichirCascade(el.getAttribute('data-id')); },
+    'radar-maps': (el, id) => {
+      const F = radar.fiches[id]; const x = F && F.fiche; if (!x) return;
+      ouvrirCarte({ id: x.id, adresse: x.adresse, codePostal: x.cp || '', ville: x.ville || '', coords: x.lat ? [x.lat, x.lon] : null });
+    },
     'voir-maps': (el) => { const b = robotBien(el.getAttribute('data-id')); if (b) ouvrirCarte(b); },
     'pm-importer': async (el) => {
       el.disabled = true;
