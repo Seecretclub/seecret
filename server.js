@@ -185,7 +185,8 @@ app.use(cors());
 const SITE_OFFICIEL = (process.env.PUBLIC_URL || 'https://www.seecret.fr').replace(/\/+$/, '');
 function hoteTechnique(h) { return /\.up\.railway\.app$/i.test(String(h || '')); }
 app.use((req, res, next) => {
-  if (process.env.REDIRECTION_DOMAINE === '1' && (req.method === 'GET' || req.method === 'HEAD') && hoteTechnique(req.hostname) && !req.path.startsWith('/api/') && req.path !== '/sante' && req.path !== '/health') {
+  // Active par défaut ; REDIRECTION_DOMAINE=0 dans Railway la coupe sans redéployer de code.
+  if (process.env.REDIRECTION_DOMAINE !== '0' && (req.method === 'GET' || req.method === 'HEAD') && hoteTechnique(req.hostname) && !req.path.startsWith('/api/') && req.path !== '/sante' && req.path !== '/health') {
     return res.redirect(301, SITE_OFFICIEL + req.originalUrl);
   }
   next();
