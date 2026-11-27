@@ -6872,11 +6872,21 @@
       etageMin: 0, etageMax: 0, dernierEtageOk: false, dpe: '', epoque: '', quartiers: [], alertes: true
     };
     const typesSelectionnes = (v.types && v.types.length) ? v.types : (v.type ? [v.type] : []);
-    const chercheurs = state.clients.filter((c) => c.type !== 'vendeur');
+    // Le lead actuel de la recherche est TOUJOURS proposé (et sélectionné), même
+    // vendeur ou archivé : sinon le menu affichait le premier nom de la liste et
+    // l'enregistrement rattachait la recherche à une autre personne.
+    const actuel = v.clientId ? (client(v.clientId) || state.clients.find((c) => c.serverId === v.clientId) || archivees('clients').find((c) => c.serverId === v.clientId)) : null;
+    if (actuel) v.clientId = actuel.id;
+    const libelleLead = (c) => nomClient(c) + (c.email ? ' · ' + c.email : c.tel ? ' · ' + c.tel : '') + (c.type === 'vendeur' ? ' (vendeur)' : '') + (c.demo || /^c\d+$/.test(c.id) ? ' (démo)' : '');
+    let chercheurs = state.clients.filter((c) => c.type !== 'vendeur');
+    if (actuel && chercheurs.indexOf(actuel) === -1) chercheurs = [actuel].concat(chercheurs);
+    else if (actuel) chercheurs = [actuel].concat(chercheurs.filter((c) => c !== actuel));
+    const optionsLead = chercheurs.map((c) => ({ value: c.id, label: libelleLead(c) }));
+    if (r && v.clientId && !actuel) optionsLead.unshift({ value: v.clientId, label: 'Lead actuel (fiche introuvable sur cet appareil)' });
     return '<h3>' + (r ? 'Modifier la recherche' : 'Nouvelle recherche') + '</h3><p class="se-muted">Le CRM confrontera ces critères au portefeuille et aux données publiques (DPE ADEME).</p>' +
       '<form data-form="recherche" data-id="' + (r ? r.id : '') + '"><div class="se-form-grid">' +
-        (chercheurs.length
-          ? field('Lead', 'clientId', v.clientId, { type: 'select', options: chercheurs.map((c) => ({ value: c.id, label: nomClient(c) })) })
+        (optionsLead.length
+          ? field('Lead', 'clientId', v.clientId, { type: 'select', options: optionsLead })
           : '<div class="se-field full"><label>Lead</label><p class="se-muted">Aucun lead acquéreur/mixte enregistré. <button type="button" class="se-btn ghost sm" data-act="client-nouveau">' + ICONS.plus + ' Créer le lead</button></p></div>') +
         '<div class="se-field full"><div class="se-row" style="justify-content:flex-end"><button type="button" class="se-btn ghost sm" data-act="client-nouveau">' + ICONS.plus + ' Nouveau lead</button></div></div>' +
         field('Intitulé', 'titre', v.titre, { full: true, placeholder: 'Trois pièces et plus, rive gauche' }) +
