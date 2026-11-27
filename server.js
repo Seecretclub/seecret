@@ -608,6 +608,8 @@ const mailer = (RESEND_API_KEY || smtpFallback)
   : null;
 
 const FROM_EMAIL = process.env.EMAIL_USER || 'contact.immogroupe@gmail.com';
+// Adresse publique de Seecret : celle à laquelle les candidats répondent.
+const CONTACT_EMAIL = process.env.CONTACT_EMAIL || 'contact@seecret.fr';
 
 const sha256 = (v) => crypto.createHash('sha256').update(String(v)).digest('hex');
 
@@ -2732,17 +2734,28 @@ app.post('/api/messages/:leadId', requireAdmin, (req, res) => {
   // Un message n'arrive que dans l'espace membre (membre accepté) ou par email.
   if (lead.statut !== 'accepte' && !String(lead.email || '').trim()) return res.status(409).json({ error: 'Ce contact n’a ni email ni espace membre : le message ne lui arriverait pas. Ajoutez son email, ou appelez-le.', code: 'SANS_CONTACT' });
   db.messages = Array.isArray(db.messages) ? db.messages : [];
-  const m = { id: uid('msg'), leadId: lead.id, de: 'agent', auteur: nomComplet(req.lead) || DEFAULT_AGENT_NOM, texte: texte, at: nowISO(), luMembre: false, luAgence: true };
+  const m = { id: uid('msg'), leadId: lead.id, de: 'agent', auteur: String((req.body && req.body.signature) || '').trim().slice(0, 80) || nomComplet(req.lead) || DEFAULT_AGENT_NOM, texte: texte, at: nowISO(), luMembre: false, luAgence: true };
   db.messages.push(m);
-  // Notification dans l'espace membre (texte brut) + email (texte échappé).
-  const resume = m.auteur + ' vous a répondu : « ' + texte.slice(0, 300) + (texte.length > 300 ? '…' : '') + ' »';
-  db.notifications = Array.isArray(db.notifications) ? db.notifications : [];
-  db.notifications.push({ id: uid('ntf'), leadId: lead.id, email: lead.email || '', titre: 'Nouveau message de votre agent', message: resume, lien: originOf(req) + '/espace.html#/messages', lue: false, type: 'message', cree: nowISO() });
-  if (mailer && lead.email) {
+  const membre = lead.statut === 'accepte';
+  if (membre) {
+    // Membre accepté : notification dans son espace + email qui l'y renvoie.
+    const resume = m.auteur + ' vous a répondu : « ' + texte.slice(0, 300) + (texte.length > 300 ? '…' : '') + ' »';
+    db.notifications = Array.isArray(db.notifications) ? db.notifications : [];
+    db.notifications.push({ id: uid('ntf'), leadId: lead.id, email: lead.email || '', titre: 'Nouveau message de votre agent', message: resume, lien: originOf(req) + '/espace.html#/messages', lue: false, type: 'message', cree: nowISO() });
+    if (mailer && lead.email) {
+      mailer.sendMail({
+        from: '"Bonjour Seecret" <' + FROM_EMAIL + '>', to: lead.email, subject: 'Nouveau message de votre agent Seecret',
+        html: emailValidationLegere(escHtml(lead.prenom || ''), escHtml(resume) + '<br><br><a href="' + originOf(req) + '/espace.html#/messages" style="color:#141210">Répondre dans votre espace</a>')
+      }).catch((err) => console.error('[messages] email membre échoué :', err.message));
+    }
+  } else if (mailer && lead.email) {
+    // Pas encore accepté : son espace est fermé (aucun code de connexion ne
+    // part). Le message entier part donc par email ; il répond par email.
     mailer.sendMail({
-      from: '"Bonjour Seecret" <' + FROM_EMAIL + '>', to: lead.email, subject: 'Nouveau message de votre agent Seecret',
-      html: emailValidationLegere(escHtml(lead.prenom || ''), escHtml(resume) + '<br><br><a href="' + originOf(req) + '/espace.html#/messages" style="color:#141210">Répondre dans votre espace</a>')
-    }).catch((err) => console.error('[messages] email membre échoué :', err.message));
+      from: '"' + String(m.auteur).replace(/"/g, '') + ' · Seecret" <' + FROM_EMAIL + '>', to: lead.email, replyTo: CONTACT_EMAIL,
+      subject: 'Votre candidature Seecret · un message de ' + m.auteur,
+      html: emailValidationLegere(escHtml(lead.prenom || ''), escHtml(texte).replace(/\n/g, '<br>') + '<br><br><span style="color:#141210">' + escHtml(m.auteur) + '</span><br>Seecret · Club immobilier privé<br><br><span style="font-size:13px">Pour répondre, répondez simplement à cet email (' + escHtml(CONTACT_EMAIL) + ').</span>')
+    }).catch((err) => console.error('[messages] email candidat échoué :', err.message));
   }
   writeDb(db);
   res.json({ ok: true, message: messageSortant(m) });

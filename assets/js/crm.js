@@ -6188,7 +6188,8 @@
   // Comment joindre ce contact ? Un message part dans l'espace membre (s'il est
   // membre accepté) et par email (s'il en a un). Sinon : téléphone, ou rien.
   function canauxContact(c) {
-    const membre = !!c && (c.serveurStatut === 'accepte' || c.statut === 'actif');
+    // Espace membre ouvert seulement une fois l'accès validé (candidature acceptée).
+    const membre = !!c && c.serveurStatut === 'accepte';
     const email = !!(c && String(c.email || '').trim());
     const tel = !!(c && String(c.tel || '').trim());
     return { membre: membre, email: email, tel: tel, message: membre || email };
@@ -6246,7 +6247,7 @@
         (function () {
           const k = c ? canauxContact(c) : { message: true, membre: true, email: !!(conv && conv.email) };
           if (!k.message) return blocSansContact(c) + (k.tel ? '<p class="se-hint" style="margin-top:8px">Il a un téléphone : <a href="tel:' + esc(c.tel) + '">appeler ' + esc(c.tel) + '</a> ou <a href="sms:' + esc(c.tel) + '">envoyer un SMS</a>.</p>' : '');
-          const via = k.membre && k.email ? 'Reçu dans son espace membre et par email.' : k.membre ? 'Reçu dans son espace membre.' : 'Envoyé par email : pas encore d’espace membre.';
+          const via = k.membre && k.email ? 'Reçu dans son espace membre et par email.' : k.membre ? 'Reçu dans son espace membre.' : 'Envoyé en entier par email (son espace s’ouvrira à la validation) : la réponse arrivera sur ' + 'contact@seecret.fr.';
           return '<form class="se-composer" data-form="msg" data-lead="' + esc(leadId) + '"><input class="se-input" name="texte" placeholder="Écrire à ' + esc(nom || 'ce contact') + '…" autocomplete="off" maxlength="2000"/><button class="se-btn" type="submit">Envoyer</button></form><p class="se-hint" style="margin:6px 0 0">' + via + '</p>';
         })() +
       '</div>';
@@ -9062,7 +9063,7 @@
       if (!texte || !leadId) return;
       const bouton = form.querySelector('button'); bouton.disabled = true;
       try {
-        const r = await fetch('/api/messages/' + encodeURIComponent(leadId), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ texte: texte }) });
+        const r = await fetch('/api/messages/' + encodeURIComponent(leadId), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ texte: texte, signature: ((state.agent && ((state.agent.prenom || '') + ' ' + (state.agent.nom || ''))) || '').trim() }) });
         const res = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(res.error || 'Envoi impossible');
         state.fils = state.fils || {};
