@@ -333,6 +333,18 @@ function resumeDemande(dossier) {
   return parts.join(' — ');
 }
 
+const TYPES_BIEN_CRM = ['Appartement', 'Maison', 'Duplex', 'Triplex', 'Loft', 'Hôtel particulier', 'Villa', 'Maison de ville', 'Maison de village', 'Propriété', 'Château', 'Immeuble', 'Péniche', 'Terrain', 'Terrain constructible', 'Parking', 'Box', 'Bureau', 'Local commercial', 'Commerce'];
+// Complète une fiche existante avec une fiche fraîche, sans écraser ce que
+// l'agence a déjà saisi : seuls les champs vides (0, '', [], null) sont remplis.
+function completerFiche(cible, source, exclus) {
+  const vide = (x) => x === undefined || x === null || x === '' || x === 0 || (Array.isArray(x) && !x.length);
+  Object.keys(source || {}).forEach((k) => {
+    if ((exclus || []).indexOf(k) > -1) return;
+    if (vide(cible[k]) && !vide(source[k])) cible[k] = source[k];
+  });
+  return cible;
+}
+
 function decoupe(dossier) {
   const v = dossier.vous || {};
   const r = dossier.recherche || {};
@@ -343,13 +355,29 @@ function decoupe(dossier) {
   const nom = ((v.prenom || '') + ' ' + (v.nom || '')).trim();
   const email = v.email || '';
 
-  const lead = { id: uid('l'), prenom: v.prenom || '', nom: v.nom || '', email: email, tel: v.tel || '', ville: v.ville || '', projet: projet, role: 'membre', budgetMax: Number(r.prixMax) || 0, quartiers: Array.isArray(r.quartiers) ? r.quartiers : [], piecesMin: Number(r.piecesMin) || 0, surfaceMin: Number(r.surfaceMin) || 0, surfaceMax: Number(r.surfaceMax) || 0, delai: r.delai || '', typeBien: (Array.isArray(r.types) && r.types[0]) || '', apport: Number(budget.apport) || 0, financement: budget.financement || '', courtier: !!budget.courtier, bienAVendre: !!budget.bienAVendre, statut: 'en_attente', source: 'Candidature', cree: nowISO() };
+  const n = (x) => { const k = parseInt(String(x == null ? '' : x).replace(/[^\d-]/g, ''), 10); return isNaN(k) ? 0 : k; };
+  const liste = (x) => (Array.isArray(x) ? x.filter((y) => typeof y === 'string' && y).slice(0, 30) : []);
+  const classe = (x) => (/^[A-G]$/.test(String(x || '')) ? String(x) : '');
+  const nature = ['sci', 'societe'].indexOf(v.nature) > -1 ? v.nature : 'personne';
+  const types = liste(r.types);
+  const quartiers = liste(r.quartiers);
 
-  const recherche = projet !== 'vendeur' ? { id: uid('r'), clientId: lead.id, leadId: lead.id, titre: titreRecherche(r), types: Array.isArray(r.types) ? r.types : [], type: (Array.isArray(r.types) && r.types[0]) || '', quartiers: Array.isArray(r.quartiers) ? r.quartiers : [], prixMax: Number(r.prixMax) || 0, piecesMin: Number(r.piecesMin) || 0, surfaceMin: Number(r.surfaceMin) || 0, surfaceMax: Number(r.surfaceMax) || 0, delai: r.delai || '', apport: Number(budget.apport) || 0, financement: budget.financement || '', courtier: !!budget.courtier, bienAVendre: !!budget.bienAVendre, etageMin: Number(r.etageMin) || 0, etageMax: Number(r.etageMax) || 0, etat: r.etat || '', dpe: r.dpe || '', annexes: Array.isArray(r.annexes) ? r.annexes : [], prixVenteEstime: Number(budget.prixVenteEstime) || 0, statut: 'active', alertes: true, cree: nowISO() } : null;
+  // Le lead reprend exactement les champs de la fiche « lead » du CRM.
+  const lead = { id: uid('l'), natureLead: nature, raisonSociale: nature !== 'personne' ? String(v.raisonSociale || '').trim() : '', siren: nature !== 'personne' ? String(v.siren || '').replace(/\D/g, '').slice(0, 9) : '', representant: nature !== 'personne' ? String(v.representant || '').trim() : '', civilite: ['homme', 'femme'].indexOf(v.civilite) > -1 ? v.civilite : '', prenom: v.prenom || '', nom: v.nom || '', email: email, tel: v.tel || '', adresse: String(v.adresse || '').trim(), ville: v.ville || '', projet: projet, role: 'membre', budgetMin: n(r.prixMin), budgetMax: n(r.prixMax), quartiers: quartiers, piecesMin: n(r.piecesMin), surfaceMin: n(r.surfaceMin), surfaceMax: n(r.surfaceMax), delai: r.delai || '', typeBien: types[0] || '', apport: n(budget.apport), financement: budget.financement || '', courtier: !!budget.courtier, bienAVendre: !!budget.bienAVendre, statut: 'en_attente', source: 'Candidature', cree: nowISO() };
 
-  const bien = projet !== 'acheteur' ? { id: uid('mb'), leadId: lead.id, email: email, nom: nom, titre: '', adresse: b.adresse || '', codePostal: b.codePostal || '', ville: b.ville || '', type: b.type || 'Appartement', quartier: b.quartier || '', surface: Number(b.surface) || 0, pieces: Number(b.pieces) || 0, chambres: Number(b.chambres) || 0, sdb: Number(b.sdb) || 0, etage: b.etage || '', dpe: b.dpe || '', etat: b.etat || '', exterieur: b.exterieur || '', surfaceExterieur: Number(b.surfaceExterieur) || 0, prix: Number(vente.prix) || 0, delai: vente.delai || '', dejaEnVente: vente.dejaEnVente || '', mandat: vente.mandat || '', motif: vente.motif || '', description: b.description || '', coupDeCoeur: String(b.coupDeCoeur || '').trim().slice(0, 280), photos: Array.isArray(b.photos) ? b.photos.slice(0, 12) : [], atouts: Array.isArray(b.atouts) ? b.atouts : [], annexes: Array.isArray(b.annexes) ? b.annexes : [], ges: b.ges || '', charges: Number(b.charges) || 0, ascenseur: !!b.ascenseur, lat: b.lat || null, lon: b.lon || null, exclusivite: { statut: 'scan_en_cours', liens: [] }, validation: 'en_attente', statut: 'brouillon', statutDemande: null, suiveurs: 0, agent: DEFAULT_AGENT_NOM, cree: nowISO() } : null;
+  // La recherche reprend les critères de la fiche « recherche » du CRM.
+  const recherche = projet !== 'vendeur' ? { id: uid('r'), clientId: lead.id, leadId: lead.id, titre: titreRecherche(Object.assign({}, r, { types: types, quartiers: quartiers })), types: types, type: types[0] || '', quartiers: quartiers, prixMin: n(r.prixMin), prixMax: n(r.prixMax), piecesMin: n(r.piecesMin), chambresMin: n(r.chambresMin), sdbMin: n(r.sdbMin), surfaceMin: n(r.surfaceMin), surfaceMax: n(r.surfaceMax), etageMin: n(r.etageMin), etageMax: n(r.etageMax), dernierEtageOk: !!r.dernierEtageOk, dpe: classe(r.dpe), epoque: ['avant-1950', '1950-2000', 'apres-2000'].indexOf(r.epoque) > -1 ? r.epoque : '', etat: r.etat || '', annexes: liste(r.annexes), delai: r.delai || '', apport: n(budget.apport), financement: budget.financement || '', courtier: !!budget.courtier, bienAVendre: !!budget.bienAVendre, prixVenteEstime: n(budget.prixVenteEstime), statut: 'active', alertes: true, cree: nowISO() } : null;
 
-  const demande = { id: uid('d'), type: 'candidature', nom: nom || 'Candidat', email: email, leadId: lead.id, clientId: lead.id, role: projet, montant: 0, message: resumeDemande(dossier), source: 'Site', statut: 'nouvelle', cree: nowISO() };
+  // Le bien reprend les champs de la fiche « bien » du CRM (+ ce que seul le candidat sait : motif, coup de cœur…).
+  const annexesBien = liste(b.annexes);
+  const bien = projet !== 'acheteur' ? { id: uid('mb'), leadId: lead.id, email: email, nom: nom, titre: '', adresse: b.adresse || '', codePostal: b.codePostal || '', ville: b.ville || '', type: TYPES_BIEN_CRM.indexOf(b.type) > -1 ? b.type : 'Appartement', quartier: b.quartier || '', transaction: 'Vente', surface: n(b.surface), pieces: n(b.pieces), chambres: n(b.chambres), sdb: n(b.sdb), etage: String(b.etage == null ? '' : b.etage).replace(/[^\d-]/g, ''), anneeConstruction: n(b.anneeConstruction) || null, dpe: classe(b.dpe), ges: classe(b.ges), etat: b.etat || '', exterieur: b.exterieur && b.exterieur !== 'Aucun' ? b.exterieur : '', surfaceExterieur: n(b.surfaceExterieur), prix: n(vente.prix), delai: vente.delai || '', dejaEnVente: vente.dejaEnVente || '', mandat: vente.mandat || '', motif: vente.motif || '', description: String(b.description || '').trim(), coupDeCoeur: String(b.coupDeCoeur || '').trim().slice(0, 280), photos: Array.isArray(b.photos) ? b.photos.slice(0, 12) : [], atouts: liste(b.atouts).concat(annexesBien).concat(b.exterieur && b.exterieur !== 'Aucun' ? [b.exterieur] : []).filter((x, i, a) => a.indexOf(x) === i), annexes: annexesBien, charges: n(b.charges), ascenseur: !!b.ascenseur || annexesBien.indexOf('Ascenseur') > -1, lat: b.lat || null, lon: b.lon || null, exclusivite: { statut: 'scan_en_cours', liens: [] }, validation: 'en_attente', statut: 'brouillon', statutDemande: null, suiveurs: 0, agent: DEFAULT_AGENT_NOM, cree: nowISO() } : null;
+  if (bien) {
+    // Titre éditorial sans l'adresse (off-market), comme pour les biens importés.
+    try { bien.titre = titreEditorialImport(bien); } catch (e) { bien.titre = ''; }
+  }
+
+  const dossierGarde = JSON.parse(JSON.stringify({ projet: projet, vous: v, recherche: r, budget: budget, bien: b, vente: vente }));
+  const demande = { id: uid('d'), type: 'candidature', nom: nom || 'Candidat', email: email, leadId: lead.id, clientId: lead.id, role: projet, montant: 0, message: resumeDemande(dossier), dossier: dossierGarde, source: 'Site', statut: 'nouvelle', cree: nowISO() };
 
   return { lead, recherche, bien, demande };
 }
@@ -473,7 +501,7 @@ app.post('/api/candidature', async (req, res) => {
   }
   if (mailer && process.env.EMAIL_USER) {
     const nomClient = ((lead.prenom || '') + ' ' + (lead.nom || '')).trim() || 'Candidat';
-    const projet = { acquereur: 'Acheter', vendeur: 'Vendre', mixte: 'Acheter et vendre' }[lead.projet] || lead.projet || '';
+    const projet = { acheteur: 'Acheter', acquereur: 'Acheter', vendeur: 'Vendre', mixte: 'Acheter et vendre' }[lead.projet] || lead.projet || '';
     const eur = (n) => (Number(n) ? Math.round(Number(n)).toLocaleString('fr-FR') + ' €' : '');
     const budget = lead.budgetMax ? (lead.budgetMin ? eur(lead.budgetMin) + ' – ' : 'jusqu’à ') + eur(lead.budgetMax) : '';
     const secteurs = (lead.quartiers || []).map((q) => /^p(\d+)$/.test(q) ? 'Paris ' + q.slice(1) + (q === 'p1' ? 'er' : 'e') : q).join(', ');
@@ -3171,6 +3199,7 @@ app.patch('/api/biens/:id', requireAdmin, (req, res) => {
     bien.etage = (body.etage === null || body.etage === '' || isNaN(n)) ? null : n;
   }
   ['surface', 'pieces', 'chambres', 'sdb', 'charges', 'surfaceExterieur'].forEach((k) => { if (body[k] !== undefined) bien[k] = Math.max(0, Number(body[k]) || 0); });
+  if (typeof body.ascenseur === 'boolean') bien.ascenseur = body.ascenseur;
   if (body.prix !== undefined) changerPrixNet(bien, body.prix, nomComplet(req.lead) || 'Agent', 'CRM');
   if (body.tauxHonoraires !== undefined) bien.tauxHonoraires = tauxValide(body.tauxHonoraires);
   if (Array.isArray(body.annexes)) bien.annexes = body.annexes.map(String);
@@ -8062,17 +8091,32 @@ app.post('/api/demandes/:id/decision', requireAdmin, async (req, res) => {
     if (lead) {
       lead.statut = 'accepte';
       logActivite(db, { leadId: lead.id, type: 'admission', auteur: 'Agent' });
-      // Fiches créées seulement selon le parcours rempli : un bien pour un
-      // vendeur, une recherche pour un acquéreur (les deux si mixte).
+      // Fiches créées selon le parcours rempli : un bien pour un vendeur, une
+      // recherche pour un acquéreur (les deux si mixte). Les fiches sont reconstruites depuis le dossier de candidature (tout ce
+      // que le candidat a saisi), puis complètent celles qui existent déjà sans
+      // écraser ce que l'agence a modifié entre-temps.
+      const frais = d.dossier ? decoupe(d.dossier) : null;
+      if (frais) completerFiche(lead, frais.lead, ['id', 'statut', 'cree', 'role', 'source']);
+      const nomLead = ((lead.prenom || '') + ' ' + (lead.nom || '')).trim();
       const vend = lead.projet === 'vendeur' || lead.projet === 'mixte' || !!lead.bienAVendre;
       const achete = lead.projet !== 'vendeur';
-      if (vend && !db.biens.some((x) => x.leadId === lead.id || (x.email || '').toLowerCase() === (lead.email || '').toLowerCase())) {
-        const nb = { id: uid('mb'), leadId: lead.id, email: lead.email, nom: ((lead.prenom || '') + ' ' + (lead.nom || '')).trim(), titre: '', adresse: '', codePostal: '', ville: '', type: 'Appartement', quartier: '', transaction: 'Vente', surface: 0, pieces: 0, chambres: 0, sdb: 0, etage: '', ascenseur: false, anneeConstruction: 0, etat: '', dpe: '', ges: '', exterieur: '', surfaceExterieur: 0, annexes: [], prix: 0, charges: 0, description: '', photos: [], atouts: [], exclusivite: { statut: 'scan_en_cours', liens: [] }, statut: 'brouillon', statutDemande: null, suiveurs: 0, agent: DEFAULT_AGENT_NOM, cree: nowISO() };
-        db.biens.push(nb);
-        lancerScanExclusivite(nb.id).catch(() => {});
+      if (vend) {
+        let bienLead = db.biens.find((x) => x.leadId === lead.id || (lead.email && (x.email || '').toLowerCase() === (lead.email || '').toLowerCase()));
+        const baseBien = (frais && frais.bien) || { id: uid('mb'), titre: '', adresse: lead.adresseBien || '', codePostal: '', ville: '', type: 'Appartement', quartier: '', transaction: 'Vente', surface: 0, pieces: 0, chambres: 0, sdb: 0, etage: '', ascenseur: false, anneeConstruction: null, etat: '', dpe: '', ges: '', exterieur: '', surfaceExterieur: 0, annexes: [], prix: 0, charges: 0, description: '', photos: [], atouts: [], exclusivite: { statut: 'scan_en_cours', liens: [] }, validation: 'en_attente', statut: 'brouillon', statutDemande: null, suiveurs: 0, agent: DEFAULT_AGENT_NOM, cree: nowISO() };
+        Object.assign(baseBien, { leadId: lead.id, email: lead.email, nom: nomLead });
+        if (bienLead) completerFiche(bienLead, baseBien, ['id', 'statut', 'validation', 'cree', 'exclusivite', 'suiveurs']);
+        else { bienLead = baseBien; db.biens.push(bienLead); lancerScanExclusivite(bienLead.id).catch(() => {}); }
+        if (!bienLead.titre) { try { bienLead.titre = titreEditorialImport(bienLead); } catch (e) { /* titre laissé vide */ } }
       }
-      if (achete && !db.recherches.some((x) => x.clientId === lead.id)) {
-        db.recherches.push({ id: uid('r'), clientId: lead.id, titre: 'Recherche de ' + ((lead.prenom || '') + ' ' + (lead.nom || '')).trim(), types: [], type: '', quartiers: lead.quartiers || [], prixMax: lead.budgetMax || 0, piecesMin: lead.piecesMin || 0, surfaceMin: lead.surfaceMin || 0, delai: '', apport: 0, financement: '', courtier: false, statut: 'active', alertes: true, cree: nowISO() });
+      if (achete) {
+        let rec = db.recherches.find((x) => x.clientId === lead.id);
+        const baseRec = (frais && frais.recherche) || { id: uid('r'), titre: '', types: lead.typeBien ? [lead.typeBien] : [], type: lead.typeBien || '', quartiers: lead.quartiers || [], prixMin: lead.budgetMin || 0, prixMax: lead.budgetMax || 0, piecesMin: lead.piecesMin || 0, surfaceMin: lead.surfaceMin || 0, surfaceMax: lead.surfaceMax || 0, delai: lead.delai || '', apport: lead.apport || 0, financement: lead.financement || '', courtier: !!lead.courtier, bienAVendre: !!lead.bienAVendre, statut: 'active', alertes: true, cree: nowISO() };
+        Object.assign(baseRec, { clientId: lead.id, leadId: lead.id });
+        if (!baseRec.titre) baseRec.titre = titreRecherche(baseRec) === 'Recherche' ? 'Recherche de ' + nomLead : titreRecherche(baseRec);
+        if (rec) {
+          if (/^Recherche( de |$)/.test(rec.titre || '')) rec.titre = '';
+          completerFiche(rec, baseRec, ['id', 'statut', 'cree']);
+        } else db.recherches.push(baseRec);
       }
     }
     lien = originOf(req) + '/espace.html?token=' + token;
