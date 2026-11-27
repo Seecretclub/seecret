@@ -6087,6 +6087,284 @@ function radarLigne(g) {
     acquereurs: g.acquereurs };
 }
 
+// ============================================================================
+// OUTIL SCI — toutes les SCI propriétaires dans les zones suivies, leur
+// patrimoine, leurs gérants et les signaux qui annoncent une vente.
+// Sources gratuites : fichier DGFiP des locaux des personnes morales,
+// Annuaire des entreprises (SIRENE + RNE), BODACC, fichier INSEE des
+// personnes décédées (via matchID), DVF (Cerema), DPE (ADEME, via le Radar).
+// ============================================================================
+const SCI_CACHE = new Map();
+function sciInsees(zones) {
+  const toutes = radarZones();
+  const z = zones && zones.length ? toutes.filter((a) => zones.indexOf(a.quartier) > -1) : toutes;
+  return z.map((a) => a.insee);
+}
+const SCI_SQL_FILTRE = "(s.formeCode LIKE '654%' OR s.forme LIKE 'SCI%' OR s.nom LIKE '% SCI %' OR s.nom LIKE 'SCI %' OR s.nom LIKE '%CIVILE IMMOBILIERE%')";
+// DPE récents par société, à partir des fiches du Radar (calculé toutes les 10 min).
+let SCI_DPE = { le: 0, par: new Map() };
+function sciDpeParSociete() {
+  if (!RS || Date.now() - SCI_DPE.le < 10 * 60 * 1000) return SCI_DPE.par;
+  const par = new Map();
+  try {
+    RadarSQL.prepare('SELECT data FROM fiches').all().forEach((r) => {
+      let f; try { f = JSON.parse(r.data); } catch (e) { return; }
+      const p = f.proprietaire || {};
+      if (p.statut !== 'identifie' || !p.siren) return;
+      const x = par.get(p.siren) || { n: 0, dernier: '', fiches: [] };
+      x.n++; if (String(f.dpeDate || '') > x.dernier) x.dernier = String(f.dpeDate || '');
+      if (x.fiches.length < 8) x.fiches.push({ id: f.id, adresse: f.adresse, date: f.dpeDate, dpe: f.dpe, surface: f.surface, etage: f.etage, type: f.type });
+      par.set(p.siren, x);
+    });
+  } catch (e) { /* radar indisponible */ }
+  SCI_DPE = { le: Date.now(), par: par };
+  return par;
+}
+// Signaux de vente et score (0-100), expliqués un par un.
+function sciSignaux(base, infos, dpe) {
+  const sig = [];
+  const ajout = (points, code, texte, niveau) => sig.push({ points: points, code: code, texte: texte, niveau: niveau || (points >= 25 ? 'fort' : points >= 12 ? 'moyen' : 'faible') });
+  const dir = (infos && infos.dirigeants) || [];
+  const decedes = dir.filter((d) => d.deces && d.deces.date);
+  if (decedes.length) ajout(40, 'deces', 'Gérant décédé (' + decedes.map((d) => [d.prenom, d.nom].filter(Boolean).join(' ') + ', le ' + String(d.deces.date).replace(/^(\d{4})(\d{2})(\d{2})$/, '$3/$2/$1')).join(' ; ') + ') : succession probable.');
+  const ages = dir.filter((d) => d.age && !d.deces).map((d) => d.age);
+  const ageMax = ages.length ? Math.max.apply(null, ages) : 0;
+  if (ageMax >= 80) ajout(25, 'age', 'Gérant de ' + ageMax + ' ans : transmission ou vente à prévoir.');
+  else if (ageMax >= 70) ajout(15, 'age', 'Gérant de ' + ageMax + ' ans.');
+  if (infos && /cess|ferm|radi/i.test(infos.etat || '')) ajout(30, 'radiee', 'Société cessée ou radiée : les biens doivent sortir.');
+  const bod = (infos && infos.bodacc) || [];
+  const dissol = bod.find((b) => /dissolution|liquidation|radiation/i.test(b.type + ' ' + b.famille + ' ' + b.detail));
+  if (dissol) ajout(35, 'dissolution', 'BODACC ' + (dissol.date || '') + ' : ' + (/(liquidation)/i.test(dissol.detail + dissol.type) ? 'liquidation' : 'dissolution / radiation') + '.');
+  const chgt = bod.find((b) => /gérant|gerant|dirigeant|administration/i.test(b.detail) && b.date && Date.now() - new Date(b.date).getTime() < 730 * 864e5);
+  if (chgt) ajout(15, 'gerant', 'Changement de gérant récent (BODACC ' + chgt.date + ').');
+  const cession = bod.find((b) => /cession de parts|cession des parts/i.test(b.detail) && b.date && Date.now() - new Date(b.date).getTime() < 730 * 864e5);
+  if (cession) ajout(15, 'cession', 'Cession de parts récente (BODACC ' + cession.date + ').');
+  if (base.adresses === 1) ajout(12, 'mono', 'Une seule adresse au patrimoine : SCI créée pour ce bien, souvent familiale.');
+  if (infos && infos.creation) { const ans = new Date().getFullYear() - Number(String(infos.creation).slice(0, 4)); if (ans >= 20) ajout(10, 'ancienne', 'SCI créée il y a ' + ans + ' ans : bien détenu depuis longtemps, forte plus-value.'); }
+  if (dpe && dpe.n) {
+    const jours = dpe.dernier ? Math.floor((Date.now() - new Date(dpe.dernier).getTime()) / 864e5) : 999;
+    if (jours <= 120) ajout(20, 'dpe', dpe.n + ' DPE récent' + (dpe.n > 1 ? 's' : '') + ' sur ses biens (dernier il y a ' + jours + ' jours) : bien en train de changer de main.');
+    if (dpe.fiches.some((f) => /^[FG]$/.test(f.dpe || ''))) ajout(10, 'passoire', 'Passoire énergétique (F/G) : location bientôt interdite.');
+  }
+  if (base.institutionnel) ajout(-30, 'institutionnel', 'Investisseur institutionnel : vend rarement à l’unité.');
+  const score = Math.max(0, Math.min(100, sig.reduce((t, x) => t + x.points, 0)));
+  return { score: score, niveau: score >= 50 ? 'forte' : score >= 25 ? 'moyenne' : 'faible', signaux: sig.filter((x) => x.points > 0).sort((a, b) => b.points - a.points), negatifs: sig.filter((x) => x.points < 0) };
+}
+function sciInfosCache(siren) { try { return (readDb().sciInfos || {})[siren] || null; } catch (e) { return null; } }
+app.get('/api/sci/liste', requireAdmin, (req, res) => {
+  const b = pmBase();
+  if (!b) return res.json({ ok: true, disponible: false, total: 0, lignes: [] });
+  const zones = String(req.query.zones || '').split(',').filter(Boolean);
+  const insees = sciInsees(zones);
+  if (!insees.length) return res.json({ ok: true, disponible: true, total: 0, lignes: [] });
+  const cle = insees.join(',');
+  let base = SCI_CACHE.get(cle);
+  if (!base || Date.now() - base.le > 10 * 60 * 1000) {
+    const rows = b.b.prepare('SELECT s.siren AS siren, MAX(s.nom) AS nom, MAX(s.forme) AS forme, COUNT(*) AS lots, COUNT(DISTINCT l.insee || \'|\' || l.num || \'|\' || l.voie) AS adresses, GROUP_CONCAT(DISTINCT l.insee) AS insees FROM lot l JOIN soc s ON s.id = l.soc WHERE l.insee IN (' + insees.map(() => '?').join(',') + ') AND ' + SCI_SQL_FILTRE + " AND s.siren <> '' GROUP BY s.siren").all(...insees);
+    base = { le: Date.now(), rows: rows.map((r) => Object.assign(r, { nom: pmTexte(r.nom || ''), institutionnel: RADAR_INSTITUTIONNELS.test(pmTexte(r.nom || '').toUpperCase()) })) };
+    SCI_CACHE.set(cle, base);
+    if (SCI_CACHE.size > 30) SCI_CACHE.delete(SCI_CACHE.keys().next().value);
+  }
+  const db = readDb(); const infosTout = db.sciInfos || {};
+  const suivies = new Set(Object.keys(db.sciSuivies || {}));
+  const dpe = sciDpeParSociete();
+  const q = radarNorm(req.query.q || '').trim();
+  const zLabel = {}; radarZones().forEach((z) => { zLabel[z.insee] = z.label; });
+  let liste = base.rows.map((r) => {
+    const infos = infosTout[r.siren] || null;
+    const d = dpe.get(r.siren) || null;
+    const sc = sciSignaux(r, infos, d);
+    const dir = infos && infos.dirigeants ? infos.dirigeants.filter((x) => x.nom).map((x) => [x.prenom, x.nom].filter(Boolean).join(' ') + (x.deces ? ' (décédé)' : x.age ? ', ' + x.age + ' ans' : '')) : [];
+    return { siren: r.siren, nom: r.nom, lots: r.lots, adresses: r.adresses, communes: String(r.insees || '').split(',').map((i) => zLabel[i] || i), institutionnel: r.institutionnel, analysee: !!infos, dirigeants: dir.slice(0, 2), dpe: d ? d.n : 0, dernierDpe: d ? d.dernier : '', score: sc.score, niveau: sc.niveau, signaux: sc.signaux.slice(0, 3).map((x) => x.code), resume: sc.signaux[0] ? sc.signaux[0].texte : '', suivie: suivies.has(r.siren) };
+  });
+  if (q) liste = liste.filter((x) => radarNorm(x.nom + ' ' + x.siren + ' ' + x.dirigeants.join(' ')).indexOf(q) > -1);
+  if (req.query.horsInstit !== '0') liste = liste.filter((x) => !x.institutionnel);
+  if (req.query.mono === '1') liste = liste.filter((x) => x.adresses === 1);
+  if (req.query.dpe === '1') liste = liste.filter((x) => x.dpe > 0);
+  if (req.query.signal) liste = liste.filter((x) => x.signaux.indexOf(String(req.query.signal)) > -1);
+  if (req.query.suivies === '1') liste = liste.filter((x) => x.suivie);
+  const tri = String(req.query.tri || 'score');
+  liste.sort(tri === 'biens' ? (a, z) => z.lots - a.lots : tri === 'nom' ? (a, z) => a.nom.localeCompare(z.nom) : tri === 'dpe' ? (a, z) => String(z.dernierDpe).localeCompare(String(a.dernierDpe)) : (a, z) => z.score - a.score || z.dpe - a.dpe || a.adresses - z.adresses);
+  const page = Math.max(1, Number(req.query.page) || 1);
+  res.json({ ok: true, disponible: true, total: liste.length, analysees: liste.filter((x) => x.analysee).length, page: page, lignes: liste.slice((page - 1) * 50, page * 50) });
+});
+// Décès d'un gérant : fichier INSEE des personnes décédées via matchID (gratuit,
+// 1 requête/s). On ne retient qu'une correspondance nom + prénom + mois de naissance.
+let MATCHID_DERNIER = 0;
+async function sciDeces(d) {
+  if (!d || !d.nom || !d.naissance) return null;
+  const attente = MATCHID_DERNIER + 1100 - Date.now();
+  if (attente > 0) await new Promise((r) => setTimeout(r, attente));
+  MATCHID_DERNIER = Date.now();
+  const an = String(d.naissance).slice(0, 4);
+  const p = new URLSearchParams({ lastName: d.nom, firstName: String(d.prenoms || d.prenom || '').split(' ')[0], birthDate: an, size: '10' });
+  const r = await fetch('https://deces.matchid.io/deces/api/v1/search?' + p.toString(), { headers: { Accept: 'application/json', 'User-Agent': 'Seecret/1.0' }, signal: AbortSignal.timeout(15000) });
+  if (!r.ok) throw new Error('matchID ' + r.status);
+  const j = await r.json().catch(() => ({}));
+  const pers = (j.response && j.response.persons) || j.persons || [];
+  const mois = String(d.naissance).replace('-', '').slice(0, 6);
+  const nomN = radarNorm(d.nom); const prenomN = radarNorm(String(d.prenoms || d.prenom || '').split(' ')[0]);
+  const ok = pers.find((x) => {
+    const n = x.name || {}; const last = radarNorm(n.last || ''); const firsts = (Array.isArray(n.first) ? n.first : [n.first]).map(radarNorm);
+    const naiss = String((x.birth && x.birth.date) || '');
+    return last === nomN && firsts.some((f) => f === prenomN) && (mois.length === 6 ? naiss.slice(0, 6) === mois : naiss.slice(0, 4) === an);
+  });
+  return ok ? { date: String((ok.death && ok.death.date) || ''), lieu: ((ok.death && ok.death.location) || {}).city || '' } : { aucun: true };
+}
+// Autres sociétés d'un gérant (Annuaire des entreprises, recherche par personne).
+async function sciAutresSocietes(d, siren) {
+  if (!d || !d.nom) return [];
+  const p = new URLSearchParams({ nom_personne: d.nom, prenoms_personne: String(d.prenoms || d.prenom || '').split(' ')[0], per_page: '25' });
+  if (d.naissance) { const a = String(d.naissance).slice(0, 7); p.set('date_naissance_personne_min', a + '-01'); p.set('date_naissance_personne_max', a + '-28'); }
+  const r = await sireneFetch('https://recherche-entreprises.api.gouv.fr/search?' + p.toString());
+  if (!r.ok) return [];
+  const j = await r.json().catch(() => ({}));
+  return (j.results || []).filter((e) => String(e.siren) !== siren).map((e) => ({ siren: String(e.siren), nom: e.nom_complet || '', etat: e.etat_administratif || '', creation: e.date_creation || '', sci: /^654/.test(String(e.nature_juridique || '')) || /\bSCI\b/i.test(e.nom_complet || ''), biensDgfip: radarBiensSociete(String(e.siren)).length })).slice(0, 25);
+}
+// Analyse complète d'une SCI (mise en cache 30 jours dans la base).
+async function sciAnalyser(siren, forcer) {
+  const db0 = readDb();
+  const c = (db0.sciInfos || {})[siren];
+  if (c && !forcer && Date.now() - radarAnnee(c.maj) < 30 * 864e5) return c;
+  const out = { maj: nowISO(), siren: siren, erreurs: [] };
+  try {
+    const r = await sireneFetch('https://recherche-entreprises.api.gouv.fr/search?q=' + siren + '&per_page=1');
+    const j = r.ok ? await r.json().catch(() => ({})) : {};
+    const e = (j.results || []).find((x) => String(x.siren) === siren);
+    const an = new Date().getFullYear();
+    if (e) {
+      Object.assign(out, { nom: e.nom_complet || '', creation: e.date_creation || '', etat: e.etat_administratif === 'C' ? 'cessée' : e.etat_administratif === 'A' ? 'active' : (e.etat_administratif || ''), natureJuridique: e.nature_juridique || '', siege: e.siege ? (e.siege.adresse || '') : '', siegeCommune: e.siege ? (e.siege.libelle_commune || '') : '', dateFermeture: e.date_fermeture || '' });
+      out.dirigeants = (e.dirigeants || []).slice(0, 6).map((x) => x.type_dirigeant === 'personne morale'
+        ? { societe: x.denomination || '', siren: x.siren || '', qualite: x.qualite || '' }
+        : { prenom: String(x.prenoms || '').split(' ')[0], prenoms: x.prenoms || '', nom: x.nom || '', qualite: x.qualite || '', naissance: x.date_de_naissance || (x.annee_de_naissance ? String(x.annee_de_naissance) : ''), age: x.annee_de_naissance ? an - Number(String(x.annee_de_naissance).slice(0, 4)) : (x.date_de_naissance ? an - Number(String(x.date_de_naissance).slice(0, 4)) : null) });
+    } else out.erreurs.push('Société introuvable dans l’Annuaire des entreprises.');
+  } catch (e) { out.erreurs.push('Annuaire des entreprises : ' + e.message); }
+  const pers = (out.dirigeants || []).filter((d) => d.nom);
+  for (const d of pers.slice(0, 3)) {
+    try { const dc = await sciDeces(d); if (dc && dc.date) d.deces = dc; else if (dc) d.decesVerifie = true; } catch (e) { out.erreurs.push('Fichier des décès : ' + e.message); break; }
+    try { d.autresSocietes = await sciAutresSocietes(d, siren); } catch (e) { /* facultatif */ }
+  }
+  try { const bo = await radarBodacc(db0, siren); out.bodacc = (bo.annonces || []).slice(0, 15); } catch (e) { out.erreurs.push('BODACC : ' + e.message); }
+  const db = readDb();
+  db.sciInfos = db.sciInfos || {};
+  db.sciInfos[siren] = out;
+  // Garde-fou disque : on ne garde que les 3 000 dernières analyses.
+  const cles = Object.keys(db.sciInfos);
+  if (cles.length > 3000) cles.sort((a, z) => radarAnnee(db.sciInfos[a].maj) - radarAnnee(db.sciInfos[z].maj)).slice(0, cles.length - 3000).forEach((k) => delete db.sciInfos[k]);
+  writeDb(db);
+  return out;
+}
+// Achats DVF des biens de la SCI : parcelle du lot (section + plan) → ventes de la parcelle.
+async function sciAchatsDvf(biensAdresses, siren) {
+  const lots = pmLignesSiren(siren).map(pmLotDepuisLigne);
+  const parcelles = {};
+  lots.forEach((l) => { if (l.section && l.plan) { const idu = l.insee + '000' + String(l.section).padStart(2, '0') + String(l.plan).padStart(4, '0'); parcelles[idu] = parcelles[idu] || { idu: idu, insee: l.insee, adresse: l.adresse }; } });
+  const out = [];
+  for (const p of Object.values(parcelles).slice(0, 6)) {
+    try {
+      const g = await geocoderNumero({ adresse: p.adresse.replace(/^(\d+)\s+(B|T|Q)\s/, '$1 '), codePostal: '', ville: (radarZones().find((z) => z.insee === p.insee) || {}).label || '' });
+      if (!g) continue;
+      const d = 0.0015;
+      const muts = await dvfCerema({ code_insee: p.insee, in_bbox: [g.lon - d, g.lat - d, g.lon + d, g.lat + d].map((v) => v.toFixed(6)).join(',') }, 3, { geo: true, budgetMs: 15000 });
+      muts.filter((x) => (x.l_idpar || []).some((i) => String(i) === p.idu) && /vente/i.test(x.libnatmut || '')).forEach((x) => out.push({ adresse: p.adresse, date: x.datemut, prix: Math.round(Number(x.valeurfonc) || 0), surface: Number(x.sbati) || null, type: String(x.libtypbien || '').toLowerCase() }));
+    } catch (e) { /* parcelle suivante */ }
+  }
+  return out.sort((a, z) => String(z.date).localeCompare(String(a.date))).slice(0, 20);
+}
+app.get('/api/sci/:siren', requireAdmin, async (req, res) => {
+  const siren = String(req.params.siren || '').replace(/\s/g, '');
+  if (!/^\d{9}$/.test(siren)) return res.status(400).json({ error: 'SIREN à 9 chiffres.' });
+  try {
+    const infos = req.query.analyser === '1' ? await ARRIERE_PLAN.run({ fond: false }, () => sciAnalyser(siren, req.query.forcer === '1')) : sciInfosCache(siren);
+    const biens = radarBiensSociete(siren);
+    const zl = {}; radarZones().forEach((z) => { zl[z.insee] = z.label; });
+    const meta = pmMeta() || {};
+    const lignes = pmLignesSiren(siren);
+    const nomPm = lignes[0] ? pmTexte(lignes[0][PMC.nom] || '') : '';
+    const base = { adresses: biens.length, institutionnel: RADAR_INSTITUTIONNELS.test(String(nomPm || (infos && infos.nom) || '').toUpperCase()) };
+    const dpe = sciDpeParSociete().get(siren) || null;
+    const sc = sciSignaux(base, infos, dpe);
+    const db = readDb();
+    const leads = (db.leads || []).filter((l) => String(l.siren || '') === siren).map((l) => ({ id: l.id, nom: nomComplet(l) || l.raisonSociale || '' }));
+    res.json({ ok: true, siren: siren, nom: (infos && infos.nom) || nomPm, forme: lignes[0] ? lignes[0][PMC.forme] : '', infos: infos, score: sc, dpe: dpe,
+      biens: biens.map((x) => Object.assign({}, x, { commune: zl[x.insee] || (meta.communes || {})[x.insee] || x.insee })),
+      achats: infos && infos.achats ? infos.achats : null, leads: leads, suivie: !!(db.sciSuivies || {})[siren] });
+  } catch (e) { res.status(502).json({ error: 'Analyse impossible : ' + e.message }); }
+});
+app.post('/api/sci/:siren/achats', requireAdmin, async (req, res) => {
+  const siren = String(req.params.siren || '');
+  if (!/^\d{9}$/.test(siren)) return res.status(400).json({ error: 'SIREN à 9 chiffres.' });
+  try {
+    const achats = await sciAchatsDvf(radarBiensSociete(siren), siren);
+    const db = readDb(); db.sciInfos = db.sciInfos || {}; db.sciInfos[siren] = Object.assign(db.sciInfos[siren] || { maj: nowISO(), siren: siren }, { achats: achats, achatsMaj: nowISO() }); writeDb(db);
+    res.json({ ok: true, achats: achats });
+  } catch (e) { res.status(502).json({ error: 'DVF : ' + e.message }); }
+});
+// Créer le lead vendeur de la SCI (sans coordonnées : pas de message possible).
+app.post('/api/sci/:siren/lead', requireAdmin, (req, res) => {
+  const siren = String(req.params.siren || '');
+  if (!/^\d{9}$/.test(siren)) return res.status(400).json({ error: 'SIREN à 9 chiffres.' });
+  const db = readDb();
+  const deja = (db.leads || []).find((l) => String(l.siren || '') === siren);
+  if (deja) return res.json({ ok: true, lead: { id: deja.id }, deja: true });
+  const infos = (db.sciInfos || {})[siren] || {};
+  const lignes = pmLignesSiren(siren);
+  const nom = infos.nom || (lignes[0] ? pmTexte(lignes[0][PMC.nom] || '') : 'SCI ' + siren);
+  const g = (infos.dirigeants || []).find((d) => d.nom && !d.deces) || (infos.dirigeants || []).find((d) => d.nom) || null;
+  const biens = radarBiensSociete(siren);
+  const lead = {
+    id: uid('l'), prenom: g ? g.prenom || '' : '', nom: g ? g.nom || '' : nom, email: '', tel: '', civilite: '',
+    projet: 'vendeur', role: 'membre', type: 'sci', natureLead: 'sci', raisonSociale: nom, siren: siren, representant: g ? [g.prenom, g.nom].filter(Boolean).join(' ') + (g.qualite ? ' (' + g.qualite + ')' : '') : '',
+    adresse: infos.siege || '', adresseBien: biens[0] ? biens[0].adresse : '', dirigeants: infos.dirigeants || [],
+    source: 'Outil SCI', statut: 'prospect', pipeline: 'a_contacter', bienAVendre: true, quartiers: [], budgetMin: 0, budgetMax: 0,
+    notes: 'Patrimoine (fichier DGFiP) : ' + biens.slice(0, 10).map((b) => b.adresse + ' (' + b.lots + ' lot' + (b.lots > 1 ? 's' : '') + ')').join(' ; '),
+    tags: ['SCI'], creePar: req.lead.id, agentId: estAgentSimple(roleOf(req.lead)) ? req.lead.id : null, cree: nowISO()
+  };
+  db.leads.push(lead);
+  logActivite(db, { leadId: lead.id, type: 'lead_sci', auteur: nomComplet(req.lead), detail: 'Lead créé depuis l’outil SCI (' + nom + ')' });
+  writeDb(db);
+  res.json({ ok: true, lead: { id: lead.id } });
+});
+// Suivre une SCI : alerte quand un DPE, une annonce BODACC ou un décès apparaît.
+app.post('/api/sci/:siren/suivre', requireAdmin, (req, res) => {
+  const siren = String(req.params.siren || '');
+  if (!/^\d{9}$/.test(siren)) return res.status(400).json({ error: 'SIREN à 9 chiffres.' });
+  const db = readDb(); db.sciSuivies = db.sciSuivies || {};
+  if (req.body && req.body.suivre === false) delete db.sciSuivies[siren];
+  else db.sciSuivies[siren] = db.sciSuivies[siren] || { depuis: nowISO(), par: nomComplet(req.lead), vu: { dpe: (sciDpeParSociete().get(siren) || {}).n || 0, bodacc: (((db.sciInfos || {})[siren] || {}).bodacc || []).length } };
+  writeDb(db);
+  res.json({ ok: true, suivie: !!db.sciSuivies[siren] });
+});
+// Une fois par jour : les SCI suivies sont réanalysées ; nouveauté = alerte (activité).
+setInterval(() => {
+  try {
+    const db = readDb(); const suivies = Object.keys(db.sciSuivies || {});
+    if (!suivies.length) return;
+    const jour = new Date().toISOString().slice(0, 10);
+    if (db.sciSuiviJour === jour) return;
+    db.sciSuiviJour = jour; writeDb(db);
+    ARRIERE_PLAN.run({ fond: true }, async () => {
+      for (const siren of suivies.slice(0, 200)) {
+        try {
+          const infos = await sciAnalyser(siren, true);
+          const d2 = readDb(); const s0 = (d2.sciSuivies || {})[siren]; if (!s0) continue;
+          const nDpe = (sciDpeParSociete().get(siren) || {}).n || 0; const nBod = (infos.bodacc || []).length; const deces = (infos.dirigeants || []).some((x) => x.deces);
+          const nouveau = [];
+          if (nDpe > (s0.vu.dpe || 0)) nouveau.push((nDpe - (s0.vu.dpe || 0)) + ' nouveau(x) DPE');
+          if (nBod > (s0.vu.bodacc || 0)) nouveau.push('nouvelle annonce BODACC');
+          if (deces && !s0.vu.deces) nouveau.push('gérant décédé');
+          if (nouveau.length) {
+            const lead = (d2.leads || []).find((l) => String(l.siren || '') === siren);
+            logActivite(d2, { leadId: lead ? lead.id : null, type: 'alerte_sci', auteur: 'Outil SCI', detail: (infos.nom || siren) + ' : ' + nouveau.join(', ') });
+          }
+          s0.vu = { dpe: nDpe, bodacc: nBod, deces: deces }; s0.verifieLe = nowISO();
+          writeDb(d2);
+        } catch (e) { /* SCI suivante */ }
+      }
+    });
+  } catch (e) { /* prochain tour */ }
+}, 3600 * 1000).unref();
+
 // ---- Zones du Radar ajoutées par code postal ----
 function pmCommuneIndexee(insee) {
   const m = pmMeta();
