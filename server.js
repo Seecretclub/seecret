@@ -6123,10 +6123,13 @@ async function pmAjouterCommunes(insees) {
     let lignes = [];
     const vider = base.transaction((l) => l.forEach((c) => {
       const insee = c[0].trim() + String(c[2].trim()).padStart(3, '0');
+      // Mêmes colonnes que l'import complet (voir PMC) : société c19/c23/c22,
+      // groupe c20, forme juridique c21, droit c17, bâtiment c7, entrée c8,
+      // niveau c9, porte c10, numéro c11, indice c12, voie c15/c16, section c5, plan c6.
       const siren = c[19].trim(); const nom = c[23].trim(); const forme = c[22].trim();
-      let s1 = socId.get(siren, nom, forme); const idS = s1 ? s1.id : insSoc.run(siren, nom, forme, c[17].trim(), c[20].trim()).lastInsertRowid;
-      let v1 = voieId.get(c[9].trim(), c[10].trim()); const idV = v1 ? v1.id : insVoie.run(c[9].trim(), c[10].trim()).lastInsertRowid;
-      insLot.run(insee, String(parseInt(c[11], 10) || c[11].trim()), c[12].trim(), idV, idS, c[21].trim(), c[15].trim(), c[16].trim(), c[5].trim(), c[6].trim(), c[7].trim(), c[8].trim());
+      const s1 = socId.get(siren, nom, forme); const idS = s1 ? s1.id : insSoc.run(siren, nom, forme, c[20].trim(), c[21].trim()).lastInsertRowid;
+      const v1 = voieId.get(c[15].trim(), c[16].trim()); const idV = v1 ? v1.id : insVoie.run(c[15].trim(), c[16].trim()).lastInsertRowid;
+      insLot.run(insee, String(parseInt(c[11], 10) || c[11].trim()), c[12].trim(), idV, idS, c[17].trim(), c[7].trim(), c[8].trim(), c[9].trim(), c[10].trim(), c[5].trim(), c[6].trim());
       communes[insee] = c[3].trim();
     }));
     let n = 0;
@@ -6207,7 +6210,27 @@ setTimeout(radarZonesCharger, 0);
 setTimeout(() => {
   try {
     const m = pmMeta();
-    if (!m || m.correctionCommunesSup) return;
+    if (!m) return;
+    // Communes ajoutées avec des colonnes décalées (1re version) : on retire leurs
+    // lots et on les réindexe correctement.
+    if (!m.correctionColonnesSup && (m.communesSup || []).length) {
+      const Database = require('better-sqlite3');
+      pmFermerBase();
+      const b = new Database(path.join(PM_DIR, 'pm.db'));
+      const ins = m.communesSup.filter((x) => PM_DEPTS.indexOf(String(x).slice(0, 2)) === -1);
+      if (ins.length) {
+        b.prepare('DELETE FROM lot WHERE insee IN (' + ins.map(() => '?').join(',') + ')').run(...ins);
+        b.exec('DELETE FROM soc WHERE id NOT IN (SELECT DISTINCT soc FROM lot); DELETE FROM voie WHERE id NOT IN (SELECT DISTINCT voie FROM lot);');
+        ins.forEach((k) => { if (m.communes) delete m.communes[k]; });
+      }
+      b.close();
+      m.communesSup = (m.communesSup || []).filter((k) => ins.indexOf(k) === -1);
+      m.correctionColonnesSup = nowISO();
+      fs.writeFileSync(path.join(PM_DIR, 'meta.json'), JSON.stringify(m, null, 1));
+      pmFermerBase(); PM_CACHE.clear();
+      console.log('[pm-locaux] ' + ins.length + ' commune(s) à réindexer (colonnes décalées)');
+    }
+    if (m.correctionCommunesSup) return;
     let n = 0;
     Object.keys(m.communes || {}).forEach((k) => { if (m.communes[k] === '(aucune société)') { delete m.communes[k]; n++; } });
     m.communesSup = (m.communesSup || []).filter((k) => m.communes && m.communes[k]);
