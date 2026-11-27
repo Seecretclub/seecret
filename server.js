@@ -8062,12 +8062,16 @@ app.post('/api/demandes/:id/decision', requireAdmin, async (req, res) => {
     if (lead) {
       lead.statut = 'accepte';
       logActivite(db, { leadId: lead.id, type: 'admission', auteur: 'Agent' });
-      if (!db.biens.some((x) => x.leadId === lead.id || (x.email || '').toLowerCase() === (lead.email || '').toLowerCase())) {
+      // Fiches créées seulement selon le parcours rempli : un bien pour un
+      // vendeur, une recherche pour un acquéreur (les deux si mixte).
+      const vend = lead.projet === 'vendeur' || lead.projet === 'mixte' || !!lead.bienAVendre;
+      const achete = lead.projet !== 'vendeur';
+      if (vend && !db.biens.some((x) => x.leadId === lead.id || (x.email || '').toLowerCase() === (lead.email || '').toLowerCase())) {
         const nb = { id: uid('mb'), leadId: lead.id, email: lead.email, nom: ((lead.prenom || '') + ' ' + (lead.nom || '')).trim(), titre: '', adresse: '', codePostal: '', ville: '', type: 'Appartement', quartier: '', transaction: 'Vente', surface: 0, pieces: 0, chambres: 0, sdb: 0, etage: '', ascenseur: false, anneeConstruction: 0, etat: '', dpe: '', ges: '', exterieur: '', surfaceExterieur: 0, annexes: [], prix: 0, charges: 0, description: '', photos: [], atouts: [], exclusivite: { statut: 'scan_en_cours', liens: [] }, statut: 'brouillon', statutDemande: null, suiveurs: 0, agent: DEFAULT_AGENT_NOM, cree: nowISO() };
         db.biens.push(nb);
         lancerScanExclusivite(nb.id).catch(() => {});
       }
-      if (!db.recherches.some((x) => x.clientId === lead.id)) {
+      if (achete && !db.recherches.some((x) => x.clientId === lead.id)) {
         db.recherches.push({ id: uid('r'), clientId: lead.id, titre: 'Recherche de ' + ((lead.prenom || '') + ' ' + (lead.nom || '')).trim(), types: [], type: '', quartiers: lead.quartiers || [], prixMax: lead.budgetMax || 0, piecesMin: lead.piecesMin || 0, surfaceMin: lead.surfaceMin || 0, delai: '', apport: 0, financement: '', courtier: false, statut: 'active', alertes: true, cree: nowISO() });
       }
     }

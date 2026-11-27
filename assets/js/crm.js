@@ -4142,6 +4142,61 @@
         : '');
   }
 
+  // Candidature : ce que la personne a rempli (lead, recherche, bien) et, une
+  // fois la décision prise, ce qui vient de se passer et les prochaines étapes.
+  function blocsParcoursCandidature(d, lead, rec, bienMembre, estAcheteur, estVendeur) {
+    const manque = (liste) => liste.filter((x) => !x[1]).map((x) => x[0]);
+    const etat = (m, total) => m.length === 0 ? '<span class="se-badge open">Complet</span>' : '<span class="se-badge warn">' + (total - m.length) + ' / ' + total + '</span>';
+    const blocs = [];
+    // Lead (toujours)
+    const mL = lead ? manque([['téléphone', lead.tel], ['email', lead.email], ['civilité', lead.civilite], ['ville', lead.ville]].concat(estAcheteur ? [['financement', lead.financement], ['apport', lead.apport]] : [])) : ['fiche lead'];
+    blocs.push({ titre: 'Fiche lead', icone: ICONS.users, etat: lead ? etat(mL, estAcheteur ? 6 : 4) : '<span class="se-badge muted">…</span>',
+      texte: lead ? (mL.length ? 'À compléter : ' + mL.join(', ') + '.' : 'Coordonnées et profil complets.') : 'La fiche lead apparaîtra après synchronisation.',
+      bouton: lead ? '<a class="se-btn sm" href="#/client/' + lead.id + '">Ouvrir sa fiche</a>' : '' });
+    // Recherche (acheteur)
+    if (estAcheteur) {
+      const mR = rec ? manque([['type de bien', rec.type || (lead && lead.typeBien)], ['secteurs', (rec.quartiers || []).length || (lead && (lead.quartiers || []).length)], ['budget', rec.prixMax || (lead && lead.budgetMax)], ['surface', rec.surfaceMin || (lead && lead.surfaceMin)]]) : ['critères'];
+      const nbMatch = lead ? ((state.biensServeur || []).concat(state.biens).filter((b) => b.statut !== 'vendu' && b.statut !== 'brouillon' && correspond(b, lead)).length) : 0;
+      blocs.push({ titre: 'Recherche', icone: ICONS.search, etat: rec ? etat(mR, 4) : '<span class="se-badge muted">Absente</span>',
+        texte: rec ? (mR.length ? 'À préciser : ' + mR.join(', ') + '. ' : 'Critères complets. ') + (nbMatch ? nbMatch + ' bien' + (nbMatch > 1 ? 's' : '') + ' du club correspond' + (nbMatch > 1 ? 'ent' : '') + ' déjà.' : 'Aucun bien du club ne correspond encore.') : 'Aucune recherche enregistrée : créez-la depuis sa fiche.',
+        bouton: (rec ? '<a class="se-btn sm" href="#/recherche/' + rec.id + '">Voir sa recherche</a>' : '') + (nbMatch ? ' <a class="se-btn ghost sm" href="#/rapprochements">Proposer des biens</a>' : '') });
+    }
+    // Bien (vendeur)
+    if (estVendeur) {
+      const b = bienMembre;
+      const mB = b ? manque([['photos', (b.photos || []).length], ['prix', b.prix], ['surface', b.surface], ['pièces', b.pieces], ['adresse', b.adresse], ['DPE', b.dpe], ['description', b.description && String(b.description).length > 40]]) : ['fiche bien'];
+      const st = b ? ((typeof ST_BIEN !== 'undefined' && ST_BIEN[b.statut] && ST_BIEN[b.statut].label) || b.statut || '') : '';
+      blocs.push({ titre: 'Son bien', icone: ICONS.building, etat: b ? etat(mB, 7) : '<span class="se-badge muted">Absent</span>',
+        texte: b ? (st ? 'Statut : ' + esc(st) + '. ' : '') + (mB.length ? 'À compléter avant la mise en ligne : ' + mB.join(', ') + '.' : 'Fiche complète : vous pouvez la passer en Avant-première.') : 'Aucun bien enregistré : ajoutez-le depuis sa fiche lead.',
+        bouton: b ? '<a class="se-btn sm" href="#/bien/' + b.id + '">' + (mB.length ? 'Compléter la fiche bien' : 'Ouvrir la fiche bien') + '</a>' : '' });
+    }
+    const S = d.__suite || null;
+    const decide = d.statut !== 'nouvelle';
+    const accepte = d.statut === 'validee' || d.statut === 'traitee';
+    const prenom = (lead && lead.prenom) || String(d.nom || '').trim().split(/\s+/)[0] || 'La personne';
+    let etapes = '';
+    if (decide) {
+      const ok = (t) => '<li class="se-suite-ok">' + t + '</li>';
+      const ko = (t) => '<li class="se-suite-ko">' + t + '</li>';
+      if (accepte) etapes = ok('Adhésion acceptée : ' + esc(prenom) + ' est maintenant membre du club.') + ok('Son espace est ouvert : connexion avec son email, sans mot de passe.') +
+        (S && S.emailEnvoye === false ? ko('L’email d’accès n’est pas parti (' + esc(S.emailErreur || 'erreur') + ') : utilisez « Renvoyer l’email d’accès ».') : ok('Email d’accès envoyé à ' + esc(d.email || 'son adresse') + ', avec son lien et son code.')) +
+        (estVendeur && bienMembre ? ok('Son bien reste hors plateforme tant que vous ne l’avez pas passé en Avant-première.') : '') +
+        (estAcheteur ? ok('Les biens qui correspondent à sa recherche lui arriveront dès que vous les proposerez.') : '');
+      else if (d.statut === 'refusee') etapes = ok('Candidature refusée : aucun accès n’est ouvert.') + ok(esc(prenom) + ' est prévenu (« Votre demande n’a pas été retenue »).') + ok('Sa fiche lead reste dans le CRM : vous pouvez garder le contact ou relancer la demande.');
+      else if (d.statut === 'suspendue') etapes = ok('Adhésion suspendue : pas d’accès pour l’instant.') + ok(esc(prenom) + ' est prévenu, le motif est noté dans sa timeline.') + ok('Vous pouvez la reprendre à tout moment depuis cette page.');
+    }
+    const titre = !decide ? 'Son parcours' : accepte ? 'Accepté : la suite' : d.statut === 'refusee' ? 'Refusé : ce qui se passe' : 'Suspendu : ce qui se passe';
+    const sous = !decide ? 'Ce que ' + esc(prenom) + ' a rempli. Après votre décision, voici ce qui se passera et ce qu’il restera à faire.' : accepte ? 'Ce qui vient de se passer, puis les prochaines étapes.' : '';
+    const affiche = d.statut === 'refusee' ? blocs.slice(0, 1) : blocs;
+    return '<div class="se-card se-suite' + (decide ? ' faite ' + (accepte ? 'validee' : d.statut) : '') + '" style="margin-bottom:18px">' +
+      '<div class="se-row" style="justify-content:space-between;gap:10px;flex-wrap:wrap"><div><h3 style="margin:0">' + titre + '</h3>' + (sous ? '<p class="se-hint" style="margin:4px 0 0">' + sous + '</p>' : '') + '</div>' +
+        (decide ? '' : '<span class="se-hint">' + blocs.length + ' bloc' + (blocs.length > 1 ? 's' : '') + ' : ' + blocs.map((x) => x.titre.toLowerCase()).join(', ') + '</span>') + '</div>' +
+      (etapes ? '<ul class="se-suite-etapes">' + etapes + '</ul>' : '') +
+      (affiche.length ? '<div class="se-suite-blocs">' + affiche.map((x) => '<div class="se-suite-bloc"><div class="se-row" style="justify-content:space-between;gap:8px;align-items:center"><div class="se-row" style="gap:8px;align-items:center"><span class="se-suite-ico">' + (x.icone || '') + '</span><b>' + x.titre + '</b></div>' + x.etat + '</div><p class="se-hint" style="margin:8px 0 10px;line-height:1.5">' + x.texte + '</p>' + (x.bouton ? '<div class="se-row" style="gap:6px;flex-wrap:wrap">' + x.bouton + '</div>' : '') + '</div>').join('') + '</div>' : '') +
+      (decide && accepte && d.__whatsapp ? '<a class="se-btn soft sm" style="margin-top:12px" href="' + d.__whatsapp + '" target="_blank" rel="noopener">Lui envoyer aussi un WhatsApp</a>' : '') +
+    '</div>';
+  }
+
   function viewDemandeDetail(r) {
     const d = state.demandes.find((x) => x.id === r.param || x.serverDemandeId === r.param);
     if (!d) return '<div class="se-card se-empty"><div class="se-empty-title">Demande introuvable</div><a class="se-btn" href="#/demandes">Retour aux candidatures</a></div>';
@@ -4215,6 +4270,7 @@
         '<h1 class="display" style="font-size:28px;margin:4px 0 6px">' + esc(d.nom || 'Demande') + '</h1>' +
         '<div class="se-row" style="gap:8px">' + statutBadge + '<span class="se-hint">Reçue le ' + dFR(d.cree) + '</span></div></div>' +
       '</div>' +
+      (d.type === 'candidature' ? blocsParcoursCandidature(d, lead, rec, bienMembre, estAcheteur, estVendeur) : '') +
       '<div class="se-split">' +
         '<div class="se-grid" style="gap:18px">' +
           '<div class="se-card"><h3>Coordonnées & financement</h3><div class="se-kv" style="margin-top:10px">' +
@@ -4348,11 +4404,15 @@
       const res = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(res.error || 'Erreur serveur');
       d.statut = decision === 'valider' ? 'validee' : decision === 'suspendre' ? 'suspendue' : 'refusee';
+      d.__suite = { decision: decision, emailEnvoye: res.emailEnvoye !== false, emailErreur: res.emailErreur || '', notif: !!res.notif, tel: res.tel || '', at: new Date().toISOString() };
+      setTimeout(() => { try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch (e) { window.scrollTo(0, 0); } }, 60);
       if (decision === 'valider' && res.lien) d.__whatsapp = whatsappHref(res.tel, res.prenom, res.lien);
       else if (res.notif && res.notif.tel) d.__whatsapp = 'https://wa.me/' + String(res.notif.tel).replace(/[^0-9]/g, '') + '?text=' + encodeURIComponent(res.notif.waMessage || '');
       const tv = (state.tachesVerif || []).find((x) => x.demandeId === serverId && x.statut === 'en_attente');
       if (tv) tv.statut = 'terminee';
       commit();
+      // Recharge lead, recherche et bien créés côté serveur pour les afficher dans « la suite ».
+      if (d.type === 'candidature') { try { await syncServeur(); } catch (e) { /* affichage partiel */ } render(); }
       if (decision === 'valider' && res.emailEnvoye === false) {
         toast('Adhésion acceptée, mais l’email a échoué : ' + (res.emailErreur || 'erreur SMTP'), 'warn');
       } else {
@@ -5820,7 +5880,8 @@
   function viewRecherche(r) {
     const rec = recherche(r.param);
     if (!rec) return '<div class="se-card se-empty"><div class="se-empty-title">Recherche introuvable</div><a class="se-btn" href="#/recherches">Retour</a></div>';
-    const c = client(rec.clientId);
+    // Recherche venant du serveur : son clientId est l'identifiant serveur du lead.
+    const c = client(rec.clientId) || (state.clients || []).find((x) => x.serverId === rec.clientId) || null;
     const matches = biensCompatibles(rec, 40);
     const oppPubliques = matchings().filter((m) => m.rechercheId === rec.id).sort((a, b) => b.score - a.score);
     const secteurs = (rec.quartiers || []).map(qLabel).join(', ');
@@ -5849,7 +5910,7 @@
                 '<div class="se-sub">' + esc(m.bien.ref) + ' · ' + euro(m.bien.prix) + ' · ' + num(m.bien.surface) + ' m² · ' + esc(qLabel(m.bien.quartier)) + '</div></div>' +
                 scoreTag(m.score) +
               '</a>' +
-              '<button class="se-btn ghost sm" data-act="bien-envoyer" data-bien="' + m.bien.id + '" data-client="' + c.id + '">Envoyer</button>' +
+              (c ? '<button class="se-btn ghost sm" data-act="bien-envoyer" data-bien="' + m.bien.id + '" data-client="' + c.id + '">Envoyer</button>' : '') +
             '</div>').join('') + '</div>' : '<p class="se-muted" style="margin-top:8px">Aucun bien ne correspond encore.</p>') +
           '</div>' +
           '<div class="se-card" style="margin-top:16px"><div class="se-row" style="justify-content:space-between;align-items:flex-start">' +
